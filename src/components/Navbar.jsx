@@ -45,15 +45,15 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
 
   return ( 
     <nav style={{ background: 'linear-gradient(135deg, #a832ff 0%, #7016ff 100%)', padding: isMobile ? '10px 8px' : '10px 15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 1000, boxShadow: '0 3px 10px rgba(112, 22, 255, 0.25)', height: '50px' }}> 
-      <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '6px' : '12px', zIndex: 10 }}> 
+      <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '4px' : '12px', zIndex: 10 }}> 
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: 'white', padding: isMobile ? '5px 8px' : '4px 10px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '11px', whiteSpace: 'nowrap', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.35)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'} > 
           {isMobile ? '⬅️' : '⬅️ Back'} 
         </button>
         <button 
           onClick={() => window.location.reload()} 
-          style={{ background: 'none', border: 'none', color: 'white', fontWeight: 'bold', fontSize: isMobile ? '14px' : '18px', whiteSpace: 'nowrap', letterSpacing: '0.3px', cursor: 'pointer', padding: 0 }}
+          style={{ background: 'none', border: 'none', color: 'white', fontWeight: 'bold', fontSize: isMobile ? '18px' : '18px', whiteSpace: 'nowrap', letterSpacing: '0.3px', cursor: 'pointer', padding: 0 }}
         > 
-          🎓 StudentConnect 
+          {isMobile ? '🎓' : '🎓 StudentConnect'} 
         </button> 
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}> 
@@ -63,7 +63,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
             </button> 
             {isSearchOpen && ( 
               <form onSubmit={handleSearchSubmit} style={{ marginLeft: '4px' }}> 
-                <input type="text" placeholder={isMobile ? "ID..." : "Search ID..."} value={searchId} onChange={(e) => setSearchId(e.target.value)} style={{ padding: '4px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.4)', backgroundColor: 'rgba(255,255,255,0.15)', color: 'white', outline: 'none', fontSize: '12px', width: isMobile ? '60px' : '100px' }} /> 
+                <input type="text" placeholder={isMobile ? "ID..." : "Search ID..."} value={searchId} onChange={(e) => setSearchId(e.target.value)} style={{ padding: '4px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.4)', backgroundColor: 'rgba(255,255,255,0.15)', color: 'white', outline: 'none', fontSize: '12px', width: isMobile ? '55px' : '100px' }} /> 
               </form> 
             )} 
           </div>
@@ -71,9 +71,8 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
         </div> 
       </div> 
 
-      <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: isMobile ? '12px' : '30px', alignItems: 'center', justifyContent: 'center', height: '100%' }}> 
-        {/* 🏠 Home Link customized to be smaller on mobile view */}
-        <Link to="/" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '40px' : '60px', height: '100%', position: 'relative' }} title="Home" > 
+      <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: isMobile ? '8px' : '30px', alignItems: 'center', justifyContent: 'center', height: '100%' }}> 
+        <Link to="/" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '35px' : '60px', height: '100%', position: 'relative' }} title="Home" > 
           <div style={{ background: location.pathname === '/' ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.25)', width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
             <svg xmlns="http://w3.org" width={isMobile ? "16" : "20"} height={isMobile ? "18" : "22"} viewBox="0 0 24 24" fill="none"> 
               <circle cx="12" cy="12" r="10" fill="#FFD700" /> 
@@ -82,10 +81,10 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
             </svg> 
           </div> 
           {location.pathname === '/' && ( 
-            <div style={{ position: 'absolute', bottom: '5px', left: '50%', transform: 'translateX(-50%)', width: isMobile ? '24px' : '50px', height: '4px', backgroundColor: '#000000', borderRadius: '3px' }} /> 
+            <div style={{ position: 'absolute', bottom: '5px', left: '50%', transform: 'translateX(-50%)', width: isMobile ? '22px' : '50px', height: '4px', backgroundColor: '#000000', borderRadius: '3px' }} /> 
           )} 
         </Link>
-        <Link to="/messenger" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '40px' : '60px', height: '100%', position: 'relative' }} title="Chat" > 
+        <Link to="/messenger" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '35px' : '60px', height: '100%', position: 'relative' }} title="Chat" > 
           <div style={{ background: (location.pathname.startsWith('/messenger') || location.pathname.startsWith('/chat')) ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.25)', width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
             <svg xmlns="http://w3.org" width={isMobile ? "18" : "22"} height={isMobile ? "18" : "22"} viewBox="0 0 24 24" fill="none"> 
               <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z" fill="#7016ff" /> 
@@ -93,11 +92,11 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
             </svg> 
           </div> 
           {(location.pathname.startsWith('/messenger') || location.pathname.startsWith('/chat')) && ( 
-            <div style={{ position: 'absolute', bottom: '5px', left: '50%', transform: 'translateX(-50%)', width: isMobile ? '24px' : '50px', height: '4px', backgroundColor: '#000000', borderRadius: '3px' }} /> 
+            <div style={{ position: 'absolute', bottom: '5px', left: '50%', transform: 'translateX(-50%)', width: isMobile ? '22px' : '50px', height: '4px', backgroundColor: '#000000', borderRadius: '3px' }} /> 
           )} 
         </Link> 
 
-        <Link to="/profile" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '40px' : '60px', height: '100%', position: 'relative' }} title="ID Profile" > 
+        <Link to="/profile" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '35px' : '60px', height: '100%', position: 'relative' }} title="ID Profile" > 
           <div style={{ background: (location.pathname === '/profile' || location.pathname.startsWith('/profile/') && !location.pathname.includes('/edit')) ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.25)', width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
             <svg xmlns="http://w3.org" width={isMobile ? "18" : "22"} height={isMobile ? "18" : "22"} viewBox="0 0 24 24" fill="none"> 
               <circle cx="12" cy="12" r="10" fill="#9370DB" /> 
@@ -106,12 +105,12 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
             </svg> 
           </div> 
           {(location.pathname === '/profile' || location.pathname.startsWith('/profile/') && !location.pathname.includes('/edit')) && ( 
-            <div style={{ position: 'absolute', bottom: '5px', left: '50%', transform: 'translateX(-50%)', width: isMobile ? '24px' : '50px', height: '4px', backgroundColor: '#000000', borderRadius: '3px' }} /> 
+            <div style={{ position: 'absolute', bottom: '5px', left: '50%', transform: 'translateX(-50%)', width: isMobile ? '22px' : '50px', height: '4px', backgroundColor: '#000000', borderRadius: '3px' }} /> 
           )} 
         </Link> 
 
         {isAdmin && ( 
-          <Link to="/admin" style={{ color: '#ffeb3b', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '40px' : '60px', height: '100%', position: 'relative' }} title="Admin" > 
+          <Link to="/admin" style={{ color: '#ffeb3b', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '35px' : '60px', height: '100%', position: 'relative' }} title="Admin" > 
             <div style={{ background: location.pathname.startsWith('/admin') ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.25)', width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
               <svg xmlns="http://w3.org" width={isMobile ? "18" : "22"} height={isMobile ? "18" : "22"} viewBox="0 0 24 24" fill="none"> 
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 12z" fill="#7016ff" /> 
@@ -120,18 +119,18 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
               </svg> 
             </div> 
             {location.pathname.startsWith('/admin') && ( 
-              <div style={{ position: 'absolute', bottom: '5px', left: '50%', transform: 'translateX(-50%)', width: isMobile ? '24px' : '50px', height: '4px', backgroundColor: '#000000', borderRadius: '3px' }} /> 
+              <div style={{ position: 'absolute', bottom: '5px', left: '50%', transform: 'translateX(-50%)', width: isMobile ? '22px' : '50px', height: '4px', backgroundColor: '#000000', borderRadius: '3px' }} /> 
             )} 
           </Link> 
         )} 
       </div>
-      <div style={{ display: 'flex', gap: isMobile ? '6px' : '15px', alignItems: 'center', zIndex: 10 }}> 
-        <a href="https://github.com" style={{ backgroundColor: '#10b981', color: 'white', padding: isMobile ? '6px 10px' : '5px 12px', borderRadius: '20px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', whiteSpace: 'nowrap', boxShadow: '0 2px 5px rgba(0,0,0,0.15)', transition: 'background 0.2s', cursor: 'pointer' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#059669'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#10b981'} > 
+      <div style={{ display: 'flex', gap: isMobile ? '4px' : '15px', alignItems: 'center', zIndex: 10 }}> 
+        <a href="https://github.com" style={{ backgroundColor: '#10b981', color: 'white', padding: isMobile ? '6px 8px' : '5px 12px', borderRadius: '20px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', whiteSpace: 'nowrap', boxShadow: '0 2px 5px rgba(0,0,0,0.15)', transition: 'background 0.2s', cursor: 'pointer' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#059669'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#10b981'} > 
           {isMobile ? '📥' : '📥 Download App'} 
         </a> 
 
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}> 
-          <button onClick={() => { setShowDropdown(!showDropdown); setShowSettingsSub(false); }} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '24px', cursor: 'pointer', padding: '0 3px', display: 'flex', alignItems: 'center', outline: 'none', fontWeight: 'bold' }} title="Menu" > 
+          <button onClick={() => { setShowDropdown(!showDropdown); setShowSettingsSub(false); }} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '24px', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', outline: 'none', fontWeight: 'bold' }} title="Menu" > 
             ⋮ 
           </button> 
           {showDropdown && ( 
