@@ -30,6 +30,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
     return () => window.removeEventListener('click', closeDropdown); 
   }, [showDropdown]); 
 
+  // 🔍 Fixed Search Functionality
   const handleSearchSubmit = (e) => { 
     e.preventDefault(); 
     if (searchId.trim()) { 
@@ -45,7 +46,8 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
 
   return ( 
     <nav style={{ background: 'linear-gradient(135deg, #a832ff 0%, #7016ff 100%)', padding: isMobile ? '10px 8px' : '10px 15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 1000, boxShadow: '0 3px 10px rgba(112, 22, 255, 0.25)', height: '50px' }}> 
-      <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '4px' : '12px', zIndex: 10 }}> 
+      {/* 🎯 Spacing preserved after search option */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '4px' : '12px', zIndex: 10, marginRight: isMobile ? '20px' : '40px' }}> 
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: 'white', padding: isMobile ? '5px 8px' : '4px 10px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '11px', whiteSpace: 'nowrap', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.35)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'} > 
           {isMobile ? '⬅️' : '⬅️ Back'} 
         </button>
@@ -71,7 +73,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
         </div> 
       </div> 
 
-      <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: isMobile ? '8px' : '30px', alignItems: 'center', justifyContent: 'center', height: '100%' }}> 
+      <div style={{ position: 'absolute', left: '53%', transform: 'translateX(-50%)', display: 'flex', gap: isMobile ? '8px' : '30px', alignItems: 'center', justifyContent: 'center', height: '100%' }}> 
         <Link to="/" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '35px' : '60px', height: '100%', position: 'relative' }} title="Home" > 
           <div style={{ background: location.pathname === '/' ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.25)', width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
             <svg xmlns="http://w3.org" width={isMobile ? "16" : "20"} height={isMobile ? "18" : "22"} viewBox="0 0 24 24" fill="none"> 
