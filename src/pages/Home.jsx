@@ -1,338 +1,500 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
 import { db, auth } from '../firebase';
 import { 
-  collection, addDoc, onSnapshot, query, orderBy, limit, 
-  serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where 
+  collection, addDoc, query, onSnapshot, doc, updateDoc, 
+  arrayUnion, arrayRemove, deleteDoc, getDocs, where 
 } from 'firebase/firestore';
-import { ZegoUIKitPrebuilt } from '@zegocloud/zego-uikit-prebuilt';
 
-export default function GlobalChat() {
-  const navigate = useNavigate();
-  const [messages, setMessages] = useState([]);
-  const [newMessage, setNewMessage] = useState("");
-  const [usersCache, setUsersCache] = useState({}); 
-  const [selectedFiles, setSelectedFiles] = useState([]);
-  const [inCall, setInCall] = useState(false);
-  const [incomingCall, setIncomingCall] = useState(null);
-  const [showRejoinBtn, setShowRejoinBtn] = useState(false);
-  const [activeMenuId, setActiveMenuId] = useState(null);
-  const [replyToMessage, setReplyToMessage] = useState(null);
+const commentFormStyle = { display: 'flex', marginTop: '8px', position: 'relative', width: '100%', alignItems: 'center' };
+const commentInputStyle = { width: '100%', padding: '8px 40px 8px 10px', fontSize: '13px', borderRadius: '20px', border: '1px solid var(--border, #ccc)', backgroundColor: 'transparent', outline: 'none', boxSizing: 'border-box' };
+const commentIconBtnStyle = { position: 'absolute', right: '10px', background: 'none', border: 'none', color: '#0056b3', cursor: 'pointer', fontSize: '16px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' };
 
-  const [localDeletedIds, setLocalDeletedIds] = useState(() => {
-    const saved = localStorage.getItem(`global_deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const messagesEndRef = useRef(null);
-  const fileInputRef = useRef(null); 
-  
-  const currentUid = auth.currentUser?.uid || "unknown_user";
-  const currentUserName = auth.currentUser?.displayName || "Campus Student";
-  const globalRoomId = "campus_global_conference_room";
+export default function Home({ isAdmin }) {
+  const [posts, setPosts] = useState([]);
+  const [text, setText] = useState('');
+  const [mediaUrl, setMediaUrl] = useState('');
+  const [selectedFile, setSelectedFile] = useState(null); 
+  const [commentInput, setCommentInput] = useState({});
+  const [showPostModal, setShowPostModal] = useState(false);
+  const [editingComment, setEditingComment] = useState(null);
+  const [usersCache, setUsersCache] = useState({});
+  const [visibleComments, setVisibleComments] = useState({});
+  const [activeReactionPopup, setActiveReactionPopup] = useState(null);
   useEffect(() => {
-    const autoCleanOldGlobalMessages = async () => {
+    const cleanupOldPosts = async () => {
       try {
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7); 
-        const oldMessagesQuery = query(collection(db, "global-room-messages"), where("createdAt", "<", sevenDaysAgo));
-        const snapshot = await getDocs(oldMessagesQuery);
-        snapshot.forEach(async (docSnapshot) => {
-          await deleteDoc(doc(db, "global-room-messages", docSnapshot.id));
+        const sevenDaysAgo = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
+        const qOld = query(collection(db, "posts"), where("createdAt", "<", sevenDaysAgo));
+        const oldPostsSnapshot = await getDocs(qOld);
+        oldPostsSnapshot.forEach(async (postDoc) => {
+          await deleteDoc(doc(db, "posts", postDoc.id)); 
         });
-      } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
+      } catch (error) {
+        console.error("Storage Garbage Collection Error:", error);
+      }
     };
-    autoCleanOldGlobalMessages();
-  }, []);
-  useEffect(() => {
-    const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "asc"), limit(100));
-    const unsubscribeMessages = onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    }, (error) => console.error("Global Chat Stream Error:", error));
+    cleanupOldPosts();
 
     const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
       const cache = {};
       snapshot.docs.forEach(doc => {
         const data = doc.data();
-        cache[data.uid || doc.id] = data.photo || "";
+        const uId = data.uid || data.id || doc.id;
+        const uName = data.name || "";
+        const uDisplayName = data.displayName || "";
+        const uPhoto = data.photo || "";
+
+        if (uId) {
+          const userObj = { name: uName || uDisplayName || "Student", photo: uPhoto };
+          cache[uId] = userObj;
+          cache[String(uId).trim()] = userObj;
+        }
+        if (uName) { cache[uName.trim()] = uPhoto; cache[uName.toLowerCase().trim()] = uPhoto; }
+        if (uDisplayName) { cache[uDisplayName.trim()] = uPhoto; cache[uDisplayName.toLowerCase().trim()] = uPhoto; }
+        if (data.userNameRaw) { cache[data.userNameRaw.trim()] = uPhoto; cache[data.userNameRaw.toLowerCase().trim()] = uPhoto; }
       });
       setUsersCache(cache);
     });
 
-    const unsubscribeCall = onSnapshot(doc(db, "global-calls", globalRoomId), (snapshot) => {
-      if (snapshot.exists()) {
-        const callData = snapshot.data();
-        if (callData.status === "ringing") {
-          setShowRejoinBtn(true);
-          if (callData.hostId !== currentUid && !inCall) setIncomingCall(callData);
-        }
-      } else {
-        setShowRejoinBtn(false);
-        setIncomingCall(null);
-        setInCall(false);
-      }
-    });
-
-    const handleOutsideClick = () => setActiveMenuId(null);
-    window.addEventListener('click', handleOutsideClick);
-    return () => {
-      unsubscribeMessages(); unsubscribeUsers(); unsubscribeCall();
-      window.removeEventListener('click', handleOutsideClick);
+    const handleOpenModalEvent = () => {
+      setShowPostModal(true);
     };
-  }, [currentUid, inCall]);
+    window.addEventListener('openPostModal', handleOpenModalEvent);
 
-  const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
-  useEffect(() => { scrollToBottom(); }, [messages]);
-  const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!newMessage.trim() && selectedFiles.length === 0) return;
-
-    const replyData = replyToMessage ? {
-      text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""), 
-      fileUrl: replyToMessage.fileUrl || "", 
-      fileType: replyToMessage.fileType || "",
-      senderName: replyToMessage.senderName,
-      msgId: replyToMessage.id
-    } : null;
-
-    if (newMessage.trim()) {
-      try {
-        await addDoc(collection(db, "global-room-messages"), {
-          text: newMessage, senderUid: currentUid, senderName: currentUserName,
-          senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
-        });
-        setNewMessage("");
-      } catch (error) { console.error("Error sending text message:", error); }
-    }
-
-    selectedFiles.forEach(async (fileData) => {
-      try {
-        await addDoc(collection(db, "global-room-messages"), {
-          text: "", fileUrl: fileData.url, fileType: fileData.type, fileName: fileData.name,
-          senderUid: currentUid, senderName: currentUserName,
-          senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
-        });
-      } catch (error) { console.error("Error sending file to firestore:", error); }
+    const q = query(collection(db, "posts"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const sortedPosts = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a, b) => b.createdAt - a.createdAt);
+      setPosts(sortedPosts);
     });
-    setSelectedFiles([]); setReplyToMessage(null); 
-  };
 
-  const handleEditMessage = async (msgId, currentText) => {
-    setActiveMenuId(null); 
-    const newText = prompt("Edit your public campus message:", currentText);
-    if (newText !== null && newText.trim() !== "") {
-      try { await updateDoc(doc(db, "global-room-messages", msgId), { text: newText, isEdited: true }); } 
-      catch (error) { console.error("Error editing message:", error); }
-    }
-  };
+    const closePopup = () => setActiveReactionPopup(null);
+    window.addEventListener('click', closePopup);
 
-  const handleDeleteMessage = async (msgId, isSenderMe) => {
-    setActiveMenuId(null); 
-    if (window.confirm("Are you sure you want to delete this message?")) {
-      if (isSenderMe) {
-        try { await updateDoc(doc(db, "global-room-messages", msgId), { text: "", fileUrl: "", fileType: "", isDeleted: true }); } 
-        catch (error) { console.error("Error deleting message globally:", error); }
-      } else {
-        const updatedDeletedIds = [...localDeletedIds, msgId];
-        setLocalDeletedIds(updatedDeletedIds);
-        localStorage.setItem(`global_deleted_msgs_${currentUid}`, JSON.stringify(updatedDeletedIds));
-      }
-    }
-  };
+    return () => {
+      unsubscribe();
+      unsubscribeUsers();
+      window.removeEventListener('openPostModal', handleOpenModalEvent);
+      window.removeEventListener('click', closePopup);
+    };
+  }, []);
   const handleFileChange = (e) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    Array.from(e.target.files).forEach((file) => {
-      const fileName = file.name;
-      const fileType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'file');
-      if (fileType === 'image') {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const img = new Image();
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const max_width = 800; 
-            canvas.width = max_width; canvas.height = img.height * (max_width / img.width);
-            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-            setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: canvas.toDataURL('image/jpeg', 0.7), type: 'image' }]);
+    const file = e.target.files[0]; // ⚡ Fixed: File object is being read correctly
+    if (!file) return;
+
+    if (file.type.startsWith('video/')) {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.onloadedmetadata = () => {
+        window.URL.revokeObjectURL(video.src);
+        if (video.duration > 60) {
+          alert("Error: Video duration cannot exceed 1 minute!");
+          e.target.value = ""; 
+          setSelectedFile(null);
+        } else {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            setSelectedFile(event.target.result);
           };
-          img.src = event.target.result;
+          reader.readAsDataURL(file);
+        }
+      };
+      video.src = URL.createObjectURL(file);
+    } else if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target.result;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 500;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.6);
+          setSelectedFile(compressedBase64);
         };
-        reader.readAsDataURL(file);
-      } else if (fileType === 'video' && file.size <= 10000000) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          if (event.target.result.length <= 1100000) {
-            setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: event.target.result, type: 'video' }]);
-          } else { alert(`⚠️ "${fileName}" exceeds database transaction frame capacity!`); }
-        };
-        reader.readAsDataURL(file);
-      } else if (file.size > 10000000) { alert(`⚠️ "${fileName}" video file size exceeds the strict optimization limit!`); }
-    });
-    e.target.value = null; 
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setSelectedFile(file);
+    }
   };
+  const handlePost = async (e) => {
+    e.preventDefault();
+    if (!text.trim() && !mediaUrl.trim() && !selectedFile) return;
 
-  const removeSelectedFile = (id) => { setSelectedFiles((prev) => prev.filter(file => file.id !== id)); };
+    let finalMediaUrl = mediaUrl;
+    if (selectedFile) {
+      finalMediaUrl = selectedFile;
+    }
 
-  const initiateGlobalCall = async () => {
-    try { await setDoc(doc(db, "global-calls", globalRoomId), { status: "ringing", hostName: currentUserName, hostId: currentUid, roomId: globalRoomId, participants: [currentUid] }); setInCall(true); } 
-    catch (err) { console.error("Error initiating global call:", err); }
-  };
+    if (finalMediaUrl && finalMediaUrl.length > 1048480) {
+      alert("🚨 Video size is too large! Please reduce your resolution or shorten it before uploading.");
+      return;
+    }
 
-  const handleRejoinCall = async () => {
     try {
-      const callDocRef = doc(db, "global-calls", globalRoomId);
-      const snapshot = await getDoc(callDocRef);
-      if (snapshot.exists()) {
-        const updatedParts = snapshot.data().participants || [];
-        if (!updatedParts.includes(currentUid)) updatedParts.push(currentUid);
-        await updateDoc(callDocRef, { participants: updatedParts });
-        setIncomingCall(null); setInCall(true);
-      }
-    } catch (err) { console.error("Error rejoining call:", err); }
+      await addDoc(collection(db, "posts"), {
+        text,
+        mediaUrl: finalMediaUrl,
+        userName: auth.currentUser?.displayName || "Student",
+        userId: auth.currentUser?.uid,
+        likes: [],
+        loves: [],
+        wows: [],
+        comments: [],
+        createdAt: new Date().getTime()
+      });
+      setText('');
+      setMediaUrl('');
+      setSelectedFile(null);
+      setShowPostModal(false);
+    } catch (error) {
+      console.error("Posting Error:", error);
+      alert("Posting failed: " + error.message);
+    }
   };
 
-  const leaveGlobalCall = async () => {
+  const handleEditPost = async (postId, currentText) => {
+    const promptText = prompt("Edit your post text:", currentText);
+    if (promptText === null || promptText.trim() === "") return;
     try {
-      const callDocRef = doc(db, "global-calls", globalRoomId);
-      const snapshot = await getDoc(callDocRef);
-      if (snapshot.exists()) {
-        const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
-        if (updatedParts.length === 0) await deleteDoc(callDocRef);
-        else await updateDoc(callDocRef, { participants: updatedParts });
-      }
-      setInCall(false);
-    } catch (err) { console.error("Error leaving global call:", err); setInCall(false); }
+      await updateDoc(doc(db, "posts", postId), { text: promptText });
+    } catch (error) {
+      console.error("Error editing post: ", error);
+    }
   };
 
-  const startGlobalVideoCall = async (element) => {
-    if (!element) return;
-    const zp = ZegoUIKitPrebuilt.create(ZegoUIKitPrebuilt.generateKitTokenForTest(32790448, "50737a7cc9627401b05b40c83eff3c2e", globalRoomId, currentUid, currentUserName));
-    zp.joinRoom({
-      container: element, scenario: { mode: ZegoUIKitPrebuilt.GroupCall, config: { showPlayingInMobile: true, showControlBarInMobile: true, showLayoutButton: true, showScreenSharingButton: true, showUserList: true } }, 
-      showScreenSharingButton: true, turnOnCameraWhenJoining: true, turnOnMicrophoneWhenJoining: true, useFrontCamera: true, onLeaveRoom: () => { leaveGlobalCall(); }
+  const handleLike = async (postId, likes) => {
+    const postRef = doc(db, "posts", postId);
+    const userId = auth.currentUser?.uid;
+    if ((likes || []).includes(userId)) {
+      await updateDoc(postRef, { likes: arrayRemove(userId) });
+    } else {
+      await updateDoc(postRef, { likes: arrayUnion(userId) });
+    }
+  };
+
+  const handleLove = async (postId, loves) => {
+    const postRef = doc(db, "posts", postId);
+    const userId = auth.currentUser?.uid;
+    if ((loves || []).includes(userId)) {
+      await updateDoc(postRef, { loves: arrayRemove(userId) });
+    } else {
+      await updateDoc(postRef, { loves: arrayUnion(userId) });
+    }
+  };
+
+  const handleWow = async (postId, wows) => {
+    const postRef = doc(db, "posts", postId);
+    const userId = auth.currentUser?.uid;
+    if ((wows || []).includes(userId)) {
+      await updateDoc(postRef, { wows: arrayRemove(userId) });
+    } else {
+      await updateDoc(postRef, { wows: arrayUnion(userId) });
+    }
+  };
+  const handleShare = (postId) => {
+    const shareUrl = `${window.location.origin}/post/${postId}`;
+    navigator.clipboard.writeText(shareUrl)
+      .then(() => {
+        alert("Post link copied to clipboard! You can now share it in your messages.");
+      })
+      .catch((err) => {
+        console.error("Failed to copy link: ", err);
+      });
+  };
+
+  const handleComment = async (e, postId) => {
+    e.preventDefault();
+    const commentText = commentInput[postId];
+    if (!commentText || !commentText.trim()) return;
+
+    const postRef = doc(db, "posts", postId);
+    await updateDoc(postRef, {
+      comments: arrayUnion({
+        commentUserId: auth.currentUser?.uid || "unknown",
+        userName: auth.currentUser?.displayName || "Student",
+        userNameRaw: auth.currentUser?.displayName || "Student",
+        text: commentText,
+        createdAt: new Date().toLocaleTimeString()
+      })
     });
+    setCommentInput({ ...commentInput, [postId]: '' });
   };
 
-  const toggleMenu = (e, msgId) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
+  const handleDeleteComment = async (postId, postComments, commentIndex) => {
+    if (window.confirm("Are you sure you want to delete this comment?")) {
+      const postRef = doc(db, "posts", postId);
+      const updatedComments = postComments.filter((_, idx) => idx !== commentIndex);
+      await updateDoc(postRef, { comments: updatedComments });
+    }
+  };
+
+  const handleUpdateComment = async (postId, postComments, commentIndex, newText) => {
+    if (!newText.trim()) return;
+    const postRef = doc(db, "posts", postId);
+    const updatedComments = postComments.map((comment, idx) => 
+      idx === commentIndex ? { ...comment, text: newText } : comment
+    );
+    await updateDoc(postRef, { comments: updatedComments });
+    setEditingComment(null);
+  };
+
+  const handleDeletePost = async (postId) => {
+    if (window.confirm("Are you sure you want to delete this post? This will empty its space from database permanently.")) {
+      await deleteDoc(doc(db, "posts", postId));
+    }
+  };
+
+  const toggleCommentVisibility = (postId) => {
+    setVisibleComments(prev => ({ ...prev, [postId]: !prev[postId] }));
+  };
+
+  const toggleReactionPopup = (e, postId, type) => {
+    e.stopPropagation(); 
+    if (activeReactionPopup?.postId === postId && activeReactionPopup?.type === type) {
+      setActiveReactionPopup(null);
+    } else {
+      setActiveReactionPopup({ postId, type });
+    }
+  };
   return (
-    <div style={{ maxWidth: '700px', margin: '15px auto', fontFamily: 'Arial', height: '85vh', display: 'flex', flexDirection: 'column', background: 'var(--card-bg, #f4f7fc)', border: '1px solid rgba(0, 86, 179, 0.2)', borderRadius: '15px', boxShadow: '0 8px 24px rgba(0, 86, 179, 0.08)', overflow: 'hidden', position: 'relative' }}>
+    <div style={{ maxWidth: '500px', margin: 'auto', fontFamily: 'Arial', padding: '10px', minHeight: '80vh' }}>
+      
       <style>{`
-        @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
-        .dynamic-chat-input { color: #000000 !important; }
-        .dynamic-chat-input::placeholder { color: #666666 !important; opacity: 0.6; }
-        :root[data-theme='dark'] .dynamic-chat-input { color: #ffffff !important; }
-        :root[data-theme='dark'] .dynamic-chat-input::placeholder { color: #cccccc !important; }
-        .rejoin-pulse-btn { background: #28a745; color: white; border: none; padding: 8px 15px; borderRadius: 20px; cursor: pointer; fontWeight: bold; fontSize: 13px; display: flex; align-items: center; gap: 5px; animation: pulse 2s infinite; box-shadow: 0 4px 10px rgba(40,167,69,0.3); }
-        .threedot-dropdown-menu { position: absolute; bottom: 100%; right: 0; background: #fff; border: 1px solid #ddd; borderRadius: 8px; boxShadow: 0 4px 12px rgba(0,0,0,0.15); padding: 5px 0; zIndex: 10; minWidth: 90px; textAlign: left; display: flex; flexDirection: column; }
-        :root[data-theme='dark'] .threedot-dropdown-menu { background: #222; border-color: #444; boxShadow: 0 4px 12px rgba(0,0,0,0.4); }
-        .threedot-menu-item { background: none; border: none; padding: 6px 12px; fontSize: 12px; cursor: pointer; text-align: left; width: 100%; font-weight: bold; }
-        .threedot-menu-item.reply-btn { color: #28a745; } .threedot-menu-item.edit-btn { color: #0088ff; } .threedot-menu-item.delete-btn { color: #dc3545; } .threedot-menu-item:hover { background: rgba(0,0,0,0.05); }
+        .dynamic-post-card { background-color: #ffffff; border: 1px solid #eee; color: #333333; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+        :root[data-theme='dark'] .dynamic-post-card { background-color: #111111; border: 1px solid #222; color: #ffffff; }
+        .dynamic-post-card p { color: inherit; }
+        :root[data-theme='dark'] .dynamic-post-card p { color: #f3f4f6; }
+        :root[data-theme='dark'] .dynamic-post-card input { color: #ffffff !important; }
         
-        .threedot-action-btn { background: none; border: none; cursor: pointer; fontSize: 18px; color: #444444; padding: 4px 8px; opacity: 0.8; transition: all 0.2s; borderRadius: 50%; }
-        .threedot-action-btn:hover { background: rgba(0, 0, 0, 0.08); opacity: 1; }
-        :root[data-theme='dark'] .threedot-action-btn { color: #ffffff !important; opacity: 1 !important; text-shadow: 0 0 2px rgba(255,255,255,0.5); }
-        :root[data-theme='dark'] .threedot-action-btn:hover { background: rgba(255, 255, 255, 0.15); }
+        .inline-reaction-popup {
+          position: absolute; bottom: calc(100% + 10px); left: 0; background: #ffffff; color: #222222;
+          padding: 10px 14px; border-radius: 10px; font-size: 13px; z-index: 100; width: 240px;
+          box-shadow: 0 8px 24px rgba(0,0,0,0.15); text-align: left; border: 1px solid #eee;
+          box-sizing: border-box;
+        }
+        :root[data-theme='dark'] .inline-reaction-popup { background: #222222; color: #ffffff; border-color: #333; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+        
+        .popup-user-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 2px 0; }
+        .popup-avatar { width: 42px !important; height: 42px !important; border-radius: 50% !important; object-fit: cover !important; border: 1px solid #0056b3; background: #e4e6eb; flex-shrink: 0; cursor: pointer; }
+        
+        .comment-user-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; width: 100%; box-sizing: border-box; }
+        .comment-avatar { width: 42px !important; height: 42px !important; border-radius: 50% !important; object-fit: cover !important; border: 1px solid #0056b3; background: #e4e6eb; flex-shrink: 0; margin-top: 2px; cursor: pointer; }
       `}</style>
-      
-      {inCall && <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000' }}><div ref={(el) => el && startGlobalVideoCall(el)} style={{ width: '100%', height: '100%' }} /></div>}
-      
-      {incomingCall && !inCall && (
-        <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 999, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-          <p style={{ margin: '0 0 12px 0', fontWeight: 'bold', color: '#333' }}>📢 {incomingCall.hostName} started a global conference call!</p>
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}><button onClick={handleRejoinCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Join Now</button><button onClick={() => setIncomingCall(null)} style={{ background: '#dc3545', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer' }}>Ignore</button></div>
+
+      {showPostModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000 }}>
+          <div style={{ backgroundColor: 'var(--bg, #fff)', padding: '20px', borderRadius: '8px', width: '90%', maxWidth: '450px', position: 'relative', boxShadow: '0 4px 15px rgba(0,0,0,0.2)' }}>
+            <button onClick={() => setShowPostModal(false)} style={{ position: 'absolute', top: '10px', right: '15px', background: 'none', border: 'none', color: 'var(--text-h, #333)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+            <h3 style={{ marginBottom: '15px', color: '#0056b3', marginTop: 0, textAlign: 'center' }}>Create a Post</h3>
+            
+            <form onSubmit={handlePost}>
+              <textarea value={text} onChange={e => setText(e.target.value)} placeholder="What's on your mind, Student?" style={{ width: '95%', height: '80px', padding: '8px', border: '1px solid var(--border, #ddd)', borderRadius: '5px', resize: 'none', outline: 'none', fontFamily: 'Arial', backgroundColor: 'transparent', color: 'inherit' }} />
+              <input type="text" value={mediaUrl} onChange={e => setMediaUrl(e.target.value)} placeholder="Paste Photo/Video Link (Optional)" style={{ width: '95%', padding: '8px', marginTop: '10px', border: '1px solid var(--border, #ddd)', borderRadius: '5px', outline: 'none', backgroundColor: 'transparent', color: 'inherit' }} />
+              
+              <div style={{ marginTop: '12px', width: '95%' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: 'var(--text, #555)', marginBottom: '5px' }}>Upload from Device:</label>
+                <input type="file" accept="image/*,video/*" onChange={handleFileChange} style={{ fontSize: '13px' }} />
+                
+                {selectedFile && (
+                  <div style={{ marginTop: '10px', textAlign: 'center' }}>
+                    {selectedFile.startsWith('data:video/') ? (
+                      <span style={{ color: '#28a745', fontSize: '12px', fontWeight: 'bold' }}>✓ Video Loaded (Ready to Post)</span>
+                    ) : selectedFile.startsWith('data:image/') ? (
+                      <div>
+                        <img src={selectedFile} alt="Compressed Preview" style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #ddd' }} />
+                        <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ Image Auto-Compressed</small>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+              <button type="submit" style={{ width: '100%', marginTop: '15px', padding: '10px', backgroundColor: '#0056b3', color: '#fff', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Post to Feed</button>
+            </form>
+          </div>
         </div>
       )}
+      {posts.map(post => {
+        const postAvatarFallback = `https://dicebear.com{encodeURIComponent(post.userName || 'Student')}`;
+        return (
+          <div key={post.id} className="dynamic-post-card">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+              <img 
+                src={usersCache[post.userId]?.photo || postAvatarFallback} 
+                alt="" 
+                style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', cursor: 'pointer' }} 
+                onClick={() => { if (post.userId) window.location.href = `/profile/${post.userId}`; }}
+              />
+              <div>
+                <strong style={{ display: 'block', fontSize: '14px', cursor: 'pointer' }} onClick={() => { if (post.userId) window.location.href = `/profile/${post.userId}`; }}>{post.userName}</strong>
+                <small style={{ color: '#777', fontSize: '11px' }}>{new Date(post.createdAt).toLocaleDateString()}</small>
+              </div>
+              {(auth.currentUser?.uid === post.userId || isAdmin) && (
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', fontSize: '12px' }}>
+                  <span onClick={() => handleEditPost(post.id, post.text)} style={{ color: '#0072ff', cursor: 'pointer' }}>Edit</span>
+                  <span onClick={() => handleDeletePost(post.id)} style={{ color: '#ff3366', cursor: 'pointer' }}>Delete</span>
+                </div>
+              )}
+            </div>
 
-      <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
-        <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
-        <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px', textAlign: 'center', flex: 1 }}>Campus Global Room 👥</h3>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>{!inCall && !showRejoinBtn && <button onClick={initiateGlobalCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 18px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>📞 Conference 📹</button>}{!inCall && showRejoinBtn && <button onClick={handleRejoinCall} className="rejoin-pulse-btn">🟢 Rejoin Call 📹</button>}</div>
-      </div>
-      {!inCall && (
-        <>
-          <div style={{ flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-            {messages.map((getMsg) => {
-              if (localDeletedIds.includes(getMsg.id)) return null;
-              const isMe = getMsg.senderUid === currentUid;
-              const firestoreProfilePhoto = usersCache[getMsg.senderUid] || getMsg.senderPhoto;
-              const defaultFallbackAvatar = `https://dicebear.com{encodeURIComponent(getMsg.senderName || 'Student')}`;
+            {post.text && <p style={{ margin: '0 0 12px 0', fontSize: '14px', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{post.text}</p>}
+            
+            {post.mediaUrl && (
+              <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px' }}>
+                {post.mediaUrl.startsWith('data:video/') || post.mediaUrl.includes('video/') || post.mediaUrl.endsWith('.mp4') ? (
+                  <video src={post.mediaUrl} controls style={{ maxWidth: '100%', maxHeight: '400px', width: '100%' }} />
+                ) : (
+                  <img src={post.mediaUrl} alt="Post Content" style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }} />
+                )}
+              </div>
+            )}
 
-              return (
-                <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px' }}>
-                  <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', flexShrink: 0 }} />
-                  <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
-                    <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px' }}>{getMsg.senderName}</small>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexDirection: isMe ? 'row-reverse' : 'row' }}>
-                      <div style={{ background: getMsg.isDeleted ? '#ebebeb' : (isMe ? '#0056b3' : 'var(--card-bg, #fff)'), color: getMsg.isDeleted ? '#888' : (isMe ? 'white' : 'var(--text-color, #333)'), padding: getMsg.fileUrl ? '4px' : '10px 14px', borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px', fontSize: '14px', boxShadow: '0 2px 5px rgba(0,0,0,0.04)', border: isMe ? 'none' : '1px solid rgba(0, 86, 179, 0.15)', wordBreak: 'break-word', display: 'flex', flexDirection: 'column', gap: '5px', overflow: 'hidden' }}>
-                        {getMsg.isDeleted ? <p style={{ margin: 0, fontStyle: 'italic', fontSize: '13px', padding: '10px 14px' }}>🚫 This message was deleted</p> : (
-                          <>
-                            {getMsg.replyTo && (
-                              <div style={{ background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,86,179,0.07)', padding: '6px 10px', borderRadius: '8px', borderLeft: '3px solid #0056b3', fontSize: '11px', color: isMe ? '#ffeb3b' : '#444', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '240px' }}>
-                                {getMsg.replyTo.fileUrl && <img src={getMsg.replyTo.fileUrl} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
-                                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><strong style={{ color: isMe ? '#fff' : '#0056b3', display: 'block', fontSize: '10px', fontStyle: 'normal' }}>↩️ {getMsg.replyTo.senderName}:</strong>{getMsg.replyTo.text || (getMsg.replyTo.fileUrl ? "📷 Photo" : "")}</div>
-                              </div>
-                            )}
-                            {getMsg.fileUrl && getMsg.fileType !== 'video' && <img src={getMsg.fileUrl} alt="" style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '350px', objectFit: 'cover', display: 'block' }} />}
-                            {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
-                            {getMsg.text && <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{getMsg.text}{getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}</p>}
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{getMsg.createdAt ? new Date(getMsg.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</div>
-                          </>
-                        )}
-                      </div>
-                      {!getMsg.isDeleted && (
-                        <div style={{ position: 'relative' }}>
-                          <button onClick={(e) => toggleMenu(e, getMsg.id)} className="threedot-action-btn">⋮</button>
-                          {activeMenuId === getMsg.id && (
-                            <div className="threedot-dropdown-menu">
-                              <button onClick={() => setReplyToMessage(getMsg)} className="threedot-menu-item reply-btn">Reply ↩️</button>
-                              {isMe && !getMsg.fileUrl && <button onClick={() => handleEditMessage(getMsg.id, getMsg.text)} className="threedot-menu-item edit-btn">Edit ✏️</button>}
-                              <button onClick={() => handleDeleteMessage(getMsg.id, isMe)} className="threedot-menu-item delete-btn">Delete 🗑️</button>
-                            </div>
-                          )}
-                        </div>
-                      )}
+            <div style={{ display: 'flex', gap: '20px', fontSize: '12px', opacity: 0.8, borderBottom: '1px solid var(--border, #eee)', paddingBottom: '8px', marginBottom: '8px', position: 'relative' }}>
+              <span onClick={(e) => toggleReactionPopup(e, post.id, "Like")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
+                👍 {(post.likes || []).length}
+                {activeReactionPopup?.postId === post.id && activeReactionPopup?.type === "Like" && (
+                  <div className="inline-reaction-popup" onClick={(e) => e.stopPropagation()}>
+                    <strong style={{ borderBottom: '1px solid #ddd', display: 'block', paddingBottom: '4px', color: '#0056b3' }}>👍 Likes:</strong>
+                    <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
+                      {(post.likes || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.likes.map(uid => {
+                        const userPhoto = usersCache[uid]?.photo || "";
+                        const defaultAvatar = `https://dicebear.com{encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
+                        return (
+                          <div key={uid} className="popup-user-row">
+                            <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }}>{usersCache[uid]?.name || "Approved Student"}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                </div>
-              );
-            })}
-            <div ref={messagesEndRef} />
-          </div>
-          <form onSubmit={handleSendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {replyToMessage && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
-                <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {replyToMessage.fileUrl && <img src={replyToMessage.fileUrl} alt="" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
-                  <div>
-                    <span style={{ fontWeight: 'bold', color: '#0056b3' }}>↩️ Reply to {replyToMessage.senderName}: </span>
-                    <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileUrl ? "📸 Photo" : "")}</span>
-                  </div>
-                </div>
-                <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
-              </div>
-            )}
-            
-            {selectedFiles.length > 0 && (
-              <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
-                {selectedFiles.map((file) => (
-                  <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3' }}>
-                    <img src={file.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>✕</button>
-                  </div>
-                ))}
-              </div>
-            )}
+                )}
+              </span>
 
-            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" multiple style={{ display: 'none' }} />
-            <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
-              <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
-              <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
-              <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
+              <span onClick={(e) => toggleReactionPopup(e, post.id, "Love")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
+                ❤️ {(post.loves || []).length}
+                {activeReactionPopup?.postId === post.id && activeReactionPopup?.type === "Love" && (
+                  <div className="inline-reaction-popup" onClick={(e) => e.stopPropagation()}>
+                    <strong style={{ borderBottom: '1px solid #ddd', display: 'block', paddingBottom: '4px', color: '#ff3366' }}>❤️ Loves:</strong>
+                    <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
+                      {(post.loves || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.loves.map(uid => {
+                        const userPhoto = usersCache[uid]?.photo || "";
+                        const defaultAvatar = `https://dicebear.com{encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
+                        return (
+                          <div key={uid} className="popup-user-row">
+                            <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }}>{usersCache[uid]?.name || "Approved Student"}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </span>
+
+              <span onClick={(e) => toggleReactionPopup(e, post.id, "Wow")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
+                😍 {(post.wows || []).length}
+                {activeReactionPopup?.postId === post.id && activeReactionPopup?.type === "Wow" && (
+                  <div className="inline-reaction-popup" onClick={(e) => e.stopPropagation()}>
+                    <strong style={{ borderBottom: '1px solid #ddd', display: 'block', paddingBottom: '4px', color: '#ffcc00' }}>😍 Wows:</strong>
+                    <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
+                      {(post.wows || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.wows.map(uid => {
+                        const userPhoto = usersCache[uid]?.photo || "";
+                        const defaultAvatar = `https://dicebear.com{encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
+                        return (
+                          <div key={uid} className="popup-user-row">
+                            <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }}>{usersCache[uid]?.name || "Approved Student"}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </span>
+
+              <span onClick={() => toggleCommentVisibility(post.id)} style={{ marginLeft: 'auto', cursor: 'pointer', userSelect: 'none', fontWeight: 'bold', color: '#0056b3' }}>
+                {(post.comments || []).length} comments 💬
+              </span>
             </div>
-          </form>
-        </>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border, #eee)', paddingBottom: '5px' }}>
+              <button onClick={() => handleLike(post.id, post.likes)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.likes || []).includes(auth.currentUser?.uid) ? '#0088ff' : 'inherit', opacity: (post.likes || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>👍 Like</button>
+              <button onClick={() => handleLove(post.id, post.loves)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.loves || []).includes(auth.currentUser?.uid) ? '#ff3366' : 'inherit', opacity: (post.loves || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>❤️ Love</button>
+              <button onClick={() => handleWow(post.id, post.wows)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.wows || []).includes(auth.currentUser?.uid) ? '#ffcc00' : 'inherit', opacity: (post.wows || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>😍 Wow</button>
+              <button onClick={() => handleShare(post.id)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: 'inherit', opacity: 0.7, fontSize: '13px' }}>🔗 Share</button>
+            </div>
+
+            <form onSubmit={(e) => handleComment(e, post.id)} style={commentFormStyle}>
+              <input type="text" placeholder="Write a comment..." value={commentInput[post.id] || ''} onChange={(e) => setCommentInput({ ...commentInput, [post.id]: e.target.value })} style={commentInputStyle} />
+              <button type="submit" style={commentIconBtnStyle}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+              </button>
+            </form>
+
+            {visibleComments[post.id] && (
+              <div style={{ marginTop: '12px', transition: 'all 0.3s ease' }}>
+                {(post.comments || []).map((comment, index) => {
+                  const commentUid = comment.commentUserId || "";
+                  const fallbackKey = comment.userNameRaw || comment.userName || "Student";
+                  const userPhoto = usersCache[commentUid]?.photo || "";
+                  const defaultAvatar = `https://dicebear.com{encodeURIComponent(usersCache[commentUid]?.name || fallbackKey)}`;
+
+                  return (
+                    <div key={index} className="comment-user-row">
+                      <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="comment-avatar" onClick={() => { if (commentUid) window.location.href = `/profile/${commentUid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
+                      
+                      <div style={{ flex: 1, backgroundColor: 'var(--social-bg, #f0f2f5)', padding: '6px 12px', borderRadius: '14px', position: 'relative' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontWeight: 'bold', fontSize: '12px', color: '#0056b3', cursor: 'pointer' }} onClick={() => { if (commentUid) window.location.href = `/profile/${commentUid}`; }}>{usersCache[commentUid]?.name || fallbackKey}</span>
+                          
+                          <div style={{ display: 'flex', gap: '6px', fontSize: '10px', marginLeft: 'auto' }}>
+                            {(auth.currentUser?.uid === commentUid || isAdmin) && (
+                              <>
+                                <span onClick={() => setEditingComment({ postId: post.id, index, text: comment.text })} style={{ color: '#0072ff', cursor: 'pointer' }}>Edit</span>
+                                <span onClick={() => handleDeleteComment(post.id, post.comments, index)} style={{ color: '#ff3366', cursor: 'pointer' }}>Delete</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {editingComment?.postId === post.id && editingComment?.index === index ? (
+                          <div style={{ marginTop: '5px', display: 'flex', gap: '5px' }}>
+                            <input type="text" value={editingComment.text} onChange={(e) => setEditingComment({ ...editingComment, text: e.target.value })} style={{ width: '80%', padding: '4px', fontSize: '12px', borderRadius: '4px', border: '1px solid #ccc' }} />
+                            <button onClick={() => handleUpdateComment(post.id, post.comments, index, editingComment.text)} style={{ padding: '2px 8px', fontSize: '11px', backgroundColor: '#28a745', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Save</button>
+                            <button onClick={() => setEditingComment(null)} style={{ padding: '2px 8px', fontSize: '11px', backgroundColor: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Cancel</button>
+                          </div>
+                        ) : (
+                          <p style={{ margin: '4px 0 2px 0', fontSize: '12px', wordBreak: 'break-all', lineHeight: '1.4' }}>{comment.text}</p>
+                        )}
+                        <small style={{ fontSize: '9px', opacity: 0.6, display: 'block', marginTop: '2px' }}>{comment.createdAt}</small>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {posts.length === 0 && (
+        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic' }}>
+          No posts available on the feed.
+        </div>
       )}
     </div>
   );
