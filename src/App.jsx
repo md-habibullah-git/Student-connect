@@ -1,6 +1,4 @@
 // File Name: src/App.jsx
-// [Part 1/2]
-
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { auth, db } from './firebase';
@@ -15,7 +13,6 @@ import Messenger from './pages/Messenger';
 import Profile from './pages/Profile';
 import PersonalChat from './pages/PersonalChat'; 
 import EditProfile from './pages/EditProfile';
-// 🛠️ Mega Custom Feature: The completely new global group chat and call module page has been imported.
 import GlobalChat from './pages/GlobalChat';
 
 export default function App() {
@@ -24,6 +21,7 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isApproved, setIsApproved] = useState(false);
 
+  // Core Theme State setup
   const [theme, setTheme] = useState(() => {
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme) return savedTheme;
@@ -31,7 +29,6 @@ export default function App() {
   });
 
   const [showDropdown, setShowDropdown] = useState(false);
-
   useEffect(() => {
     const closeDropdown = () => setShowDropdown(false);
     if (showDropdown) {
@@ -67,10 +64,8 @@ export default function App() {
         setLoading(false);
       }
     });
-
     return () => unsubscribe();
   }, []);
-
   useEffect(() => {
     if (theme === 'dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
@@ -79,13 +74,12 @@ export default function App() {
     }
     localStorage.setItem('theme', theme);
   }, [theme]);
-// [Part 2/2]
 
   const toggleTheme = () => {
     setTheme(theme === 'light' ? 'dark' : 'light');
   };
 
-  // Safeguard Loading
+  // Safeguard loading state layout
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#0056b3', color: '#fff', fontFamily: 'Arial', fontSize: '16px', fontWeight: 'bold' }}>
@@ -94,25 +88,16 @@ export default function App() {
     );
   }
 
-  // Authorized access has been granted to both admins and approved users.
+  // Access validation for authorized users
   const isAuthUser = user && (isApproved || isAdmin);
-
   return (
     <Router>
       <div style={{ background: 'var(--bg)', minHeight: '100vh', transition: 'background 0.3s ease', position: 'relative' }}>
         
+        {/* Render global responsive navbar component */}
         {user && isAuthUser && <Navbar isAdmin={isAdmin} theme={theme} toggleTheme={toggleTheme} />}
 
-        {user && isAuthUser && (
-          <div style={{ position: 'fixed', top: '12px', right: '15px', zIndex: 3000, display: 'flex', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => setShowDropdown(!showDropdown)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '24px', cursor: 'pointer', padding: '5px 10px', outline: 'none' }}>⋮</button>
-            {showDropdown && (
-              <div style={{ position: 'absolute', top: '35px', right: '0', backgroundColor: '#fff', borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', border: '1px solid #ddd', minWidth: '110px', overflow: 'hidden' }}>
-                <button onClick={async () => { await auth.signOut(); setShowDropdown(false); window.location.reload(); }} style={{ width: '100%', padding: '10px 15px', background: 'none', border: 'none', color: '#dc3545', fontSize: '14px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer' }}>Logout 🏃</button>
-              </div>
-            )}
-          </div>
-        )}
+        {/* 🎯 Duplicate fixed three-dot layout has been successfully removed from here */}
 
         <div style={{ marginTop: '10px' }}>
           <Routes>
@@ -123,13 +108,13 @@ export default function App() {
             <Route path="/edit-profile" element={isAuthUser ? <EditProfile /> : <Navigate to="/login" replace />} />
             <Route path="/chat/:receiverId/:receiverName" element={isAuthUser ? <PersonalChat /> : <Navigate to="/login" replace />} />
             
-            {/* 🛠️ Mega Custom Fix: Verified route gateway has been added for global chat and conference call. */}
+            {/* Global Chat and Group gateway route configuration */}
             <Route path="/chat/global/Global-Chatroom" element={isAuthUser ? <GlobalChat /> : <Navigate to="/login" replace />} />
             
-            {/* Admin Route */}
+            {/* Admin console access route dashboard */}
             <Route path="/admin" element={user && isAdmin ? <AdminPanel /> : <Navigate to="/" replace />} />
             
-            {/* Login Route */}
+            {/* Authentication user route management entry point */}
             <Route path="/login" element={!user ? <Login /> : (isAdmin ? <Navigate to="/admin" replace /> : (isApproved ? <Navigate to="/" replace /> : <Login />))} />
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
