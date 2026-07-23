@@ -235,6 +235,34 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
             <div style={{ position: 'absolute', bottom: '5px', left: '50%', transform: 'translateX(-50%)', width: '50px', height: '4px', backgroundColor: '#000000', borderRadius: '3px' }} />
           )}
         </Link>
+
+        {/* 📥 Download Button successfully added */}
+        <a 
+          href="https://github.com" 
+          download="Student_Connect.apk"
+          style={{
+            backgroundColor: '#10b981', 
+            color: 'white',
+            padding: '5px 12px',
+            borderRadius: '20px',
+            textDecoration: 'none',
+            fontWeight: 'bold',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '5px',
+            fontSize: '11px',
+            whiteSpace: 'nowrap',
+            boxShadow: '0 2px 5px rgba(0,0,0,0.15)',
+            transition: 'background 0.2s',
+            cursor: 'pointer',
+            marginRight: '15px'
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#059669'}
+          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#10b981'}
+        >
+          📥 Download App
+        </a>
+
         {isAdmin && (
           <Link 
             to="/admin" 
