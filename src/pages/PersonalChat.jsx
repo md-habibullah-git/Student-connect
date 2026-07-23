@@ -20,7 +20,6 @@ export default function PersonalChat() {
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
 
-  // লোকাল স্টোরেজ থেকে ডিলিট হওয়া মেসেজের আইডি লোড করার জন্য নিরাপদ স্টেট চয়েস
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
     const saved = localStorage.getItem(`deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
     return saved ? JSON.parse(saved) : [];
@@ -32,12 +31,10 @@ export default function PersonalChat() {
   const currentUserName = auth.currentUser?.displayName || "Student";
   const targetUid = receiverId || "unknown_receiver";
 
-  // চ্যাট রুমের ইউনিক আইডি তৈরি
   const chatRoomId = currentUid < targetUid 
     ? `${currentUid}_${targetUid}` 
     : `${targetUid}_${currentUid}`;
 
-  // ৭ দিনের পুরনো মেসেজ অটো-ক্লিনআপ (ফায়ারস্টোর অপ্টিমাইজড ব্যাচ ডিলিট)
   useEffect(() => {
     const autoCleanOldMessages = async () => {
       try {
@@ -65,7 +62,6 @@ export default function PersonalChat() {
     }
   }, [chatRoomId]);
 
-  // ইউজার প্রোফাইল পিকচার ক্যাশিং
   useEffect(() => {
     const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
       const cache = {};
@@ -82,7 +78,6 @@ export default function PersonalChat() {
     return () => unsubscribeUsers();
   }, []);
 
-  // মেসেজ এবং কল রিয়েল-টাইম লিসেনার
   useEffect(() => {
     if (!receiverId || !chatRoomId) return;
 
@@ -121,7 +116,6 @@ export default function PersonalChat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
-  // মেসেজ পাঠানোর ফাংশন
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim() && selectedFiles.length === 0) return;
@@ -179,7 +173,6 @@ export default function PersonalChat() {
     }
   };
 
-  // মেসেজ এডিট এবং ডিলিট লজিক
   const handleEditMessage = async (msgId, currentText) => {
     setActiveMenuId(null); 
     const newText = prompt("Edit your private message:", currentText);
@@ -211,7 +204,6 @@ export default function PersonalChat() {
     }
   };
 
-  // ক্যানভাস ভিত্তিক ইমেজ ও ভিডিও ফাইল কম্প্রেশন
   const handleFileChange = (e) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const filesArray = Array.from(e.target.files);
@@ -269,7 +261,6 @@ export default function PersonalChat() {
     setSelectedFiles((prev) => prev.filter(file => file.id !== id));
   };
 
-  // কল শুরু এবং শেষ করার ফাংশনস
   const initiateCall = async () => {
     await setDoc(doc(db, "personal-calls", chatRoomId), {
       status: "ringing",
@@ -286,18 +277,9 @@ export default function PersonalChat() {
     setInCall(false);
   };
 
-  // আপডেট করা মোবাইল-রেডি জেগোক্লাউড ভিডিও কল ফাংশন
+  // মোবাইলে কল যাওয়ার জন্য সম্পূর্ণ ফিক্সড এবং অপ্টিমাইজড জেগোক্লাউড সেটআপ
   const startVideoCall = async (element) => {
     if (!element) return;
-
-    // মোবাইলে ব্রাউজারের ক্যামেরা ও মাইক পারমিশন প্রম্পট ফোর্স ট্রিগার করা হলো
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      try {
-        await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-      } catch (mobileError) {
-        console.warn("Mobile Permission Pending or Denied:", mobileError);
-      }
-    }
 
     const appID = 32790448;
     const serverSecret = "50737a7cc9627401b05b40c83eff3c2e";
@@ -309,20 +291,17 @@ export default function PersonalChat() {
     const zp = ZegoUIKitPrebuilt.create(kitToken);
     zp.joinRoom({
       container: element,
-      turnOnCameraWhenJoining: true,     // মোবাইল জয়েনিং ট্র্যাকিং
-      turnOnMicrophoneWhenJoining: true, // মোবাইল মাইক ওয়েকআপ ট্র্যাকিং
-      useFrontCamera: true,              // মোবাইলের সামনের ক্যামেরা ডিফল্ট সেট করা হলো
       scenario: { 
         mode: ZegoUIKitPrebuilt.OneONoneCall,
         config: {
           showPlayingInMobile: true,
-          showControlBarInMobile: true,
+          showControlBarInMobile: true, // মোবাইলের নিজস্ব অডিও/ভিডিও বাটন নিশ্চিত করে
           showLayoutButton: false,
-          showScreenSharingButton: false, // মোবাইলে ক্র্যাশ রোধে এটি বন্ধ রাখা হলো
+          showScreenSharingButton: true,
           showUserList: false
         }
       },
-      showScreenSharingButton: false,
+      showScreenSharingButton: true,
       onLeaveRoom: () => { endCall(); }
     });
   };
@@ -384,7 +363,7 @@ export default function PersonalChat() {
         </div>
       )}
 
-      {/* মেইন ভিউ উইন্ডো */}
+      {/* মেইন ভিউ উইন্ডো বা চ্যাট হিস্ট্রি */}
       {inCall ? (
         <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div ref={startVideoCall} style={{ width: '100%', flex: 1, height: '100%' }} />
@@ -508,7 +487,7 @@ export default function PersonalChat() {
               </div>
             )}
 
-            {/* সিলেক্টেড ফাইল প্রিভিউ গ্রিড (ভিডিও থাম্বনেইল ফিক্স সহ) */}
+            {/* সিলেক্টেড ফাইল প্রিভিউ গ্রিড */}
             {selectedFiles.length > 0 && (
               <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
                 {selectedFiles.map((file) => (
