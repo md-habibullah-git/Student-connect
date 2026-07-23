@@ -11,7 +11,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
   const [showDropdown, setShowDropdown] = useState(false); 
   const [showSettingsSub, setShowSettingsSub] = useState(false);
 
-  // 📱 Detect mobile screen size
+  // Detect mobile screen size
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
 
   useEffect(() => {
@@ -46,14 +46,14 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
   return ( 
     <nav style={{ background: 'linear-gradient(135deg, #a832ff 0%, #7016ff 100%)', padding: isMobile ? '10px 8px' : '10px 15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 1000, boxShadow: '0 3px 10px rgba(112, 22, 255, 0.25)', height: '50px', boxSizing: 'border-box' }}> 
       
-      {/* ⬅️ Left Section: Back, Title, Search and Plus */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '5px' : '10px' }}> 
+      {/* Left Section: Back Button, Logo, Search & Plus */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '4px' : '10px' }}> 
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: 'white', padding: isMobile ? '4px 6px' : '4px 10px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '11px', whiteSpace: 'nowrap', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.35)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'} > 
           {isMobile ? '⬅️' : '⬅️ Back'} 
         </button>
         <button 
           onClick={() => window.location.reload()} 
-          style={{ background: 'none', border: 'none', color: 'white', fontWeight: 'bold', fontSize: '18px', whiteSpace: 'nowrap', letterSpacing: '0.3px', cursor: 'pointer', padding: 0 }}
+          style={{ background: 'none', border: 'none', color: 'white', fontWeight: 'bold', fontSize: isMobile ? '18px' : '18px', whiteSpace: 'nowrap', letterSpacing: '0.3px', cursor: 'pointer', padding: 0 }}
         > 
           {isMobile ? '🎓' : '🎓 StudentConnect'} 
         </button> 
@@ -73,11 +73,11 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
         </div> 
       </div> 
 
-      {/* 🎯 Dynamic Spacing Link: Automatically pushes everything after search/plus option */}
-      <div style={{ flexGrow: isMobile ? 0.5 : 1, minWidth: isMobile ? '10px' : '30px' }} />
+      {/* 🎯 Extra space explicitly created AFTER the search and plus options */}
+      <div style={{ flexGrow: 1, minWidth: '10px' }} />
 
-      {/* 🏠 Center-Right Section: Navigation Core Icons (No absolute position, no overlaps) */}
-      <div style={{ display: 'flex', gap: isMobile ? '8px' : '20px', alignItems: 'center', justifyContent: 'center' }}> 
+      {/* Middle/Right Section: Navigation Icons (Absolute positioning completely removed to fix overlaps) */}
+      <div style={{ display: 'flex', gap: isMobile ? '6px' : '20px', alignItems: 'center', justifyContent: 'center' }}> 
         <Link to="/" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Home" > 
           <div style={{ background: location.pathname === '/' ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
             <svg xmlns="http://w3.org" width="16" height="18" viewBox="0 0 24 24" fill="none"> 
@@ -131,11 +131,11 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
         )} 
       </div>
 
-      {/* 🎯 Another small spacer before right menu options to ensure balance */}
-      <div style={{ flexGrow: isMobile ? 0.2 : 1 }} />
-      {/* 📥 Right Section: Modernized Download Button & Menu */}
-      <div style={{ display: 'flex', gap: isMobile ? '6px' : '12px', alignItems: 'center' }}> 
-        <a href="https://github.com" style={{ backgroundColor: '#10b981', color: 'white', padding: isMobile ? '5px 9px' : '6px 14px', borderRadius: '15px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', whiteSpace: 'nowrap', boxShadow: '0 3px 8px rgba(16, 185, 129, 0.4)', transition: 'all 0.2s ease', cursor: 'pointer' }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#059669'; e.currentTarget.style.transform = 'scale(1.03)'; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#10b981'; e.currentTarget.style.transform = 'scale(1)'; }} > 
+      {/* Rightmost Spacing for Balance */}
+      <div style={{ flexGrow: isMobile ? 0 : 0.5, minWidth: isMobile ? '4px' : '15px' }} />
+      {/* Right Section: Upgraded Download Button & Dropdown Trigger */}
+      <div style={{ display: 'flex', gap: isMobile ? '4px' : '12px', alignItems: 'center', zIndex: 10 }}> 
+        <a href="https://github.com" style={{ backgroundColor: '#00e676', color: '#000000', padding: isMobile ? '5px 8px' : '6px 14px', borderRadius: '12px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', whiteSpace: 'nowrap', boxShadow: '0 0 10px rgba(0, 230, 118, 0.5)', transition: 'all 0.2s ease', cursor: 'pointer' }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#00c853'; e.currentTarget.style.transform = 'scale(1.05)'; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#00e676'; e.currentTarget.style.transform = 'scale(1)'; }} > 
           {isMobile ? '📥' : '📥 Download App'} 
         </a> 
 
