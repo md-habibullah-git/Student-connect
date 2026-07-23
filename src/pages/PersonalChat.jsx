@@ -38,30 +38,24 @@ export default function PersonalChat() {
   useEffect(() => {
     const autoCleanOldMessages = async () => {
       try {
-        const sevenDaysAgoTimestamp = Date.now() - (7 * 24 * 60 * 60 * 1000); 
+        const sevenDaysAgoTimestamp = new Date().getTime() - (7 * 24 * 60 * 60 * 1000); 
         const msgCollectionRef = collection(db, "personal-rooms", chatRoomId, "messages");
         
         const oldMessagesQuery = query(msgCollectionRef, where("createdAt", "<", sevenDaysAgoTimestamp));
         const snapshot = await getDocs(oldMessagesQuery);
         
-        if (!snapshot.empty) {
-          const { writeBatch } = await import('firebase/firestore');
-          const batch = writeBatch(db);
-          snapshot.docs.forEach((docSnapshot) => {
-            batch.delete(docSnapshot.ref);
-          });
-          await batch.commit();
-        }
+        snapshot.forEach(async (docSnapshot) => {
+          await deleteDoc(doc(db, "personal-rooms", chatRoomId, "messages", docSnapshot.id));
+        });
       } catch (error) {
         console.error("Firebase Auto Cleanup Error:", error);
       }
     };
 
-    if (chatRoomId && auth.currentUser?.uid) {
+    if (chatRoomId) {
       autoCleanOldMessages();
     }
   }, [chatRoomId]);
-
   useEffect(() => {
     const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
       const cache = {};
@@ -79,12 +73,12 @@ export default function PersonalChat() {
   }, []);
 
   useEffect(() => {
-    if (!receiverId || !chatRoomId) return;
+    if (!receiverId) return;
 
     const q = query(collection(db, "personal-rooms", chatRoomId, "messages"), orderBy("createdAt", "asc"));
     const unsubscribeMsg = onSnapshot(q, (snapshot) => {
       setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      if (typeof scrollToBottom === "function") scrollToBottom();
+      scrollToBottom();
     });
 
     const unsubscribeCall = onSnapshot(doc(db, "personal-calls", chatRoomId), (snapshot) => {
@@ -98,7 +92,6 @@ export default function PersonalChat() {
         }
       }
     });
-
     const handleOutsideClick = () => setActiveMenuId(null);
     window.addEventListener('click', handleOutsideClick);
 
@@ -116,6 +109,7 @@ export default function PersonalChat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim() && selectedFiles.length === 0) return;
@@ -124,7 +118,7 @@ export default function PersonalChat() {
       const roomRef = doc(db, "personal-rooms", chatRoomId);
       await setDoc(roomRef, {
         roomId: chatRoomId,
-        lastActive: Date.now()
+        lastActive: new Date().getTime()
       }, { merge: true });
 
       const replyData = replyToMessage ? {
@@ -134,14 +128,13 @@ export default function PersonalChat() {
         senderName: replyToMessage.senderName,
         msgId: replyToMessage.id
       } : null;
-
       if (input.trim()) {
         await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
           text: input,
           senderId: currentUid,
           senderName: currentUserName,
           senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-          createdAt: Date.now(),
+          createdAt: new Date().getTime(),
           isEdited: false,
           isDeleted: false,
           replyTo: replyData
@@ -149,22 +142,20 @@ export default function PersonalChat() {
         setInput('');
       }
 
-      if (selectedFiles.length > 0) {
-        for (const fileData of selectedFiles) {
-          await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
-            text: "", 
-            fileUrl: fileData.url,
-            fileType: fileData.type,
-            senderId: currentUid,
-            senderName: currentUserName,
-            senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-            createdAt: Date.now(),
-            isEdited: false,
-            isDeleted: false,
-            replyTo: replyData
-          });
-        }
-      }
+      selectedFiles.forEach(async (fileData) => {
+        await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
+          text: "", 
+          fileUrl: fileData.url,
+          fileType: fileData.type,
+          senderId: currentUid,
+          senderName: currentUserName,
+          senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+          createdAt: new Date().getTime(),
+          isEdited: false,
+          isDeleted: false,
+          replyTo: replyData
+        });
+      });
 
       setSelectedFiles([]); 
       setReplyToMessage(null); 
@@ -179,20 +170,27 @@ export default function PersonalChat() {
     if (newText !== null && newText.trim() !== "") {
       try {
         const msgDocRef = doc(db, "personal-rooms", chatRoomId, "messages", msgId);
-        await updateDoc(msgDocRef, { text: newText, isEdited: true });
+        await updateDoc(msgDocRef, {
+          text: newText,
+          isEdited: true
+        });
       } catch (error) {
         console.error("Error editing message:", error);
       }
     }
   };
-
   const handleDeleteMessage = async (msgId, isSenderMe) => {
     setActiveMenuId(null); 
     if (window.confirm("Are you sure you want to delete this message?")) {
       if (isSenderMe) {
         try {
           const msgDocRef = doc(db, "personal-rooms", chatRoomId, "messages", msgId);
-          await updateDoc(msgDocRef, { text: "This message was deleted", fileUrl: "", fileType: "", isDeleted: true });
+          await updateDoc(msgDocRef, {
+            text: "",
+            fileUrl: "", 
+            fileType: "",
+            isDeleted: true
+          });
         } catch (error) {
           console.error("Error deleting message globally:", error);
         }
@@ -210,9 +208,7 @@ export default function PersonalChat() {
 
     filesArray.forEach((file) => {
       const fileName = file.name;
-      let fileType = 'file';
-      if (file.type.startsWith('image/')) fileType = 'image';
-      else if (file.type.startsWith('video/')) fileType = 'video';
+      const fileType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'file');
 
       if (fileType === 'image') {
         const reader = new FileReader();
@@ -220,40 +216,37 @@ export default function PersonalChat() {
           const img = new Image();
           img.onload = () => {
             const canvas = document.createElement('canvas');
-            const max_width = 600; 
+            const max_width = 800; 
             const scaleResolution = max_width / img.width;
             canvas.width = max_width;
             canvas.height = img.height * scaleResolution;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.6);
-            setSelectedFiles((prev) => [...prev, { id: `${Date.now()}_${Math.random()}`, name: fileName, url: compressedBase64, type: 'image' }]);
+            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+            setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: compressedBase64, type: 'image' }]);
           };
           img.src = event.target.result;
         };
         reader.readAsDataURL(file);
       } else if (fileType === 'video') {
-        if (file.size > 700000) {
-          alert(`⚠️ "${fileName}" video is too large! Keep it under 700KB.`);
+        if (file.size > 10000000) {
+          alert(`⚠️ "${fileName}" video file size exceeds the optimization threshold!`);
           return;
         }
+
         const reader = new FileReader();
         reader.onload = (event) => {
-          setSelectedFiles((prev) => [...prev, { id: `${Date.now()}_${Math.random()}`, name: fileName, url: event.target.result, type: 'video' }]);
-        };
-        reader.readAsDataURL(file);
-      } else {
-        if (file.size > 700000) {
-          alert(`⚠️ "${fileName}" is too large! Keep it under 700KB.`);
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          setSelectedFiles((prev) => [...prev, { id: `${Date.now()}_${Math.random()}`, name: fileName, url: event.target.result, type: 'file' }]);
+          const base64Result = event.target.result;
+          if (base64Result.length > 1100000) {
+            alert(`⚠️ "${fileName}" compressed size structural limits exceeded!`);
+            return;
+          }
+          setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: base64Result, type: 'video' }]);
         };
         reader.readAsDataURL(file);
       }
     });
+
     e.target.value = null;
   };
 
@@ -277,10 +270,8 @@ export default function PersonalChat() {
     setInCall(false);
   };
 
-  // মোবাইলে কল যাওয়ার জন্য সম্পূর্ণ ফিক্সড এবং অপ্টিমাইজড জেগোক্লাউড সেটআপ
   const startVideoCall = async (element) => {
     if (!element) return;
-
     const appID = 32790448;
     const serverSecret = "50737a7cc9627401b05b40c83eff3c2e";
     
@@ -291,11 +282,14 @@ export default function PersonalChat() {
     const zp = ZegoUIKitPrebuilt.create(kitToken);
     zp.joinRoom({
       container: element,
+      turnOnCameraWhenJoining: true,
+      turnOnMicrophoneWhenJoining: true,
+      useFrontCamera: true, 
       scenario: { 
         mode: ZegoUIKitPrebuilt.OneONoneCall,
         config: {
           showPlayingInMobile: true,
-          showControlBarInMobile: true, // মোবাইলের নিজস্ব অডিও/ভিডিও বাটন নিশ্চিত করে
+          showControlBarInMobile: true,
           showLayoutButton: false,
           showScreenSharingButton: true,
           showUserList: false
@@ -309,7 +303,6 @@ export default function PersonalChat() {
     e.stopPropagation();
     setActiveMenuId(activeMenuId === msgId ? null : msgId);
   };
-
   return (
     <div style={{ 
       maxWidth: '700px', margin: '15px auto', fontFamily: 'Arial', height: '85vh', 
@@ -342,7 +335,6 @@ export default function PersonalChat() {
         .threedot-menu-item:hover { background: rgba(0,0,0,0.05); }
       `}</style>
 
-      {/* চ্যাট হেডার */}
       <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
         <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px' }}>{receiverName}</h3>
@@ -352,7 +344,7 @@ export default function PersonalChat() {
           </button>
         )}
       </div>
-      {/* ইনকামিং কল নোটিফিকেশন বার */}
+
       {incomingCall && !inCall && (
         <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 999, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
           <p style={{ margin: '0 0 12px 0', fontWeight: 'bold', color: '#333' }}>📞 {receiverName} is calling you...</p>
@@ -363,14 +355,12 @@ export default function PersonalChat() {
         </div>
       )}
 
-      {/* মেইন ভিউ উইন্ডো বা চ্যাট হিস্ট্রি */}
       {inCall ? (
         <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div ref={startVideoCall} style={{ width: '100%', flex: 1, height: '100%' }} />
         </div>
       ) : (
         <>
-          {/* চ্যাট মেসেজ হিস্ট্রি স্ক্রিন */}
           <div style={{ 
             flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', 
             backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', 
@@ -400,17 +390,16 @@ export default function PersonalChat() {
                       <div style={{ 
                         background: getMsg.isDeleted ? '#ebebeb' : (isMe ? '#0056b3' : 'var(--card-bg, #fff)'), 
                         color: getMsg.isDeleted ? '#888' : (isMe ? 'white' : 'var(--text-color, #333)'), 
-                        padding: (getMsg.fileUrl && !getMsg.isDeleted) ? '4px' : '10px 14px', 
+                        padding: getMsg.fileUrl ? '4px' : '10px 14px', 
                         borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px', 
                         fontSize: '14px', boxShadow: '0 2px 5px rgba(0,0,0,0.04)', border: isMe ? 'none' : '1px solid rgba(0, 86, 179, 0.15)', wordBreak: 'break-word',
                         display: 'flex', flexDirection: 'column', gap: '5px', overflow: 'hidden'
                       }}>
                         
                         {getMsg.isDeleted ? (
-                          <p style={{ margin: 0, fontStyle: 'italic', fontSize: '13px' }}>🚫 This message was deleted</p>
+                          <p style={{ margin: 0, fontStyle: 'italic', fontSize: '13px', padding: '10px 14px' }}>🚫 This message was deleted</p>
                         ) : (
                           <>
-                            {/* মেসেজ রিপ্লাই ব্লক */}
                             {getMsg.replyTo && (
                               <div style={{ background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,86,179,0.07)', padding: '6px 10px', borderRadius: '8px', borderLeft: '3px solid #0056b3', fontSize: '11px', margin: getMsg.fileUrl ? '4px 4px 0 4px' : '0 0 3px 0', color: isMe ? '#ffeb3b' : '#444', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '240px' }}>
                                 {getMsg.replyTo.fileUrl && <img src={getMsg.replyTo.fileUrl} alt="Reply preview" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
@@ -421,38 +410,24 @@ export default function PersonalChat() {
                               </div>
                             )}
 
-                            {/* মাল্টিমিডিয়া ফাইল মেসেজ রেন্ডারিং */}
-                            {getMsg.fileUrl && (
-                              getMsg.fileType === 'image' ? (
-                                <img src={getMsg.fileUrl} alt="Shared" style={{ maxWidth: '250px', maxHeight: '200px', objectFit: 'cover', borderRadius: '10px' }} />
-                              ) : getMsg.fileType === 'video' ? (
-                                <video src={getMsg.fileUrl} controls style={{ maxWidth: '250px', borderRadius: '10px' }} />
-                              ) : (
-                                <a href={getMsg.fileUrl} download style={{ color: isMe ? '#fff' : '#0056b3', textDecoration: 'underline', padding: '6px 10px', display: 'block' }}>📁 Download Document</a>
-                              )
+                            {getMsg.fileUrl && getMsg.fileType !== 'video' && (
+                              <img src={getMsg.fileUrl} alt="Shared Graphic" style={{ maxWidth: '250px', maxHeight: '250px', borderRadius: '10px', display: 'block', cursor: 'pointer' }} onClick={() => window.open(getMsg.fileUrl, '_blank')} />
+                            )}
+                            {getMsg.fileUrl && getMsg.fileType === 'video' && (
+                              <video src={getMsg.fileUrl} controls style={{ maxWidth: '250px', maxHeight: '250px', borderRadius: '10px', display: 'block' }} />
                             )}
 
-                            {/* টেক্সট মেসেজ ও এডিটেড চেক */}
-                            {getMsg.text && (
-                              <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                {getMsg.text}
-                                {getMsg.isEdited && <small style={{ fontSize: '9px', opacity: 0.6, marginLeft: '6px', fontStyle: 'italic' }}>(edited)</small>}
-                              </p>
-                            )}
+                            {getMsg.text && <p style={{ margin: 0 }}>{getMsg.text}</p>}
+                            
+                            {getMsg.isEdited && <small style={{ fontSize: '9px', opacity: 0.6, textAlign: 'right', display: 'block' }}>(edited)</small>}
                           </>
                         )}
                       </div>
 
-                      {/* থ্রি-ডট অ্যাকশন ড্রপডাউন মেনু এলিমেন্টস */}
+                      {/* আপনার প্রজেক্টের ৩-ডট অ্যাকশন মেনু বাটন এখানে যুক্ত করা হলো */}
                       {!getMsg.isDeleted && (
                         <div style={{ position: 'relative' }}>
-                          <button 
-                            onClick={(e) => toggleMenu(e, getMsg.id)} 
-                            style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '16px', padding: '0 4px' }}
-                          >
-                            ⋮
-                          </button>
-                          
+                          <button onClick={(e) => toggleMenu(e, getMsg.id)} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '16px', padding: '0 4px' }}>⋮</button>
                           {activeMenuId === getMsg.id && (
                             <div className="threedot-dropdown-menu">
                               <button className="threedot-menu-item reply-btn" onClick={() => { setReplyToMessage(getMsg); setActiveMenuId(null); }}>Reply</button>
@@ -470,14 +445,12 @@ export default function PersonalChat() {
             })}
             <div ref={messagesEndRef} />
           </div>
-          {/* নিচে মেসেজ ইনপুট ফর্ম সেকশন */}
+
           <form onSubmit={sendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            
-            {/* একটিভ রিপ্লাই ইন্ডিকেটর বার */}
             {replyToMessage && (
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
                 <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {replyToMessage.fileUrl && <img src={replyToMessage.fileUrl} alt="Reply preview" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
+                  {replyToMessage.fileUrl && <img src={replyToMessage.fileUrl} alt="Reply Input Preview" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
                   <div>
                     <span style={{ fontWeight: 'bold', color: '#0056b3' }}>↩️ Reply to {replyToMessage.senderName}: </span>
                     <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileUrl ? "📷 Photo" : "")}</span>
@@ -487,27 +460,19 @@ export default function PersonalChat() {
               </div>
             )}
 
-            {/* সিলেক্টেড ফাইল প্রিভিউ গ্রিড */}
             {selectedFiles.length > 0 && (
               <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
                 {selectedFiles.map((file) => (
-                  <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3', background: '#ccc' }}>
-                    {file.type === 'video' ? (
-                      <div style={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '20px', background: '#000' }}>📹</div>
-                    ) : file.type === 'file' ? (
-                      <div style={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '18px', background: '#fff', fontWeight: 'bold' }}>📄</div>
-                    ) : (
-                      <img src={file.url} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    )}
-                    <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold', zIndex: 5 }}>✕</button>
+                  <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3' }}>
+                    <img src={file.url} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>✕</button>
                   </div>
                 ))}
               </div>
             )}
 
-            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*,.pdf,.doc,.docx" multiple style={{ display: 'none' }} />
+            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" multiple style={{ display: 'none' }} />
 
-            {/* টেক্সট ইনপুট এরিয়া ও সেন্ড অ্যাকশন */}
             <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
               <button type="button" onClick={() => fileInputRef.current.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
               <input type="text" className="dynamic-chat-input" placeholder="✍️ Type a private message..." value={input} onChange={(e) => setInput(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
