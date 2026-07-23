@@ -276,8 +276,8 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
       <div style={{ display: 'flex', gap: '15px', alignItems: 'center', zIndex: 10 }}>
 
         {/* 📥 Download Button successfully added */}
-        <a 
-          href="https://github.com" 
+        <a
+        href="https://github.com/md-habibullah-git/Student-connect/releases/download/v1.0.0/app-debug.apk" 
           style={{
             backgroundColor: '#10b981', 
             color: 'white',
