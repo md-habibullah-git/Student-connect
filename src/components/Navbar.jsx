@@ -272,6 +272,9 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
           </Link>
         )}
 
+      </div>
+      <div style={{ display: 'flex', gap: '15px', alignItems: 'center', zIndex: 10 }}>
+
         {/* 📥 Download Button successfully added */}
         <a 
           href="https://github.com" 
@@ -298,10 +301,6 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
         >
           📥 Download App
         </a>
-
-
-      </div>
-      <div style={{ display: 'flex', gap: '15px', alignItems: 'center', zIndex: 10 }}>
 
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
           <button 
