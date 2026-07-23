@@ -24,7 +24,6 @@ export default function PersonalChat() {
     const saved = localStorage.getItem(`deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
     return saved ? JSON.parse(saved) : [];
   });
-
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null); 
 
@@ -35,6 +34,7 @@ export default function PersonalChat() {
   const chatRoomId = currentUid < targetUid 
     ? `${currentUid}_${targetUid}` 
     : `${targetUid}_${currentUid}`;
+
   useEffect(() => {
     const autoCleanOldMessages = async () => {
       try {
@@ -56,7 +56,6 @@ export default function PersonalChat() {
       autoCleanOldMessages();
     }
   }, [chatRoomId]);
-
   useEffect(() => {
     const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
       const cache = {};
@@ -72,6 +71,7 @@ export default function PersonalChat() {
 
     return () => unsubscribeUsers();
   }, []);
+
   useEffect(() => {
     if (!receiverId) return;
 
@@ -92,7 +92,6 @@ export default function PersonalChat() {
         }
       }
     });
-
     const handleOutsideClick = () => setActiveMenuId(null);
     window.addEventListener('click', handleOutsideClick);
 
@@ -110,6 +109,7 @@ export default function PersonalChat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim() && selectedFiles.length === 0) return;
@@ -128,7 +128,6 @@ export default function PersonalChat() {
         senderName: replyToMessage.senderName,
         msgId: replyToMessage.id
       } : null;
-
       if (input.trim()) {
         await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
           text: input,
@@ -164,6 +163,7 @@ export default function PersonalChat() {
       console.error("Error sending message:", error);
     }
   };
+
   const handleEditMessage = async (msgId, currentText) => {
     setActiveMenuId(null); 
     const newText = prompt("Edit your private message:", currentText);
@@ -179,7 +179,6 @@ export default function PersonalChat() {
       }
     }
   };
-
   const handleDeleteMessage = async (msgId, isSenderMe) => {
     setActiveMenuId(null); 
     if (window.confirm("Are you sure you want to delete this message?")) {
@@ -254,6 +253,7 @@ export default function PersonalChat() {
   const removeSelectedFile = (id) => {
     setSelectedFiles((prev) => prev.filter(file => file.id !== id));
   };
+
   const initiateCall = async () => {
     await setDoc(doc(db, "personal-calls", chatRoomId), {
       status: "ringing",
@@ -282,6 +282,9 @@ export default function PersonalChat() {
     const zp = ZegoUIKitPrebuilt.create(kitToken);
     zp.joinRoom({
       container: element,
+      turnOnCameraWhenJoining: true,
+      turnOnMicrophoneWhenJoining: true,
+      useFrontCamera: true, 
       scenario: { 
         mode: ZegoUIKitPrebuilt.OneONoneCall,
         config: {
@@ -296,7 +299,6 @@ export default function PersonalChat() {
       onLeaveRoom: () => { endCall(); }
     });
   };
-
   const toggleMenu = (e, msgId) => {
     e.stopPropagation();
     setActiveMenuId(activeMenuId === msgId ? null : msgId);
@@ -369,7 +371,7 @@ export default function PersonalChat() {
 
               const isMe = getMsg.senderId === currentUid;
               const firestoreProfilePhoto = usersCache[getMsg.senderId] || getMsg.senderPhoto;
-              const defaultFallbackAvatar = `https://dicebear.com{encodeURIComponent(getMsg.senderName || 'Student')}.svg?backgroundColor=0056b3`;
+              const defaultFallbackAvatar = `https://dicebear.com{encodeURIComponent(getMsg.senderName || 'Student')}&backgroundColor=0056b3`;
 
               return (
                 <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px' }}>
@@ -409,36 +411,28 @@ export default function PersonalChat() {
                             )}
 
                             {getMsg.fileUrl && getMsg.fileType !== 'video' && (
-                              <img src={getMsg.fileUrl} alt="Shared Graphic" style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '350px', objectFit: 'cover', display: 'block' }} />
+                              <img src={getMsg.fileUrl} alt="Shared Graphic" style={{ maxWidth: '250px', maxHeight: '250px', borderRadius: '10px', display: 'block', cursor: 'pointer' }} onClick={() => window.open(getMsg.fileUrl, '_blank')} />
                             )}
-
                             {getMsg.fileUrl && getMsg.fileType === 'video' && (
-                              <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />
+                              <video src={getMsg.fileUrl} controls style={{ maxWidth: '250px', maxHeight: '250px', borderRadius: '10px', display: 'block' }} />
                             )}
 
-                            {getMsg.text && (
-                              <p style={{ margin: 0, fontSize: '14px', textAlign: 'left' }}>
-                                {getMsg.text}
-                                {getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}
-                              </p>
-                            )}
+                            {getMsg.text && <p style={{ margin: 0 }}>{getMsg.text}</p>}
+                            
+                            {getMsg.isEdited && <small style={{ fontSize: '9px', opacity: 0.6, textAlign: 'right', display: 'block' }}>(edited)</small>}
                           </>
                         )}
                       </div>
 
+                      {/* আপনার প্রজেক্টের ৩-ডট অ্যাকশন মেনু বাটন এখানে যুক্ত করা হলো */}
                       {!getMsg.isDeleted && (
                         <div style={{ position: 'relative' }}>
-                          <span 
-                            onClick={(e) => toggleMenu(e, getMsg.id)}
-                            style={{ fontSize: '18px', color: 'var(--text-color, #777)', cursor: 'pointer', padding: '0 5px', userSelect: 'none', fontWeight: 'bold' }}
-                          >
-                            ⋮
-                          </span>
+                          <button onClick={(e) => toggleMenu(e, getMsg.id)} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '16px', padding: '0 4px' }}>⋮</button>
                           {activeMenuId === getMsg.id && (
                             <div className="threedot-dropdown-menu">
-                              <button type="button" className="threedot-menu-item reply-btn" onClick={() => { setReplyToMessage(getMsg); setActiveMenuId(null); }}>↩️ Reply</button>
-                              {isMe && !getMsg.fileUrl && <button type="button" className="threedot-menu-item edit-btn" onClick={() => handleEditMessage(getMsg.id, getMsg.text)}>✏️ Edit</button>}
-                              <button type="button" className="threedot-menu-item delete-btn" onClick={() => handleDeleteMessage(getMsg.id, isMe)}>🗑️ Delete</button>
+                              <button className="threedot-menu-item reply-btn" onClick={() => { setReplyToMessage(getMsg); setActiveMenuId(null); }}>Reply</button>
+                              {isMe && getMsg.text && <button className="threedot-menu-item edit-btn" onClick={() => handleEditMessage(getMsg.id, getMsg.text)}>Edit</button>}
+                              <button className="threedot-menu-item delete-btn" onClick={() => handleDeleteMessage(getMsg.id, isMe)}>Delete</button>
                             </div>
                           )}
                         </div>
