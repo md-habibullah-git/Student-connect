@@ -5,6 +5,7 @@ import {
   collection, addDoc, onSnapshot, query, orderBy, limit, 
   serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where, writeBatch 
 } from 'firebase/firestore';
+import { ZegoUIKitPrebuilt } from '@zegocloud/zego-uikit-prebuilt';
 
 export default function GlobalChat() {
   const navigate = useNavigate();
@@ -50,7 +51,7 @@ export default function GlobalChat() {
     };
     autoCleanOldGlobalMessages();
   }, []);
-  // রিয়েল-টাইম লিসেনার এবং অ্যাপ/ট্যাব কেটে দিলে অটো-কল ডিলিট লজিক
+  // রিয়েল-টাইম লিসেনার (মেসেজ, ইউজার প্রোফাইল এবং ফিক্সড কল ট্র্যাকিং)
   useEffect(() => {
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "asc"), limit(100));
     
@@ -88,7 +89,6 @@ export default function GlobalChat() {
             return;
           }
           
-          // শর্ত: যতক্ষণ একজনও জয়েন থাকবে, বাকিদের রিjoin বাটন বা ইনকামিং পপআপ দেখাবে
           if (participants.includes(currentUid)) {
             setShowRejoinBtn(true);
             setIncomingCall(null);
@@ -104,28 +104,6 @@ export default function GlobalChat() {
       }
     }, (error) => console.error("Call Stream Error:", error));
 
-    // অ্যাপ মিনিমাইজ, রিফ্রেশ বা ট্যাব কেটে দিলে ব্যাকগ্রাউন্ডে কল থেকে আইডি মুছে ফেলার সিকিউরিটি
-    const handleAppVisibilityOrClose = async () => {
-      try {
-        const callDocRef = doc(db, "global-calls", globalRoomId);
-        const snapshot = await getDoc(callDocRef);
-        if (snapshot.exists()) {
-          const currentParts = snapshot.data().participants || [];
-          const updatedParts = currentParts.filter(id => id !== currentUid);
-          
-          if (updatedParts.length === 0) {
-            await deleteDoc(callDocRef); 
-          } else {
-            await updateDoc(callDocRef, { participants: updatedParts });
-          }
-        }
-      } catch (err) {
-        console.error("Presence cleanup error:", err);
-      }
-    };
-
-    window.addEventListener('beforeunload', handleAppVisibilityOrClose);
-    
     const handleOutsideClick = () => setActiveMenuId(null);
     window.addEventListener('click', handleOutsideClick);
 
@@ -133,7 +111,6 @@ export default function GlobalChat() {
       unsubscribeMessages();
       unsubscribeUsers();
       unsubscribeCall();
-      window.removeEventListener('beforeunload', handleAppVisibilityOrClose);
       window.removeEventListener('click', handleOutsideClick);
     };
   }, [currentUid, inCall]);
@@ -142,7 +119,7 @@ export default function GlobalChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // মেসেজ পাঠানোর ফাংশন
+  // মেসেজ ও ফাইল পাঠানোর কোর ফাংশন
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() && selectedFiles.length === 0) return;
@@ -275,23 +252,7 @@ export default function GlobalChat() {
     setSelectedFiles((prev) => prev.filter(file => file.id !== id));
   };
 
-  // গুগল ক্রোমে কল ওপেন করা এবং কল কাটার পর Vercel অ্যাপে ফিরে আসার লজিক
-  const launchCallInChromeAndReturn = () => {
-    // Vercel লাইভ ডোমেইনের জন্য ZegoCloud প্রি-বিল্ট ওয়েব লিংক জেনারেশন
-    const targetRoomLink = `https://github.io{globalRoomId}&userID=${currentUid}&userName=${encodeURIComponent(currentUserName)}&appID=32790448&serverSecret=50737a7cc9627401b05b40c83eff3c2e`;
-    
-    // এটি এন্ড্রয়েড ডিভাইসকে জোরপূর্বক ফোনের গুগল ক্রোম ব্রাউজারে ফুল স্ক্রিন কলটি ওপেন করাবে
-    const chromeWindow = window.open(targetRoomLink, '_system');
-
-    // মনিটর চেক: ক্রোম ব্রাউজারের কল উইন্ডো ট্যাবটি ক্লোজ বা লিভ করা মাত্রই ইউজারকে আবার মোবাইল অ্যাপের চ্যাট স্ক্রিনে রিটার্ন নিয়ে আসবে
-    const appReturnTimer = setInterval(() => {
-      if (!chromeWindow || chromeWindow.closed) {
-        clearInterval(appReturnTimer);
-        leaveGlobalCall(); 
-      }
-    }, 1000);
-  };
-
+  // ইন-অ্যাপ কল কন্ট্রোল মেথডসমূহ
   const initiateGlobalCall = async () => {
     try {
       await setDoc(doc(db, "global-calls", globalRoomId), { 
@@ -303,7 +264,6 @@ export default function GlobalChat() {
       });
       setInCall(true);
       setIncomingCall(null);
-      launchCallInChromeAndReturn(); 
     } catch (err) {
       console.error("Error initiating global call:", err);
     }
@@ -320,7 +280,6 @@ export default function GlobalChat() {
         await updateDoc(callDocRef, { participants: updatedParts });
         setIncomingCall(null);
         setInCall(true);
-        launchCallInChromeAndReturn(); 
       }
     } catch (err) {
       console.error("Error rejoining call:", err);
@@ -336,6 +295,7 @@ export default function GlobalChat() {
         const currentParticipants = snapshot.data().participants || [];
         const updatedParts = currentParticipants.filter(id => id !== currentUid);
         
+        // শর্ত: রুমে কেউ না থাকলে গ্লোবাল কল ডাটাবেজ থেকে সম্পূর্ণ মুছে যাবে
         if (updatedParts.length === 0) {
           await deleteDoc(callDocRef); 
         } else {
@@ -349,6 +309,32 @@ export default function GlobalChat() {
       setShowRejoinBtn(false);
       setIncomingCall(null);
     }
+  };
+
+  const startGlobalVideoCall = async (element) => {
+    if (!element || !inCall) return; 
+    
+    const zp = ZegoUIKitPrebuilt.create(ZegoUIKitPrebuilt.generateKitTokenForTest(32790448, "50737a7cc9627401b05b40c83eff3c2e", globalRoomId, currentUid, currentUserName));
+    zp.joinRoom({
+      container: element,
+      scenario: {
+        mode: ZegoUIKitPrebuilt.GroupCall,
+        config: {
+          showPlayingInMobile: true,
+          showControlBarInMobile: true,
+          showLayoutButton: true,
+          showScreenSharingButton: true,
+          showUserList: true
+        }
+      },
+      showScreenSharingButton: true,
+      turnOnCameraWhenJoining: true,
+      turnOnMicrophoneWhenJoining: true,
+      useFrontCamera: true,
+      onLeaveRoom: () => {
+        leaveGlobalCall();
+      }
+    });
   };
 
   const toggleMenu = (e, msgId) => {
@@ -377,8 +363,15 @@ export default function GlobalChat() {
         :root[data-theme='dark'] .threedot-action-btn:hover { background: rgba(255, 255, 255, 0.15); }
       `}</style>
       
+      {/* ইন-অ্যাপ ফুল স্ক্রিন ভিডিও কল উইন্ডো ওভারলে */}
+      {inCall && (
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000' }}>
+          <div ref={(el) => el && startGlobalVideoCall(el)} style={{ width: '100%', height: '100%' }} />
+        </div>
+      )}
+
       {incomingCall && !inCall && (
-        <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 999, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+        <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 998, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
           <p style={{ margin: '0 0 12px 0', fontWeight: 'bold', color: '#333' }}>📢 {incomingCall.hostName} started a global conference call!</p>
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
             <button onClick={handleRejoinCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Join Now</button>
@@ -395,84 +388,88 @@ export default function GlobalChat() {
           {!inCall && showRejoinBtn && <button onClick={handleRejoinCall} className="rejoin-pulse-btn">🟢 Rejoin Call 📹</button>}
         </div>
       </div>
-      <div style={{ flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-        {messages && messages.map((getMsg) => {
-          if (localDeletedIds.includes(getMsg.id)) return null;
-          const isMe = getMsg.senderUid === currentUid;
-          const firestoreProfilePhoto = usersCache[getMsg.senderUid] || getMsg.senderPhoto;
-          const defaultFallbackAvatar = `https://dicebear.com{encodeURIComponent(getMsg.senderName || 'Student')}`;
+      {!inCall && (
+        <>
+          <div style={{ flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            {messages && messages.map((getMsg) => {
+              if (localDeletedIds.includes(getMsg.id)) return null;
+              const isMe = getMsg.senderUid === currentUid;
+              const firestoreProfilePhoto = usersCache[getMsg.senderUid] || getMsg.senderPhoto;
+              const defaultFallbackAvatar = `https://dicebear.com{encodeURIComponent(getMsg.senderName || 'Student')}`;
 
-          return (
-            <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px' }}>
-              <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', flexShrink: 0 }} />
-              <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
-                <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px' }}>{getMsg.senderName}</small>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexDirection: isMe ? 'row-reverse' : 'row' }}>
-                  <div style={{ background: getMsg.isDeleted ? '#ebebeb' : (isMe ? '#0056b3' : 'var(--card-bg, #fff)'), color: getMsg.isDeleted ? '#888' : (isMe ? 'white' : 'var(--text-color, #333)'), padding: getMsg.fileUrl ? '4px' : '10px 14px', borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px', fontSize: '14px', boxShadow: '0 2px 5px rgba(0,0,0,0.04)', border: isMe ? 'none' : '1px solid rgba(0, 86, 179, 0.15)', wordBreak: 'break-word', display: 'flex', flexDirection: 'column', gap: '5px', overflow: 'hidden' }}>
-                    {getMsg.isDeleted ? <p style={{ margin: 0, fontStyle: 'italic', fontSize: '13px', padding: '10px 14px' }}>🚫 This message was deleted</p> : (
-                      <>
-                        {getMsg.replyTo && (
-                          <div style={{ background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,86,179,0.07)', padding: '6px 10px', borderRadius: '8px', borderLeft: '3px solid #0056b3', fontSize: '11px', color: isMe ? '#ffeb3b' : '#444', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '240px' }}>
-                            {getMsg.replyTo.fileUrl && <img src={getMsg.replyTo.fileUrl} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
-                            <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><strong style={{ color: isMe ? '#fff' : '#0056b3', display: 'block', fontSize: '10px', fontStyle: 'normal' }}>↩️ {getMsg.replyTo.senderName}:</strong>{getMsg.replyTo.text || (getMsg.replyTo.fileUrl ? "📷 Photo" : "")}</div>
-                          </div>
+              return (
+                <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px' }}>
+                  <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', flexShrink: 0 }} />
+                  <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
+                    <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px' }}>{getMsg.senderName}</small>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexDirection: isMe ? 'row-reverse' : 'row' }}>
+                      <div style={{ background: getMsg.isDeleted ? '#ebebeb' : (isMe ? '#0056b3' : 'var(--card-bg, #fff)'), color: getMsg.isDeleted ? '#888' : (isMe ? 'white' : 'var(--text-color, #333)'), padding: getMsg.fileUrl ? '4px' : '10px 14px', borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px', fontSize: '14px', boxShadow: '0 2px 5px rgba(0,0,0,0.04)', border: isMe ? 'none' : '1px solid rgba(0, 86, 179, 0.15)', wordBreak: 'break-word', display: 'flex', flexDirection: 'column', gap: '5px', overflow: 'hidden' }}>
+                        {getMsg.isDeleted ? <p style={{ margin: 0, fontStyle: 'italic', fontSize: '13px', padding: '10px 14px' }}>🚫 This message was deleted</p> : (
+                          <>
+                            {getMsg.replyTo && (
+                              <div style={{ background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,86,179,0.07)', padding: '6px 10px', borderRadius: '8px', borderLeft: '3px solid #0056b3', fontSize: '11px', color: isMe ? '#ffeb3b' : '#444', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '240px' }}>
+                                {getMsg.replyTo.fileUrl && <img src={getMsg.replyTo.fileUrl} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
+                                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><strong style={{ color: isMe ? '#fff' : '#0056b3', display: 'block', fontSize: '10px', fontStyle: 'normal' }}>↩️ {getMsg.replyTo.senderName}:</strong>{getMsg.replyTo.text || (getMsg.replyTo.fileUrl ? "📷 Photo" : "")}</div>
+                              </div>
+                            )}
+                            {getMsg.fileUrl && getMsg.fileType !== 'video' && <img src={getMsg.fileUrl} alt="" style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '350px', objectFit: 'cover', display: 'block' }} />}
+                            {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
+                            {getMsg.text && <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{getMsg.text}{getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}</p>}
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{getMsg.createdAt ? new Date(getMsg.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</div>
+                          </>
                         )}
-                        {getMsg.fileUrl && getMsg.fileType !== 'video' && <img src={getMsg.fileUrl} alt="" style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '350px', objectFit: 'cover', display: 'block' }} />}
-                        {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
-                        {getMsg.text && <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{getMsg.text}{getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}</p>}
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{getMsg.createdAt ? new Date(getMsg.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</div>
-                      </>
-                    )}
-                  </div>
-                  {!getMsg.isDeleted && (
-                    <div style={{ position: 'relative' }}>
-                      <button onClick={(e) => toggleMenu(e, getMsg.id)} className="threedot-action-btn">⋮</button>
-                      {activeMenuId === getMsg.id && (
-                        <div className="threedot-dropdown-menu">
-                          <button onClick={() => setReplyToMessage(getMsg)} className="threedot-menu-item reply-btn">Reply ↩️</button>
-                          {isMe && !getMsg.fileUrl && <button onClick={() => handleEditMessage(getMsg.id, getMsg.text, getMsg.senderUid)} className="threedot-menu-item edit-btn">Edit ✏️</button>}
-                          <button onClick={() => handleDeleteMessage(getMsg.id, getMsg.senderUid)} className="threedot-menu-item delete-btn">Delete 🗑️</button>
+                      </div>
+                      {!getMsg.isDeleted && (
+                        <div style={{ position: 'relative' }}>
+                          <button onClick={(e) => toggleMenu(e, getMsg.id)} className="threedot-action-btn">⋮</button>
+                          {activeMenuId === getMsg.id && (
+                            <div className="threedot-dropdown-menu">
+                              <button onClick={() => setReplyToMessage(getMsg)} className="threedot-menu-item reply-btn">Reply ↩️</button>
+                              {isMe && !getMsg.fileUrl && <button onClick={() => handleEditMessage(getMsg.id, getMsg.text, getMsg.senderUid)} className="threedot-menu-item edit-btn">Edit ✏️</button>}
+                              <button onClick={() => handleDeleteMessage(getMsg.id, getMsg.senderUid)} className="threedot-menu-item delete-btn">Delete 🗑️</button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
-                  )}
+                  </div>
                 </div>
-              </div>
-            </div>
-          );
-        })}
-        <div ref={messagesEndRef} />
-      </div>
-      <form onSubmit={handleSendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {replyToMessage && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
-            <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {replyToMessage.fileUrl && <img src={replyToMessage.fileUrl} alt="" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
-              <div>
-                <span style={{ fontWeight: 'bold', color: '#0056b3' }}>↩️ Reply to {replyToMessage.senderName}: </span>
-                <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileUrl ? "📸 Photo" : "")}</span>
-              </div>
-            </div>
-            <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
+              );
+            })}
+            <div ref={messagesEndRef} />
           </div>
-        )}
-        {selectedFiles.length > 0 && (
-          <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
-            {selectedFiles.map((file) => (
-              <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3' }}>
-                <img src={file.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justify_content: 'center', alignItems: 'center', fontWeight: 'bold' }}>✕</button>
+          <form onSubmit={handleSendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {replyToMessage && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
+                <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {replyToMessage.fileUrl && <img src={replyToMessage.fileUrl} alt="" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
+                  <div>
+                    <span style={{ fontWeight: 'bold', color: '#0056b3' }}>↩️ Reply to {replyToMessage.senderName}: </span>
+                    <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileUrl ? "📸 Photo" : "")}</span>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
               </div>
-            ))}
-          </div>
-        )}
-        <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" multiple style={{ display: 'none' }} />
-        <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
-          <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justify_content: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
-          <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
-          <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justify_content: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
-        </div>
-      </form>
+            )}
+            {selectedFiles.length > 0 && (
+              <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
+                {selectedFiles.map((file) => (
+                  <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3' }}>
+                    <img src={file.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justify_content: 'center', alignItems: 'center', fontWeight: 'bold' }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" multiple style={{ display: 'none' }} />
+            <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
+              <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justify_content: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
+              <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
+              <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justify_content: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
+            </div>
+          </form>
+        </>
+      )}
     </div>
   );
 }
