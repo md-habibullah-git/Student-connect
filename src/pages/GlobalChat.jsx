@@ -30,7 +30,6 @@ export default function GlobalChat() {
   const currentUid = auth.currentUser?.uid || "unknown_user";
   const currentUserName = auth.currentUser?.displayName || "Campus Student";
   const globalRoomId = "campus_global_conference_room";
-
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
@@ -45,7 +44,6 @@ export default function GlobalChat() {
     };
     autoCleanOldGlobalMessages();
   }, []);
-
   useEffect(() => {
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "asc"), limit(100));
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
@@ -85,7 +83,6 @@ export default function GlobalChat() {
 
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
-
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() && selectedFiles.length === 0) return;
@@ -209,26 +206,21 @@ export default function GlobalChat() {
     } catch (err) { console.error("Error leaving global call:", err); setInCall(false); }
   };
 
-  // পার্সোনাল কোডের কনফিগারেশন ডিজাইনের সাথে হুবহু মিলানো হয়েছে
   const startGlobalVideoCall = async (element) => {
     if (!element) return;
     const zp = ZegoUIKitPrebuilt.create(ZegoUIKitPrebuilt.generateKitTokenForTest(32790448, "50737a7cc9627401b05b40c83eff3c2e", globalRoomId, currentUid, currentUserName));
     zp.joinRoom({
-      container: element, 
-      showLeaveButton: true, // রুট লেভেলে লিভ বাটন
-      turnOnCameraWhenJoining: true, 
-      turnOnMicrophoneWhenJoining: true, 
-      useFrontCamera: true, 
-      onLeaveRoom: () => { leaveGlobalCall(); }
+      container: element, scenario: { mode: ZegoUIKitPrebuilt.GroupCall, config: { showPlayingInMobile: true, showControlBarInMobile: true, showLayoutButton: true, showScreenSharingButton: true, showUserList: true } }, 
+      showScreenSharingButton: true, turnOnCameraWhenJoining: true, turnOnMicrophoneWhenJoining: true, useFrontCamera: true, onLeaveRoom: () => { leaveGlobalCall(); }
     });
   };
+
   const toggleMenu = (e, msgId) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
-  
   return (
     <div style={{ maxWidth: '700px', margin: '15px auto', fontFamily: 'Arial', height: '85vh', display: 'flex', flexDirection: 'column', background: 'var(--card-bg, #f4f7fc)', border: '1px solid rgba(0, 86, 179, 0.2)', borderRadius: '15px', boxShadow: '0 8px 24px rgba(0, 86, 179, 0.08)', overflow: 'hidden', position: 'relative' }}>
       <style>{`
         @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
-        .dynamic-chat-input { color: #000000 !important; width: 100%; border: none; outline: none; padding: 10px; background: transparent; font-size: 14px; }
+        .dynamic-chat-input { color: #000000 !important; }
         .dynamic-chat-input::placeholder { color: #666666 !important; opacity: 0.6; }
         :root[data-theme='dark'] .dynamic-chat-input { color: #ffffff !important; }
         :root[data-theme='dark'] .dynamic-chat-input::placeholder { color: #cccccc !important; }
@@ -244,11 +236,7 @@ export default function GlobalChat() {
         :root[data-theme='dark'] .threedot-action-btn:hover { background: rgba(255, 255, 255, 0.15); }
       `}</style>
       
-      {inCall && (
-        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 9999, backgroundColor: '#000', pointerEvents: 'auto' }}>
-          <div ref={(el) => el && startGlobalVideoCall(el)} style={{ width: '100%', height: '100%' }} />
-        </div>
-      )}
+      {inCall && <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000' }}><div ref={(el) => el && startGlobalVideoCall(el)} style={{ width: '100%', height: '100%' }} /></div>}
       
       {incomingCall && !inCall && (
         <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 999, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
@@ -256,6 +244,7 @@ export default function GlobalChat() {
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}><button onClick={handleRejoinCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Join Now</button><button onClick={() => setIncomingCall(null)} style={{ background: '#dc3545', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer' }}>Ignore</button></div>
         </div>
       )}
+
       <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
         <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px', textAlign: 'center', flex: 1 }}>Campus Global Room 👥</h3>
@@ -312,44 +301,35 @@ export default function GlobalChat() {
             <div ref={messagesEndRef} />
           </div>
           <form onSubmit={handleSendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {/* রিপ্লাই প্রিভিউ বার */}
             {replyToMessage && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 10px', background: 'rgba(0,86,179,0.05)', borderRadius: '5px', borderLeft: '4px solid #0056b3' }}>
-                <span style={{ fontSize: '12px', color: '#555' }}>Replying to <b>{replyToMessage.senderName}</b></span>
-                <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold' }}>✕</button>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
+                <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {replyToMessage.fileUrl && <img src={replyToMessage.fileUrl} alt="" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
+                  <div>
+                    <span style={{ fontWeight: 'bold', color: '#0056b3' }}>↩️ Reply to {replyToMessage.senderName}: </span>
+                    <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileUrl ? "📸 Photo" : "")}</span>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
               </div>
             )}
-
-            {/* সিলেক্টেড ফাইল প্রিভিউ এরিয়া */}
+            
             {selectedFiles.length > 0 && (
-              <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', padding: '5px 0' }}>
-                {selectedFiles.map(file => (
-                  <div key={file.id} style={{ position: 'relative', flexShrink: 0 }}>
-                    {file.type === 'image' ? (
-                      <img src={file.url} alt="" style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '5px' }} />
-                    ) : (
-                      <div style={{ width: '60px', height: '60px', background: '#333', color: '#fff', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '5px', textAlign: 'center' }}>📹 Video</div>
-                    )}
-                    <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '-4px', right: '-4px', background: '#dc3545', color: '#fff', border: 'none', borderRadius: '50%', width: '16px', height: '16px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+              <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
+                {selectedFiles.map((file) => (
+                  <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3' }}>
+                    <img src={file.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>✕</button>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* ইনপুট ফিল্ড ও সেন্ড একশন বার */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg, #f0f2f5)', borderRadius: '25px', padding: '5px 15px' }}>
-              <input type="file" ref={fileInputRef} onChange={handleFileChange} multiple accept="image/*,video/*" style={{ display: 'none' }} />
-              <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer' }}>📎</button>
-              
-              <input 
-                type="text" 
-                value={newMessage} 
-                onChange={(e) => setNewMessage(e.target.value)} 
-                className="dynamic-chat-input" 
-                placeholder="Type a campus message..." 
-              />
-              
-              <button type="submit" style={{ background: '#0056b3', color: 'white', border: 'none', borderRadius: '50%', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '16px' }}>🕊️</button>
+            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" multiple style={{ display: 'none' }} />
+            <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
+              <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
+              <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
+              <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
             </div>
           </form>
         </>
