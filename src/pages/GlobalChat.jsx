@@ -219,11 +219,11 @@ export default function GlobalChat() {
           showLayoutButton: true, 
           showScreenSharingButton: true, 
           showUserList: true,
-          showLeaveButton: true, // মোবাইলে লাল বাটনটি কাজ করানোর জন্য এটি যুক্ত করা হলো
+          showLeaveButton: true, // ২য় কোডের মতো এখানেও মোবাইল কনফিগারেশনে এটি যুক্ত করা হলো
         } 
       }, 
+      showLeaveButton: true, // ২য় কোডের মতো রুট লেভেলে লিভ বাটন নিশ্চিত করা হলো
       showScreenSharingButton: true, 
-      showLeaveButton: true, // ডেস্কটপ ও মোবাইলের রুট লেভেলে লিভ বাটন নিশ্চিত করার জন্য
       turnOnCameraWhenJoining: true, 
       turnOnMicrophoneWhenJoining: true, 
       useFrontCamera: true, 
