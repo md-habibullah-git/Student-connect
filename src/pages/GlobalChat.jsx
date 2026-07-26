@@ -210,8 +210,24 @@ export default function GlobalChat() {
     if (!element) return;
     const zp = ZegoUIKitPrebuilt.create(ZegoUIKitPrebuilt.generateKitTokenForTest(32790448, "50737a7cc9627401b05b40c83eff3c2e", globalRoomId, currentUid, currentUserName));
     zp.joinRoom({
-      container: element, scenario: { mode: ZegoUIKitPrebuilt.GroupCall, config: { showPlayingInMobile: true, showControlBarInMobile: true, showLayoutButton: true, showScreenSharingButton: true, showUserList: true } }, 
-      showScreenSharingButton: true, turnOnCameraWhenJoining: true, turnOnMicrophoneWhenJoining: true, useFrontCamera: true, onLeaveRoom: () => { leaveGlobalCall(); }
+      container: element, 
+      scenario: { 
+        mode: ZegoUIKitPrebuilt.GroupCall, 
+        config: { 
+          showPlayingInMobile: true, 
+          showControlBarInMobile: true, 
+          showLayoutButton: true, 
+          showScreenSharingButton: true, 
+          showUserList: true,
+          showLeaveButton: true, // মোবাইলে লাল বাটনটি কাজ করানোর জন্য এটি যুক্ত করা হলো
+        } 
+      }, 
+      showScreenSharingButton: true, 
+      showLeaveButton: true, // ডেস্কটপ ও মোবাইলের রুট লেভেলে লিভ বাটন নিশ্চিত করার জন্য
+      turnOnCameraWhenJoining: true, 
+      turnOnMicrophoneWhenJoining: true, 
+      useFrontCamera: true, 
+      onLeaveRoom: () => { leaveGlobalCall(); }
     });
   };
 
