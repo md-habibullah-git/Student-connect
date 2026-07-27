@@ -1,16 +1,32 @@
-# React + Vite
+# 🌐 Student Connect - Web Application
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This is the web frontend for Student Connect, a full-featured social media platform similar to Facebook. It is built using React and Vite for a fast, modern, and responsive user experience.
 
-Currently, two official plugins are available:
+<img width="1704" height="885" alt="Screenshot (1702)" src="https://github.com/user-attachments/assets/4a6b9c68-defc-44a0-94b4-db3117c3b99f" />
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## ✨ Core Features Supported
+* Feed & Posts: Create, view, like, and comment on posts in real-time.
+* Communication: Real-time messaging and seamless voice/video calling.
+* User Engagement: Interactive UI designed specifically for student networking and connection.
 
-## React Compiler
+## 🚀 Tech Stack
+* Frontend Framework: React (with Vite for blazing fast bundling)
+* Styling: CSS / Tailwind CSS
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 🛠️ Getting Started
 
-## Expanding the Oxlint configuration
+Follow these steps to run the project locally:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+1. Clone the Repository
+git clone https://github.com
+
+2. Install Dependencies
+npm install
+
+3. Run the Development Server
+npm run dev
+
+Open http://localhost:5173 in your browser to view the app.
+
+4. Build for Production
+npm run build
