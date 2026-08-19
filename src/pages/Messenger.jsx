@@ -9,6 +9,10 @@ export default function Messenger() {
   const navigate = useNavigate();
   const [users, setUsers] = useState([]);
 
+  // 🔧 NEW: tracks which user ids are currently online (backed by the
+  // users/{uid}.online field that PersonalChat.jsx keeps up to date)
+  const [onlineMap, setOnlineMap] = useState({});
+
   useEffect(() => {
     // Query to fetch active and approved students
     const usersRef = collection(db, "users");
@@ -23,6 +27,15 @@ export default function Messenger() {
       // Filter out the currently logged-in user from the list
       const filtered = usersList.filter(user => user.uid !== auth.currentUser?.uid);
       setUsers(filtered);
+
+      // 🔧 NEW: build a quick lookup of who's online from the same snapshot
+      // (users/{uid}.online is written by PersonalChat.jsx while a chat is open)
+      const online = {};
+      usersList.forEach(user => {
+        const uidKey = user.uid || user.id;
+        if (uidKey) online[uidKey] = user.online === true;
+      });
+      setOnlineMap(online);
     }, (error) => {
       console.error("Error fetching messenger users: ", error);
     });
@@ -103,11 +116,17 @@ export default function Messenger() {
             }}
           >
             {/* Small circular profile attachment graphic */}
-            <img 
-              src={(user.photo && user.photo.trim() !== "") ? user.photo : `https://dicebear.com{encodeURIComponent(user.name || 'Student')}.svg`} 
-              alt={user.name} 
-              style={{ width: '48px', height: '50px', borderRadius: '50%', objectFit: 'cover', marginRight: '15px', border: '2px solid #fff', flexShrink: 0 }} // ⚡ Fixed: Equal 48-pixel width and responsive height are locked for the global circle
-            />
+            <div style={{ position: 'relative', flexShrink: 0, marginRight: '15px' }}>
+              <img 
+                src={(user.photo && user.photo.trim() !== "") ? user.photo : `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name || 'Student')}`} 
+                alt={user.name} 
+                style={{ width: '48px', height: '50px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', display: 'block' }} // ⚡ Fixed: Equal 48-pixel width and responsive height are locked for the global circle
+              />
+              {/* 🔧 NEW: online status dot on the corner of the avatar */}
+              {onlineMap[user.uid] && (
+                <span title="Online" style={{ position: 'absolute', bottom: '2px', right: '2px', width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid #0056b3' }} />
+              )}
+            </div>
 
             {/* Student metadata texts block */}
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContext: 'center' }}>

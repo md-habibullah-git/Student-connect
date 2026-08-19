@@ -20,6 +20,18 @@ export default function PersonalChat() {
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
 
+  // 🔧 NEW: voice message recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
+  // 🔧 NEW: receiver's online presence (green dot near the call button)
+  const [receiverOnline, setReceiverOnline] = useState(false);
+
+  // 🔧 NEW: tracks whether we've finished the initial messages load, so we
+  // only fire browser notifications for messages that arrive AFTER opening the chat
+  const initialMessagesLoadedRef = useRef(false);
+
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
     const saved = localStorage.getItem(`deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
     return saved ? JSON.parse(saved) : [];
@@ -72,13 +84,64 @@ export default function PersonalChat() {
 
     return () => unsubscribeUsers();
   }, []);
+
+  // 🔧 NEW: mark myself online while this chat is open, and go offline on unmount/close.
+  // Also request browser notification permission once, up front.
+  useEffect(() => {
+    const selfRef = doc(db, "users", currentUid);
+    setDoc(selfRef, { online: true, lastSeen: new Date().getTime() }, { merge: true }).catch(() => {});
+
+    const handleBeforeUnload = () => {
+      updateDoc(selfRef, { online: false }).catch(() => {});
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+
+    return () => {
+      updateDoc(selfRef, { online: false }).catch(() => {});
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentUid]);
+
+  // 🔧 NEW: watch the other person's online status for the green dot
+  useEffect(() => {
+    if (!targetUid) return;
+    const unsubscribePresence = onSnapshot(doc(db, "users", targetUid), (snap) => {
+      setReceiverOnline(snap.exists() && snap.data().online === true);
+    });
+    return () => unsubscribePresence();
+  }, [targetUid]);
+
   useEffect(() => {
     if (!receiverId) return;
 
+    initialMessagesLoadedRef.current = false;
+
     const q = query(collection(db, "personal-rooms", chatRoomId, "messages"), orderBy("createdAt", "asc"));
     const unsubscribeMsg = onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const newMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setMessages(newMessages);
       scrollToBottom();
+
+      // 🔧 NEW: fire a browser notification for genuinely new incoming messages
+      // (skip the very first load so old history doesn't spam notifications)
+      if (initialMessagesLoadedRef.current) {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            const msgData = change.doc.data();
+            if (msgData.senderId !== currentUid && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+              new Notification(msgData.senderName || 'New message', {
+                body: msgData.isDeleted ? '' : (msgData.text || (msgData.fileType === 'audio' ? '🎤 Voice message' : (msgData.fileUrl ? '📷 Photo' : ''))),
+              });
+            }
+          }
+        });
+      } else {
+        initialMessagesLoadedRef.current = true;
+      }
     });
 
     const unsubscribeCall = onSnapshot(doc(db, "personal-calls", chatRoomId), (snapshot) => {
@@ -116,9 +179,19 @@ export default function PersonalChat() {
 
     try {
       const roomRef = doc(db, "personal-rooms", chatRoomId);
+      // 🔧 NEW: store participants + a snapshot of the latest message on the room doc.
+      // This is what a future app-wide "floating message bubble" component would
+      // query across all rooms, without needing to know chatRoomId in advance.
+      const latestPreviewText = input.trim() ? input.trim() : (selectedFiles.some(f => f.type === 'audio') ? '🎤 Voice message' : '📷 Photo');
       await setDoc(roomRef, {
         roomId: chatRoomId,
-        lastActive: new Date().getTime()
+        participants: [currentUid, targetUid],
+        lastActive: new Date().getTime(),
+        lastMessageText: latestPreviewText,
+        lastMessageSenderId: currentUid,
+        lastMessageSenderName: currentUserName,
+        lastMessageSenderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+        lastMessageAt: new Date().getTime()
       }, { merge: true });
 
       const replyData = replyToMessage ? {
@@ -254,11 +327,75 @@ export default function PersonalChat() {
   const removeSelectedFile = (id) => {
     setSelectedFiles((prev) => prev.filter(file => file.id !== id));
   };
+
+  // 🔧 NEW: voice message recording using the browser's microphone (MediaRecorder API)
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      recorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: 'voice-message.webm', url: event.target.result, type: 'audio' }]);
+        };
+        reader.readAsDataURL(audioBlob);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+    } catch (error) {
+      console.error("Microphone access error:", error);
+      alert("🎤 Microphone access was denied or is unavailable.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) stopRecording();
+    else startRecording();
+  };
+
+  // 🔧 NEW: turns raw URLs inside message text into clickable, new-tab-opening links
+  const renderMessageText = (text) => {
+    const urlPattern = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlPattern);
+    return parts.map((part, i) =>
+      urlPattern.test(part) ? (
+        <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline', wordBreak: 'break-all' }}>
+          {part}
+        </a>
+      ) : (
+        <React.Fragment key={i}>{part}</React.Fragment>
+      )
+    );
+  };
+
   const initiateCall = async () => {
+    // 🔧 NEW: participants + receiver info stored so a future app-wide call
+    // listener can find "a call is ringing for me" from anywhere in the app.
     await setDoc(doc(db, "personal-calls", chatRoomId), {
       status: "ringing",
       hostName: currentUserName,
       hostId: currentUid,
+      hostPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+      receiverId: targetUid,
+      receiverName: receiverName,
+      participants: [currentUid, targetUid],
       roomId: chatRoomId
     });
     setInCall(true);
@@ -331,15 +468,25 @@ export default function PersonalChat() {
         .threedot-menu-item.edit-btn { color: #0088ff; }
         .threedot-menu-item.delete-btn { color: #dc3545; }
         .threedot-menu-item:hover { background: rgba(0,0,0,0.05); }
+
+        /* 🔧 NEW: pulsing red mic button while a voice message is recording */
+        @keyframes recordPulse { 0% { box-shadow: 0 0 0 0 rgba(220,53,69,0.5); } 70% { box-shadow: 0 0 0 8px rgba(220,53,69,0); } 100% { box-shadow: 0 0 0 0 rgba(220,53,69,0); } }
+        .mic-recording { animation: recordPulse 1.4s infinite; background: #dc3545 !important; color: #fff !important; }
       `}</style>
 
       <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
         <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px' }}>{receiverName}</h3>
         {!inCall && (
-          <button onClick={initiateCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 18px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            📞 Start Call 📹
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {/* 🔧 NEW: green dot when the other person is currently online */}
+            {receiverOnline && (
+              <span title="Online" style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid rgba(255,255,255,0.6)', display: 'inline-block' }} />
+            )}
+            <button onClick={initiateCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 18px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              📞 Start Call 📹
+            </button>
+          </div>
         )}
       </div>
 
@@ -369,7 +516,9 @@ export default function PersonalChat() {
 
               const isMe = getMsg.senderId === currentUid;
               const firestoreProfilePhoto = usersCache[getMsg.senderId] || getMsg.senderPhoto;
-              const defaultFallbackAvatar = `https://dicebear.com{encodeURIComponent(getMsg.senderName || 'Student')}.svg?backgroundColor=0056b3`;
+              // 🔧 FIX: proper DiceBear URL (was missing the `$` before `{...}`, so it
+              // rendered as a literal, broken string instead of an interpolated URL).
+              const defaultFallbackAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(getMsg.senderName || 'Student')}&backgroundColor=0056b3`;
 
               return (
                 <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px' }}>
@@ -388,7 +537,7 @@ export default function PersonalChat() {
                       <div style={{ 
                         background: getMsg.isDeleted ? '#ebebeb' : (isMe ? '#0056b3' : 'var(--card-bg, #fff)'), 
                         color: getMsg.isDeleted ? '#888' : (isMe ? 'white' : 'var(--text-color, #333)'), 
-                        padding: getMsg.fileUrl ? '4px' : '10px 14px', 
+                        padding: (getMsg.fileUrl || getMsg.fileType === 'audio') ? '4px' : '10px 14px', 
                         borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px', 
                         fontSize: '14px', boxShadow: '0 2px 5px rgba(0,0,0,0.04)', border: isMe ? 'none' : '1px solid rgba(0, 86, 179, 0.15)', wordBreak: 'break-word',
                         display: 'flex', flexDirection: 'column', gap: '5px', overflow: 'hidden'
@@ -400,15 +549,15 @@ export default function PersonalChat() {
                           <>
                             {getMsg.replyTo && (
                               <div style={{ background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,86,179,0.07)', padding: '6px 10px', borderRadius: '8px', borderLeft: '3px solid #0056b3', fontSize: '11px', margin: getMsg.fileUrl ? '4px 4px 0 4px' : '0 0 3px 0', color: isMe ? '#ffeb3b' : '#444', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '240px' }}>
-                                {getMsg.replyTo.fileUrl && <img src={getMsg.replyTo.fileUrl} alt="Reply preview" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
+                                {getMsg.replyTo.fileUrl && getMsg.replyTo.fileType !== 'audio' && <img src={getMsg.replyTo.fileUrl} alt="Reply preview" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
                                 <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                   <strong style={{ color: isMe ? '#fff' : '#0056b3', display: 'block', fontSize: '10px', fontStyle: 'normal' }}>↩️ {getMsg.replyTo.senderName}:</strong>
-                                  {getMsg.replyTo.text || (getMsg.replyTo.fileUrl ? "📷 Photo" : "")}
+                                  {getMsg.replyTo.text || (getMsg.replyTo.fileType === 'audio' ? "🎤 Voice message" : (getMsg.replyTo.fileUrl ? "📷 Photo" : ""))}
                                 </div>
                               </div>
                             )}
 
-                            {getMsg.fileUrl && getMsg.fileType !== 'video' && (
+                            {getMsg.fileUrl && getMsg.fileType === 'image' && (
                               <img src={getMsg.fileUrl} alt="Shared Graphic" style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '350px', objectFit: 'cover', display: 'block' }} />
                             )}
 
@@ -416,9 +565,14 @@ export default function PersonalChat() {
                               <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />
                             )}
 
+                            {/* 🔧 NEW: voice message playback */}
+                            {getMsg.fileUrl && getMsg.fileType === 'audio' && (
+                              <audio src={getMsg.fileUrl} controls style={{ width: '230px', display: 'block' }} />
+                            )}
+
                             {getMsg.text && (
                               <p style={{ margin: 0, fontSize: '14px', textAlign: 'left' }}>
-                                {getMsg.text}
+                                {renderMessageText(getMsg.text)}
                                 {getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}
                               </p>
                             )}
@@ -456,10 +610,10 @@ export default function PersonalChat() {
             {replyToMessage && (
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
                 <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {replyToMessage.fileUrl && <img src={replyToMessage.fileUrl} alt="Reply Input Preview" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
+                  {replyToMessage.fileUrl && replyToMessage.fileType !== 'audio' && <img src={replyToMessage.fileUrl} alt="Reply Input Preview" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
                   <div>
                     <span style={{ fontWeight: 'bold', color: '#0056b3' }}>↩️ Reply to {replyToMessage.senderName}: </span>
-                    <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileUrl ? "📷 Photo" : "")}</span>
+                    <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileType === 'audio' ? "🎤 Voice message" : (replyToMessage.fileUrl ? "📷 Photo" : ""))}</span>
                   </div>
                 </div>
                 <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
@@ -469,8 +623,12 @@ export default function PersonalChat() {
             {selectedFiles.length > 0 && (
               <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
                 {selectedFiles.map((file) => (
-                  <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3' }}>
-                    <img src={file.url} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', background: file.type === 'audio' ? '#0056b3' : 'transparent' }}>
+                    {file.type === 'audio' ? (
+                      <span style={{ fontSize: '20px' }}>🎤</span>
+                    ) : (
+                      <img src={file.url} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    )}
                     <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>✕</button>
                   </div>
                 ))}
@@ -481,6 +639,18 @@ export default function PersonalChat() {
 
             <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
               <button type="button" onClick={() => fileInputRef.current.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
+
+              {/* 🔧 NEW: voice message record/stop button, right beside the + button */}
+              <button
+                type="button"
+                onClick={toggleRecording}
+                title={isRecording ? "Stop recording" : "Record a voice message"}
+                className={isRecording ? 'mic-recording' : ''}
+                style={{ background: isRecording ? undefined : 'rgba(0, 86, 179, 0.1)', color: isRecording ? undefined : '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
+              >
+                {isRecording ? '⏹️' : '🎤'}
+              </button>
+
               <input type="text" className="dynamic-chat-input" placeholder="✍️ Type a private message..." value={input} onChange={(e) => setInput(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
               <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
             </div>

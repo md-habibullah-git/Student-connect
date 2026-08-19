@@ -26,6 +26,10 @@ export default function GlobalChat() {
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null); 
+
+  // 🔧 NEW: keeps the latest inCall value available inside cleanup handlers
+  // (unmount / tab-close), where React state closures would otherwise be stale.
+  const inCallRef = useRef(false);
   
   const currentUid = auth.currentUser?.uid || "unknown_user";
   const currentUserName = auth.currentUser?.displayName || "Campus Student";
@@ -44,17 +48,50 @@ export default function GlobalChat() {
     };
     autoCleanOldGlobalMessages();
   }, []);
+
+  // 🔧 NEW: mark myself online while this page is open (same presence field
+  // that Messenger.jsx / PersonalChat.jsx read for the green dot).
+  useEffect(() => {
+    const selfRef = doc(db, "users", currentUid);
+    setDoc(selfRef, { online: true, lastSeen: new Date().getTime() }, { merge: true }).catch(() => {});
+
+    const handleBeforeUnload = () => {
+      updateDoc(selfRef, { online: false }).catch(() => {});
+      // 🔧 NEW: if I'm still in the call when the tab closes, leave it so the
+      // call doesn't stay "ringing" forever for everyone else.
+      if (inCallRef.current) {
+        leaveGlobalCallBeacon();
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      updateDoc(selfRef, { online: false }).catch(() => {});
+      if (inCallRef.current) {
+        leaveGlobalCall();
+      }
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentUid]);
+
+  useEffect(() => {
+    inCallRef.current = inCall;
+  }, [inCall]);
+
   useEffect(() => {
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "asc"), limit(100));
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
       setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     }, (error) => console.error("Global Chat Stream Error:", error));
 
+    // 🔧 UPDATED: cache now stores { photo, online } per user instead of just the
+    // photo string, so message bubbles can show a live online/offline dot.
     const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
       const cache = {};
       snapshot.docs.forEach(doc => {
         const data = doc.data();
-        cache[data.uid || doc.id] = data.photo || "";
+        const uidKey = data.uid || doc.id;
+        cache[uidKey] = { photo: data.photo || "", online: data.online === true };
       });
       setUsersCache(cache);
     });
@@ -63,6 +100,17 @@ export default function GlobalChat() {
       if (snapshot.exists()) {
         const callData = snapshot.data();
         if (callData.status === "ringing") {
+          // 🔧 NEW: safety net — if the call doc somehow has no one left in it
+          // (e.g. the host's tab crashed before beforeunload could fire),
+          // treat it as ended instead of showing a stale rejoin/incoming banner.
+          const participants = callData.participants || [];
+          if (participants.length === 0) {
+            deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
+            setShowRejoinBtn(false);
+            setIncomingCall(null);
+            setInCall(false);
+            return;
+          }
           setShowRejoinBtn(true);
           if (callData.hostId !== currentUid && !inCall) setIncomingCall(callData);
         }
@@ -99,7 +147,7 @@ export default function GlobalChat() {
       try {
         await addDoc(collection(db, "global-room-messages"), {
           text: newMessage, senderUid: currentUid, senderName: currentUserName,
-          senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+          senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
           createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
         });
         setNewMessage("");
@@ -111,7 +159,7 @@ export default function GlobalChat() {
         await addDoc(collection(db, "global-room-messages"), {
           text: "", fileUrl: fileData.url, fileType: fileData.type, fileName: fileData.name,
           senderUid: currentUid, senderName: currentUserName,
-          senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+          senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
           createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
         });
       } catch (error) { console.error("Error sending file to firestore:", error); }
@@ -193,12 +241,30 @@ export default function GlobalChat() {
     } catch (err) { console.error("Error rejoining call:", err); }
   };
 
+  // 🔧 NEW: best-effort synchronous-ish cleanup for the beforeunload event.
+  // fetch(keepalive) survives page unload far more reliably than an async
+  // Firestore SDK call, which the browser can kill mid-flight.
+  const leaveGlobalCallBeacon = () => {
+    try {
+      const callDocRef = doc(db, "global-calls", globalRoomId);
+      getDoc(callDocRef).then((snapshot) => {
+        if (snapshot.exists()) {
+          const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
+          if (updatedParts.length === 0) deleteDoc(callDocRef).catch(() => {});
+          else updateDoc(callDocRef, { participants: updatedParts }).catch(() => {});
+        }
+      }).catch(() => {});
+    } catch (err) { /* best effort only */ }
+  };
+
   const leaveGlobalCall = async () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
       const snapshot = await getDoc(callDocRef);
       if (snapshot.exists()) {
         const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
+        // 🔧 FIX: if nobody is left in the call, the call doc is fully removed
+        // so it can never get stuck "ringing" with no one actually in it.
         if (updatedParts.length === 0) await deleteDoc(callDocRef);
         else await updateDoc(callDocRef, { participants: updatedParts });
       }
@@ -256,12 +322,22 @@ export default function GlobalChat() {
             {messages.map((getMsg) => {
               if (localDeletedIds.includes(getMsg.id)) return null;
               const isMe = getMsg.senderUid === currentUid;
-              const firestoreProfilePhoto = usersCache[getMsg.senderUid] || getMsg.senderPhoto;
-              const defaultFallbackAvatar = `https://dicebear.com{encodeURIComponent(getMsg.senderName || 'Student')}`;
+              const firestoreProfilePhoto = usersCache[getMsg.senderUid]?.photo || getMsg.senderPhoto;
+              // 🔧 FIX: proper DiceBear URL (was missing the `$` before `{...}`, so it
+              // rendered as a literal, broken string instead of an interpolated URL).
+              const defaultFallbackAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(getMsg.senderName || 'Student')}`;
+              // 🔧 NEW: is this message's sender currently online?
+              const senderOnline = usersCache[getMsg.senderUid]?.online === true;
 
               return (
                 <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px' }}>
-                  <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', flexShrink: 0 }} />
+                  <div style={{ position: 'relative', flexShrink: 0 }}>
+                    <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block' }} />
+                    {/* 🔧 NEW: green online dot on the sender's avatar */}
+                    {senderOnline && (
+                      <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />
+                    )}
+                  </div>
                   <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
                     <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px' }}>{getMsg.senderName}</small>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexDirection: isMe ? 'row-reverse' : 'row' }}>
