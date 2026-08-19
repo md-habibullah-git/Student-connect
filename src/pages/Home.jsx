@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { 
   collection, addDoc, query, onSnapshot, doc, updateDoc, 
@@ -10,6 +11,12 @@ const commentInputStyle = { width: '100%', padding: '8px 40px 8px 10px', fontSiz
 const commentIconBtnStyle = { position: 'absolute', right: '10px', background: 'none', border: 'none', color: '#0056b3', cursor: 'pointer', fontSize: '16px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' };
 
 export default function Home({ isAdmin }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // 🔧 NEW: When the URL is /post/:postId (a shared "Copy Link"), this gives us the target post id.
+  const { postId: targetPostId } = useParams();
+
   const [posts, setPosts] = useState([]);
   const [text, setText] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');
@@ -20,6 +27,41 @@ export default function Home({ isAdmin }) {
   const [usersCache, setUsersCache] = useState({});
   const [visibleComments, setVisibleComments] = useState({});
   const [activeReactionPopup, setActiveReactionPopup] = useState(null);
+
+  // 🔧 NEW: tracks which post (if any) should currently glow after a shared-link visit
+  const [highlightedPostId, setHighlightedPostId] = useState(null);
+  const hasScrolledRef = useRef(false);
+
+  // 🔧 FIX: If we arrived here from the Navbar's "+" button on another page,
+  // location.state.openPostModal will be true. Open the modal and then clear
+  // the state so it doesn't reopen on refresh/back navigation.
+  useEffect(() => {
+    if (location.state?.openPostModal) {
+      setShowPostModal(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state]);
+
+  // 🔧 NEW: reset the "already scrolled" flag whenever the target post id changes
+  // (e.g. user opens a different shared link while the app is still running).
+  useEffect(() => {
+    hasScrolledRef.current = false;
+  }, [targetPostId]);
+
+  // 🔧 NEW: once posts are loaded, find the shared post, scroll to it, and
+  // highlight it briefly (3s) so the user can spot it in the feed.
+  useEffect(() => {
+    if (!targetPostId || hasScrolledRef.current || posts.length === 0) return;
+    const el = document.getElementById(`post-${targetPostId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedPostId(targetPostId);
+      hasScrolledRef.current = true;
+      const timer = setTimeout(() => setHighlightedPostId(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [targetPostId, posts]);
+
   useEffect(() => {
     const cleanupOldPosts = async () => {
       try {
@@ -280,6 +322,9 @@ export default function Home({ isAdmin }) {
         .dynamic-post-card p { color: inherit; }
         :root[data-theme='dark'] .dynamic-post-card p { color: #f3f4f6; }
         :root[data-theme='dark'] .dynamic-post-card input { color: #ffffff !important; }
+
+        /* 🔧 NEW: brief glow shown on the post opened via a shared "Copy Link" */
+        .dynamic-post-card.shared-highlight { box-shadow: 0 0 0 3px #0056b3, 0 4px 14px rgba(0,86,179,0.35); transition: box-shadow 0.4s ease; }
         
         .inline-reaction-popup {
           position: absolute; bottom: calc(100% + 10px); left: 0; background: #ffffff; color: #222222;
@@ -295,6 +340,14 @@ export default function Home({ isAdmin }) {
         .comment-user-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; width: 100%; box-sizing: border-box; }
         .comment-avatar { width: 42px !important; height: 42px !important; border-radius: 50% !important; object-fit: cover !important; border: 1px solid #0056b3; background: #e4e6eb; flex-shrink: 0; margin-top: 2px; cursor: pointer; }
       `}</style>
+
+      {/* 🔧 NEW: if a shared link points to a post that no longer exists (e.g. it aged past
+          the 7-day auto-delete window), let the visitor know instead of silently showing nothing. */}
+      {targetPostId && posts.length > 0 && !posts.some(p => p.id === targetPostId) && (
+        <div style={{ padding: '12px 15px', textAlign: 'center', color: '#dc3545', fontStyle: 'italic', border: '1px solid #dc3545', borderRadius: '8px', marginBottom: '15px' }}>
+          এই পোস্টটি আর পাওয়া যাচ্ছে না। এটি মুছে ফেলা হয়ে থাকতে পারে।
+        </div>
+      )}
 
       {showPostModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000 }}>
@@ -329,9 +382,15 @@ export default function Home({ isAdmin }) {
         </div>
       )}
       {posts.map(post => {
-        const postAvatarFallback = `https://dicebear.com{encodeURIComponent(post.userName || 'Student')}`;
+        // 🔧 FIX: proper DiceBear URL (was missing the `$` before `{...}`, so it
+        // rendered as a literal, broken string instead of an interpolated URL).
+        const postAvatarFallback = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(post.userName || 'Student')}`;
         return (
-          <div key={post.id} className="dynamic-post-card">
+          <div
+            key={post.id}
+            id={`post-${post.id}`}
+            className={`dynamic-post-card${highlightedPostId === post.id ? ' shared-highlight' : ''}`}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
               <img 
                 src={usersCache[post.userId]?.photo || postAvatarFallback} 
@@ -372,7 +431,7 @@ export default function Home({ isAdmin }) {
                     <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
                       {(post.likes || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.likes.map(uid => {
                         const userPhoto = usersCache[uid]?.photo || "";
-                        const defaultAvatar = `https://dicebear.com{encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
+                        const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
                         return (
                           <div key={uid} className="popup-user-row">
                             <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
@@ -393,7 +452,7 @@ export default function Home({ isAdmin }) {
                     <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
                       {(post.loves || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.loves.map(uid => {
                         const userPhoto = usersCache[uid]?.photo || "";
-                        const defaultAvatar = `https://dicebear.com{encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
+                        const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
                         return (
                           <div key={uid} className="popup-user-row">
                             <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
@@ -414,7 +473,7 @@ export default function Home({ isAdmin }) {
                     <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
                       {(post.wows || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.wows.map(uid => {
                         const userPhoto = usersCache[uid]?.photo || "";
-                        const defaultAvatar = `https://dicebear.com{encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
+                        const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
                         return (
                           <div key={uid} className="popup-user-row">
                             <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
@@ -435,7 +494,7 @@ export default function Home({ isAdmin }) {
               <button onClick={() => handleLike(post.id, post.likes)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.likes || []).includes(auth.currentUser?.uid) ? '#0088ff' : 'inherit', opacity: (post.likes || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>👍 Like</button>
               <button onClick={() => handleLove(post.id, post.loves)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.loves || []).includes(auth.currentUser?.uid) ? '#ff3366' : 'inherit', opacity: (post.loves || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>❤️ Love</button>
               <button onClick={() => handleWow(post.id, post.wows)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.wows || []).includes(auth.currentUser?.uid) ? '#ffcc00' : 'inherit', opacity: (post.wows || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>😍 Wow</button>
-              <button onClick={() => handleShare(post.id)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: 'inherit', opacity: 0.7, fontSize: '13px' }}>🔗 Share</button>
+              <button onClick={() => handleShare(post.id)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: 'inherit', opacity: 0.7, fontSize: '13px' }}>🔗 Copy Link</button>
             </div>
 
             <form onSubmit={(e) => handleComment(e, post.id)} style={commentFormStyle}>
@@ -451,7 +510,7 @@ export default function Home({ isAdmin }) {
                   const commentUid = comment.commentUserId || "";
                   const fallbackKey = comment.userNameRaw || comment.userName || "Student";
                   const userPhoto = usersCache[commentUid]?.photo || "";
-                  const defaultAvatar = `https://dicebear.com{encodeURIComponent(usersCache[commentUid]?.name || fallbackKey)}`;
+                  const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[commentUid]?.name || fallbackKey)}`;
 
                   return (
                     <div key={index} className="comment-user-row">

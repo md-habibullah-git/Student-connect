@@ -38,9 +38,18 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
       setIsSearchOpen(false); 
     } 
   };
+
+  // 🔧 FIX: The post button now works from ANY page.
+  // - If we're already on Home ("/"), just fire the event like before (Home is mounted and listening).
+  // - If we're on any other page, navigate to Home first and pass a flag via router state.
+  //   Home.jsx checks that flag on mount/update and opens the modal automatically.
   const triggerPostModal = () => { 
-    const event = new CustomEvent('openPostModal'); 
-    window.dispatchEvent(event); 
+    if (location.pathname === '/') {
+      const event = new CustomEvent('openPostModal'); 
+      window.dispatchEvent(event); 
+    } else {
+      navigate('/', { state: { openPostModal: true } });
+    }
   }; 
 
   return ( 
@@ -131,7 +140,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
       </div>
       {/* 📥 Right Section: Standardized Download Button & Menu Trigger */}
       <div style={{ display: 'flex', gap: isMobile ? '6px' : '12px', alignItems: 'center' }}> 
-        <a href="https://github.com/md-habibullah-git/Student-connect/releases/download/v1.0.0-debug/app-debug.apk" style={{ backgroundColor: '#2e7d32', color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)', padding: isMobile ? '4px 8px' : '6px 14px', borderRadius: '15px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'all 0.2s ease', cursor: 'pointer' }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1b5e20'; e.currentTarget.style.transform = 'scale(1.03)'; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#2e7d32'; e.currentTarget.style.transform = 'scale(1)'; }} > 
+        <a href="https://github.com/md-habibullah-git/Student-connect/releases/download/v1.0.0/app-debug.apk" style={{ backgroundColor: '#2e7d32', color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)', padding: isMobile ? '4px 8px' : '6px 14px', borderRadius: '15px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'all 0.2s ease', cursor: 'pointer' }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1b5e20'; e.currentTarget.style.transform = 'scale(1.03)'; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#2e7d32'; e.currentTarget.style.transform = 'scale(1)'; }} > 
           📥 {isMobile ? 'APK' : 'Download App'}
         </a> 
 

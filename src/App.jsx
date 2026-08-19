@@ -102,6 +102,12 @@ export default function App() {
         <div style={{ marginTop: '10px' }}>
           <Routes>
             <Route path="/" element={isAuthUser ? <Home isAdmin={isAdmin} /> : <Navigate to="/login" replace />} />
+
+            {/* 🔧 NEW: Shared "Copy Link" URLs point here (/post/:postId).
+                Renders the same Home feed; Home.jsx detects the :postId param,
+                auto-scrolls to that post, and briefly highlights it. */}
+            <Route path="/post/:postId" element={isAuthUser ? <Home isAdmin={isAdmin} /> : <Navigate to="/login" replace />} />
+
             <Route path="/messenger" element={isAuthUser ? <Messenger /> : <Navigate to="/login" replace />} />
             <Route path="/profile" element={isAuthUser ? <Profile /> : <Navigate to="/login" replace />} />
             <Route path="/profile/:userId" element={isAuthUser ? <Profile /> : <Navigate to="/login" replace />} />
