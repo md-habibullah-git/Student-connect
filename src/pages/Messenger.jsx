@@ -3,15 +3,22 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, orderBy, limit, getCountFromServer, Timestamp } from 'firebase/firestore';
 
 export default function Messenger() {
   const navigate = useNavigate();
   const [users, setUsers] = useState([]);
 
-  // 🔧 NEW: tracks which user ids are currently online (backed by the
-  // users/{uid}.online field that PersonalChat.jsx keeps up to date)
+  // tracks which user ids are currently online (backed by the
+  // users/{uid}.online field that GlobalAlerts.jsx keeps up to date app-wide)
   const [onlineMap, setOnlineMap] = useState({});
+
+  // 🔧 NEW: unread message counts — per-student for personal chats, and one
+  // combined count for the Campus Global Room card.
+  const [unreadCounts, setUnreadCounts] = useState({});
+  const [globalUnreadCount, setGlobalUnreadCount] = useState(0);
+
+  const currentUid = auth.currentUser?.uid;
 
   useEffect(() => {
     // Query to fetch active and approved students
@@ -28,8 +35,7 @@ export default function Messenger() {
       const filtered = usersList.filter(user => user.uid !== auth.currentUser?.uid);
       setUsers(filtered);
 
-      // 🔧 NEW: build a quick lookup of who's online from the same snapshot
-      // (users/{uid}.online is written by PersonalChat.jsx while a chat is open)
+      // build a quick lookup of who's online from the same snapshot
       const online = {};
       usersList.forEach(user => {
         const uidKey = user.uid || user.id;
@@ -42,6 +48,57 @@ export default function Messenger() {
 
     return () => unsubscribe();
   }, []);
+
+  // 🔧 NEW: per-student unread count. For each visible student, watch their
+  // shared room doc — whenever it changes (a new message arrived), re-run a
+  // lightweight count query for messages sent after this device's last-read
+  // marker for that room.
+  useEffect(() => {
+    if (!currentUid || users.length === 0) return;
+
+    const unsubscribers = users
+      .filter((user) => user.uid)
+      .map((user) => {
+        const chatRoomId = currentUid < user.uid ? `${currentUid}_${user.uid}` : `${user.uid}_${currentUid}`;
+        const roomRef = doc(db, "personal-rooms", chatRoomId);
+
+        return onSnapshot(roomRef, async (snap) => {
+          if (!snap.exists()) {
+            setUnreadCounts((prev) => ({ ...prev, [user.uid]: 0 }));
+            return;
+          }
+          try {
+            const lastReadTimestamp = Number(localStorage.getItem(`lastRead_personal_${chatRoomId}`)) || 0;
+            const messagesRef = collection(db, "personal-rooms", chatRoomId, "messages");
+            const countQuery = query(messagesRef, where("createdAt", ">", lastReadTimestamp));
+            const countSnap = await getCountFromServer(countQuery);
+            setUnreadCounts((prev) => ({ ...prev, [user.uid]: countSnap.data().count }));
+          } catch (err) {
+            // getCountFromServer unavailable on this SDK version — badge just won't show
+          }
+        });
+      });
+
+    return () => unsubscribers.forEach((unsub) => unsub && unsub());
+  }, [users, currentUid]);
+
+  // 🔧 NEW: unread count for the Campus Global Room card
+  useEffect(() => {
+    if (!currentUid) return;
+    const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
+    const unsubscribe = onSnapshot(q, async () => {
+      try {
+        const lastReadTimestamp = Number(localStorage.getItem('lastRead_global')) || 0;
+        const messagesRef = collection(db, "global-room-messages");
+        const countQuery = query(messagesRef, where("createdAt", ">", Timestamp.fromMillis(lastReadTimestamp)));
+        const countSnap = await getCountFromServer(countQuery);
+        setGlobalUnreadCount(countSnap.data().count);
+      } catch (err) {
+        // fail silently — badge just won't show
+      }
+    });
+    return () => unsubscribe();
+  }, [currentUid]);
 
   const startChat = (user) => {
     if (user && user.uid) {
@@ -83,7 +140,15 @@ export default function Messenger() {
           🔊
         </div>
         <div style={{ flex: 1, color: '#fff' }}>
-          <strong style={{ fontSize: '16px', display: 'block', letterSpacing: '0.3px' }}>Campus Global Room 👥</strong>
+          <strong style={{ fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px', letterSpacing: '0.3px' }}>
+            Campus Global Room 👥
+            {/* 🔧 NEW: unread badge next to the Global Room name */}
+            {globalUnreadCount > 0 && (
+              <span style={{ background: '#ff3b30', color: '#fff', fontSize: '11px', fontWeight: 'bold', minWidth: '20px', height: '20px', borderRadius: '10px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px' }}>
+                {globalUnreadCount > 99 ? '99+' : globalUnreadCount}
+              </span>
+            )}
+          </strong>
           <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.85)', marginTop: '3px', display: 'block' }}>👉 Click to join public group chat & conference calls</span>
         </div>
         <div style={{ fontSize: '18px', color: '#fff', paddingRight: '5px' }}>⚡</div>
@@ -122,7 +187,7 @@ export default function Messenger() {
                 alt={user.name} 
                 style={{ width: '48px', height: '50px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', display: 'block' }} // ⚡ Fixed: Equal 48-pixel width and responsive height are locked for the global circle
               />
-              {/* 🔧 NEW: online status dot on the corner of the avatar */}
+              {/* online status dot on the corner of the avatar */}
               {onlineMap[user.uid] && (
                 <span title="Online" style={{ position: 'absolute', bottom: '2px', right: '2px', width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid #0056b3' }} />
               )}
@@ -130,8 +195,14 @@ export default function Messenger() {
 
             {/* Student metadata texts block */}
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContext: 'center' }}>
-              <strong style={{ fontSize: '16px', color: '#ffffff', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}> {/* ⚡ Fixed: Font size has been set to 16 pixels, just like the text of the global box */}
-                {user.name}
+              <strong style={{ fontSize: '16px', color: '#ffffff', display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}> {/* ⚡ Fixed: Font size has been set to 16 pixels, just like the text of the global box */}
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.name}</span>
+                {/* 🔧 NEW: unread badge next to the student's name */}
+                {unreadCounts[user.uid] > 0 && (
+                  <span style={{ background: '#ff3b30', color: '#fff', fontSize: '10px', fontWeight: 'bold', minWidth: '18px', height: '18px', borderRadius: '9px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px', flexShrink: 0 }}>
+                    {unreadCounts[user.uid] > 99 ? '99+' : unreadCounts[user.uid]}
+                  </span>
+                )}
               </strong>
               
               {/* ⚡ Fixed: ID and Department are placed side-by-side on a single line instead of vertically, reducing the height */}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { 
   collection, addDoc, query, orderBy, onSnapshot, doc, 
@@ -7,9 +7,152 @@ import {
 } from 'firebase/firestore';
 import { ZegoUIKitPrebuilt } from '@zegocloud/zego-uikit-prebuilt';
 
+const MAX_VOICE_BASE64_LENGTH = 1100000;
+const MAX_RECORDING_SECONDS = 30;
+
+// Self-contained voice message player — circular play/pause button next to a
+// small canvas that draws the audio's REAL frequency data (Web Audio API)
+// while it plays, and a resting "idle" bar pattern otherwise.
+function VoiceMessageBubble({ src, isMe }) {
+  const audioRef = useRef(null);
+  const canvasRef = useRef(null);
+  const analyserRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const rafRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  const activeBarColor = isMe ? 'rgba(255,255,255,0.95)' : '#0056b3';
+  const idleBarColor = isMe ? 'rgba(255,255,255,0.35)' : 'rgba(0,86,179,0.3)';
+
+  const drawIdleBars = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    const barCount = 24;
+    const barWidth = w / barCount - 2;
+    ctx.fillStyle = idleBarColor;
+    for (let i = 0; i < barCount; i++) {
+      const barHeight = 3 + Math.abs(Math.sin(i * 1.3)) * 5;
+      ctx.fillRect(i * (barWidth + 2), (h - barHeight) / 2, barWidth, barHeight);
+    }
+  };
+
+  const drawLiveBars = () => {
+    const canvas = canvasRef.current;
+    const analyser = analyserRef.current;
+    if (!canvas || !analyser) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyser.getByteFrequencyData(dataArray);
+
+    ctx.clearRect(0, 0, w, h);
+    const barCount = 24;
+    const step = Math.max(1, Math.floor(bufferLength / barCount));
+    const barWidth = w / barCount - 2;
+    ctx.fillStyle = activeBarColor;
+    for (let i = 0; i < barCount; i++) {
+      const value = dataArray[i * step] || 0;
+      const barHeight = Math.max(2, (value / 255) * h);
+      ctx.fillRect(i * (barWidth + 2), (h - barHeight) / 2, barWidth, barHeight);
+    }
+    rafRef.current = requestAnimationFrame(drawLiveBars);
+  };
+
+  useEffect(() => {
+    drawIdleBars();
+    return () => cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setupAnalyser = () => {
+    if (audioCtxRef.current) return;
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      const source = audioCtx.createMediaElementSource(audioRef.current);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 64;
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      audioCtxRef.current = audioCtx;
+      analyserRef.current = analyser;
+    } catch (err) {
+      // Web Audio API unavailable/blocked — playback still works, just without live bars.
+    }
+  };
+
+  const togglePlay = () => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+    setupAnalyser();
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+    if (isPlaying) audioEl.pause();
+    else audioEl.play();
+  };
+
+  useEffect(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+    const onPlay = () => { setIsPlaying(true); drawLiveBars(); };
+    const onPause = () => { setIsPlaying(false); cancelAnimationFrame(rafRef.current); drawIdleBars(); };
+    const onEnded = () => { setIsPlaying(false); cancelAnimationFrame(rafRef.current); drawIdleBars(); setCurrentTime(0); };
+    const onLoaded = () => setDuration(audioEl.duration || 0);
+    const onTimeUpdate = () => setCurrentTime(audioEl.currentTime || 0);
+    audioEl.addEventListener('play', onPlay);
+    audioEl.addEventListener('pause', onPause);
+    audioEl.addEventListener('ended', onEnded);
+    audioEl.addEventListener('loadedmetadata', onLoaded);
+    audioEl.addEventListener('timeupdate', onTimeUpdate);
+    return () => {
+      audioEl.removeEventListener('play', onPlay);
+      audioEl.removeEventListener('pause', onPause);
+      audioEl.removeEventListener('ended', onEnded);
+      audioEl.removeEventListener('loadedmetadata', onLoaded);
+      audioEl.removeEventListener('timeupdate', onTimeUpdate);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const formatTime = (secs) => {
+    if (!isFinite(secs) || secs < 0) return '0:00';
+    return `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`;
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', minWidth: '210px' }}>
+      <audio ref={audioRef} src={src} preload="metadata" style={{ display: 'none' }} />
+      <button
+        type="button"
+        onClick={togglePlay}
+        style={{
+          width: '30px', height: '30px', borderRadius: '50%', border: 'none', cursor: 'pointer',
+          background: isMe ? 'rgba(255,255,255,0.25)' : 'rgba(0,86,179,0.12)',
+          color: isMe ? '#fff' : '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0, fontSize: '13px'
+        }}
+      >
+        {isPlaying ? '⏸️' : '▶️'}
+      </button>
+      <canvas ref={canvasRef} width={120} height={28} style={{ flex: 1 }} />
+      <span style={{ fontSize: '10px', opacity: 0.8, flexShrink: 0, minWidth: '30px', textAlign: 'right' }}>
+        {formatTime(isPlaying || currentTime > 0 ? currentTime : duration)}
+      </span>
+    </div>
+  );
+}
+
 export default function PersonalChat() {
   const { receiverId, receiverName } = useParams(); 
   const navigate = useNavigate();
+  const location = useLocation();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [usersCache, setUsersCache] = useState({}); 
@@ -20,16 +163,21 @@ export default function PersonalChat() {
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
 
-  // 🔧 NEW: voice message recording state
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const discardRecordingRef = useRef(false);
+  const capturedReplyRef = useRef(null);
+  const maxDurationTimeoutRef = useRef(null);
 
-  // 🔧 NEW: receiver's online presence (green dot near the call button)
+  const recordingCanvasRef = useRef(null);
+  const recordingAnalyserRef = useRef(null);
+  const recordingAudioCtxRef = useRef(null);
+  const recordingRafRef = useRef(null);
+
   const [receiverOnline, setReceiverOnline] = useState(false);
 
-  // 🔧 NEW: tracks whether we've finished the initial messages load, so we
-  // only fire browser notifications for messages that arrive AFTER opening the chat
   const initialMessagesLoadedRef = useRef(false);
 
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
@@ -85,28 +233,20 @@ export default function PersonalChat() {
     return () => unsubscribeUsers();
   }, []);
 
-  // 🔧 NEW: mark myself online while this chat is open, and go offline on unmount/close.
-  // Also request browser notification permission once, up front.
+  // 🔧 REMOVED: this component no longer writes its own online/offline presence.
+  // GlobalAlerts.jsx (mounted once in App.jsx) now owns presence for the whole
+  // app session, so the green dot stays accurate no matter which page is open —
+  // previously, leaving this page turned you "offline" even if you were still
+  // using the app elsewhere.
+
+  // still request browser notification permission once, up front.
   useEffect(() => {
-    const selfRef = doc(db, "users", currentUid);
-    setDoc(selfRef, { online: true, lastSeen: new Date().getTime() }, { merge: true }).catch(() => {});
-
-    const handleBeforeUnload = () => {
-      updateDoc(selfRef, { online: false }).catch(() => {});
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
     }
+  }, []);
 
-    return () => {
-      updateDoc(selfRef, { online: false }).catch(() => {});
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [currentUid]);
-
-  // 🔧 NEW: watch the other person's online status for the green dot
+  // watch the other person's online status for the green dot
   useEffect(() => {
     if (!targetUid) return;
     const unsubscribePresence = onSnapshot(doc(db, "users", targetUid), (snap) => {
@@ -114,6 +254,27 @@ export default function PersonalChat() {
     });
     return () => unsubscribePresence();
   }, [targetUid]);
+
+  // elapsed-time counter shown while recording a voice message
+  useEffect(() => {
+    let interval;
+    if (isRecording) {
+      setRecordingSeconds(0);
+      interval = setInterval(() => setRecordingSeconds((s) => s + 1), 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isRecording]);
+
+  // 🔧 NEW: if GlobalAlerts sent us here to auto-join an already-ringing call
+  // (its floating "Receive" button), skip the local incoming-call prompt and
+  // jump straight into the call once we know it's actually still ringing.
+  useEffect(() => {
+    if (location.state?.autoJoinCall && incomingCall) {
+      setIncomingCall(null);
+      setInCall(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, incomingCall]);
 
   useEffect(() => {
     if (!receiverId) return;
@@ -126,8 +287,10 @@ export default function PersonalChat() {
       setMessages(newMessages);
       scrollToBottom();
 
-      // 🔧 NEW: fire a browser notification for genuinely new incoming messages
-      // (skip the very first load so old history doesn't spam notifications)
+      // 🔧 NEW: mark this room "read as of now" so Messenger.jsx's unread-count
+      // query (createdAt > this timestamp) resets while the chat is open.
+      localStorage.setItem(`lastRead_personal_${chatRoomId}`, String(Date.now()));
+
       if (initialMessagesLoadedRef.current) {
         snapshot.docChanges().forEach((change) => {
           if (change.type === 'added') {
@@ -179,10 +342,7 @@ export default function PersonalChat() {
 
     try {
       const roomRef = doc(db, "personal-rooms", chatRoomId);
-      // 🔧 NEW: store participants + a snapshot of the latest message on the room doc.
-      // This is what a future app-wide "floating message bubble" component would
-      // query across all rooms, without needing to know chatRoomId in advance.
-      const latestPreviewText = input.trim() ? input.trim() : (selectedFiles.some(f => f.type === 'audio') ? '🎤 Voice message' : '📷 Photo');
+      const latestPreviewText = input.trim() ? input.trim() : '📷 Photo';
       await setDoc(roomRef, {
         roomId: chatRoomId,
         participants: [currentUid, targetUid],
@@ -328,49 +488,170 @@ export default function PersonalChat() {
     setSelectedFiles((prev) => prev.filter(file => file.id !== id));
   };
 
-  // 🔧 NEW: voice message recording using the browser's microphone (MediaRecorder API)
+  const sendVoiceMessage = async (audioUrl) => {
+    try {
+      const roomRef = doc(db, "personal-rooms", chatRoomId);
+      const reply = capturedReplyRef.current;
+      const replyData = reply ? {
+        text: reply.fileUrl ? "" : (reply.text || ""),
+        fileUrl: reply.fileUrl || "",
+        fileType: reply.fileType || "",
+        senderName: reply.senderName,
+        msgId: reply.id
+      } : null;
+
+      await setDoc(roomRef, {
+        roomId: chatRoomId,
+        participants: [currentUid, targetUid],
+        lastActive: new Date().getTime(),
+        lastMessageText: '🎤 Voice message',
+        lastMessageSenderId: currentUid,
+        lastMessageSenderName: currentUserName,
+        lastMessageSenderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+        lastMessageAt: new Date().getTime()
+      }, { merge: true });
+
+      await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
+        text: "",
+        fileUrl: audioUrl,
+        fileType: 'audio',
+        senderId: currentUid,
+        senderName: currentUserName,
+        senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+        createdAt: new Date().getTime(),
+        isEdited: false,
+        isDeleted: false,
+        replyTo: replyData
+      });
+
+      setReplyToMessage(null);
+      capturedReplyRef.current = null;
+    } catch (error) {
+      console.error("Error sending voice message:", error);
+    }
+  };
+
+  const drawRecordingBars = () => {
+    const canvas = recordingCanvasRef.current;
+    const analyser = recordingAnalyserRef.current;
+    if (!canvas || !analyser) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyser.getByteFrequencyData(dataArray);
+
+    ctx.clearRect(0, 0, w, h);
+    const barCount = 28;
+    const step = Math.max(1, Math.floor(bufferLength / barCount));
+    const barWidth = w / barCount - 2;
+    ctx.fillStyle = '#dc3545';
+    for (let i = 0; i < barCount; i++) {
+      const value = dataArray[i * step] || 0;
+      const barHeight = Math.max(2, (value / 255) * h);
+      ctx.fillRect(i * (barWidth + 2), (h - barHeight) / 2, barWidth, barHeight);
+    }
+    recordingRafRef.current = requestAnimationFrame(drawRecordingBars);
+  };
+
+  const stopRecordingVisualizer = () => {
+    cancelAnimationFrame(recordingRafRef.current);
+    if (recordingAudioCtxRef.current) {
+      recordingAudioCtxRef.current.close().catch(() => {});
+      recordingAudioCtxRef.current = null;
+    }
+    recordingAnalyserRef.current = null;
+  };
+
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContextClass();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64;
+        source.connect(analyser);
+        recordingAudioCtxRef.current = audioCtx;
+        recordingAnalyserRef.current = analyser;
+        drawRecordingBars();
+      } catch (visualizerErr) {
+        // visualization is best-effort; recording still works without it
+      }
+
+      let recorderOptions = { audioBitsPerSecond: 32000 };
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        recorderOptions.mimeType = 'audio/webm;codecs=opus';
+      }
+      const recorder = new MediaRecorder(stream, recorderOptions);
       audioChunksRef.current = [];
+      discardRecordingRef.current = false;
+      capturedReplyRef.current = replyToMessage;
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
 
       recorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        stream.getTracks().forEach(track => track.stop());
+        stopRecordingVisualizer();
+        clearTimeout(maxDurationTimeoutRef.current);
+
+        if (discardRecordingRef.current) {
+          audioChunksRef.current = [];
+          return;
+        }
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         const reader = new FileReader();
         reader.onload = (event) => {
-          setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: 'voice-message.webm', url: event.target.result, type: 'audio' }]);
+          const audioUrl = event.target.result;
+          if (audioUrl.length > MAX_VOICE_BASE64_LENGTH) {
+            alert("This voice message is too large to send, even after compression. Please record a shorter message.");
+            return;
+          }
+          sendVoiceMessage(audioUrl);
         };
         reader.readAsDataURL(audioBlob);
-        stream.getTracks().forEach(track => track.stop());
       };
 
       recorder.start();
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
+
+      maxDurationTimeoutRef.current = setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          discardRecordingRef.current = true;
+          mediaRecorderRef.current.stop();
+          setIsRecording(false);
+          alert("Voice messages can be up to 30 seconds long. Recording has been stopped and discarded — please try again.");
+        }
+      }, MAX_RECORDING_SECONDS * 1000);
     } catch (error) {
       console.error("Microphone access error:", error);
       alert("🎤 Microphone access was denied or is unavailable.");
     }
   };
 
-  const stopRecording = () => {
+  const stopAndSendRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
+      clearTimeout(maxDurationTimeoutRef.current);
+      discardRecordingRef.current = false;
       mediaRecorderRef.current.stop();
       setIsRecording(false);
     }
   };
 
-  const toggleRecording = () => {
-    if (isRecording) stopRecording();
-    else startRecording();
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      clearTimeout(maxDurationTimeoutRef.current);
+      discardRecordingRef.current = true;
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
   };
 
-  // 🔧 NEW: turns raw URLs inside message text into clickable, new-tab-opening links
   const renderMessageText = (text) => {
     const urlPattern = /(https?:\/\/[^\s]+)/g;
     const parts = text.split(urlPattern);
@@ -386,8 +667,6 @@ export default function PersonalChat() {
   };
 
   const initiateCall = async () => {
-    // 🔧 NEW: participants + receiver info stored so a future app-wide call
-    // listener can find "a call is ringing for me" from anywhere in the app.
     await setDoc(doc(db, "personal-calls", chatRoomId), {
       status: "ringing",
       hostName: currentUserName,
@@ -438,6 +717,18 @@ export default function PersonalChat() {
     e.stopPropagation();
     setActiveMenuId(activeMenuId === msgId ? null : msgId);
   };
+
+  const MicIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+      <line x1="12" y1="19" x2="12" y2="23"></line>
+      <line x1="8" y1="23" x2="16" y2="23"></line>
+    </svg>
+  );
+
+  const formatRecordingTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+
   return (
     <div style={{ 
       maxWidth: '700px', margin: '15px auto', fontFamily: 'Arial', height: '85vh', 
@@ -469,9 +760,9 @@ export default function PersonalChat() {
         .threedot-menu-item.delete-btn { color: #dc3545; }
         .threedot-menu-item:hover { background: rgba(0,0,0,0.05); }
 
-        /* 🔧 NEW: pulsing red mic button while a voice message is recording */
-        @keyframes recordPulse { 0% { box-shadow: 0 0 0 0 rgba(220,53,69,0.5); } 70% { box-shadow: 0 0 0 8px rgba(220,53,69,0); } 100% { box-shadow: 0 0 0 0 rgba(220,53,69,0); } }
-        .mic-recording { animation: recordPulse 1.4s infinite; background: #dc3545 !important; color: #fff !important; }
+        @keyframes recordPulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }
+        .recording-dot { width: 10px; height: 10px; border-radius: 50%; background: #dc3545; animation: recordPulse 1.2s infinite; display: inline-block; flex-shrink: 0; }
+        .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
       `}</style>
 
       <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
@@ -479,7 +770,6 @@ export default function PersonalChat() {
         <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px' }}>{receiverName}</h3>
         {!inCall && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {/* 🔧 NEW: green dot when the other person is currently online */}
             {receiverOnline && (
               <span title="Online" style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid rgba(255,255,255,0.6)', display: 'inline-block' }} />
             )}
@@ -516,8 +806,6 @@ export default function PersonalChat() {
 
               const isMe = getMsg.senderId === currentUid;
               const firestoreProfilePhoto = usersCache[getMsg.senderId] || getMsg.senderPhoto;
-              // 🔧 FIX: proper DiceBear URL (was missing the `$` before `{...}`, so it
-              // rendered as a literal, broken string instead of an interpolated URL).
               const defaultFallbackAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(getMsg.senderName || 'Student')}&backgroundColor=0056b3`;
 
               return (
@@ -565,9 +853,8 @@ export default function PersonalChat() {
                               <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />
                             )}
 
-                            {/* 🔧 NEW: voice message playback */}
                             {getMsg.fileUrl && getMsg.fileType === 'audio' && (
-                              <audio src={getMsg.fileUrl} controls style={{ width: '230px', display: 'block' }} />
+                              <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />
                             )}
 
                             {getMsg.text && (
@@ -623,12 +910,8 @@ export default function PersonalChat() {
             {selectedFiles.length > 0 && (
               <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
                 {selectedFiles.map((file) => (
-                  <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', background: file.type === 'audio' ? '#0056b3' : 'transparent' }}>
-                    {file.type === 'audio' ? (
-                      <span style={{ fontSize: '20px' }}>🎤</span>
-                    ) : (
-                      <img src={file.url} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    )}
+                  <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3' }}>
+                    <img src={file.url} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>✕</button>
                   </div>
                 ))}
@@ -637,23 +920,47 @@ export default function PersonalChat() {
 
             <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" multiple style={{ display: 'none' }} />
 
-            <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
-              <button type="button" onClick={() => fileInputRef.current.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
+            {isRecording ? (
+              <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #dc3545 10%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(220, 53, 69, 0.4)' }}>
+                <button
+                  type="button"
+                  onClick={cancelRecording}
+                  title="Cancel recording"
+                  style={{ background: 'rgba(220, 53, 69, 0.12)', color: '#dc3545', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
+                >
+                  🗑️
+                </button>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0' }}>
+                  <span className="recording-dot" />
+                  <canvas ref={recordingCanvasRef} width={120} height={26} style={{ flex: 1 }} />
+                  <span className="recording-label">{formatRecordingTime(recordingSeconds)}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={stopAndSendRecording}
+                  title="Send voice message"
+                  style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}
+                >
+                  ➤
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
+                <button type="button" onClick={() => fileInputRef.current.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
 
-              {/* 🔧 NEW: voice message record/stop button, right beside the + button */}
-              <button
-                type="button"
-                onClick={toggleRecording}
-                title={isRecording ? "Stop recording" : "Record a voice message"}
-                className={isRecording ? 'mic-recording' : ''}
-                style={{ background: isRecording ? undefined : 'rgba(0, 86, 179, 0.1)', color: isRecording ? undefined : '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
-              >
-                {isRecording ? '⏹️' : '🎤'}
-              </button>
+                <button
+                  type="button"
+                  onClick={startRecording}
+                  title="Record a voice message"
+                  style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
+                >
+                  <MicIcon />
+                </button>
 
-              <input type="text" className="dynamic-chat-input" placeholder="✍️ Type a private message..." value={input} onChange={(e) => setInput(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
-              <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
-            </div>
+                <input type="text" className="dynamic-chat-input" placeholder="✍️ Type a private message..." value={input} onChange={(e) => setInput(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
+                <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
+              </div>
+            )}
           </form>
         </>
       )}

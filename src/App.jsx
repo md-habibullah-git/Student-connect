@@ -7,6 +7,7 @@ import { doc, onSnapshot } from 'firebase/firestore';
 
 import Navbar from './components/Navbar';
 import AdminPanel from './components/AdminPanel';
+import GlobalAlerts from './components/GlobalAlerts';
 import Login from './pages/Login';
 import Home from './pages/Home';
 import Messenger from './pages/Messenger'; 
@@ -97,13 +98,17 @@ export default function App() {
         {/* Render global responsive navbar component */}
         {user && isAuthUser && <Navbar isAdmin={isAdmin} theme={theme} toggleTheme={toggleTheme} />}
 
-        {/* 🎯 Duplicate fixed three-dot layout has been successfully removed from here */}
+        {/* 🔧 NEW: mounted once, outside <Routes>, so it stays alive across every
+            page — this is what keeps presence "online" everywhere (not just inside
+            a chat page) and shows the floating message/call bubbles no matter
+            where in the app the user currently is. */}
+        {user && isAuthUser && <GlobalAlerts />}
 
         <div style={{ marginTop: '10px' }}>
           <Routes>
             <Route path="/" element={isAuthUser ? <Home isAdmin={isAdmin} /> : <Navigate to="/login" replace />} />
 
-            {/* 🔧 NEW: Shared "Copy Link" URLs point here (/post/:postId).
+            {/* Shared "Copy Link" URLs point here (/post/:postId).
                 Renders the same Home feed; Home.jsx detects the :postId param,
                 auto-scrolls to that post, and briefly highlights it. */}
             <Route path="/post/:postId" element={isAuthUser ? <Home isAdmin={isAdmin} /> : <Navigate to="/login" replace />} />
