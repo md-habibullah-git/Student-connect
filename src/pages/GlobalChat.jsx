@@ -175,6 +175,13 @@ export default function GlobalChat() {
   const recordingAudioCtxRef = useRef(null);
   const recordingRafRef = useRef(null);
 
+  // 🔧 NEW: stable container ref + "already joined" guard — the old inline
+  // arrow-function ref re-fired on every re-render (e.g. every new chat
+  // message while in the call), silently triggering a second joinRoom() call
+  // and causing "Failed to join the room" (error 1002099).
+  const videoContainerRef = useRef(null);
+  const zpInstanceRef = useRef(null);
+
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
     const saved = localStorage.getItem(`global_deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
     return saved ? JSON.parse(saved) : [];
@@ -183,8 +190,6 @@ export default function GlobalChat() {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null); 
 
-  // keeps the latest inCall value available inside cleanup handlers
-  // (unmount / tab-close), where React state closures would otherwise be stale.
   const inCallRef = useRef(false);
   
   const currentUid = auth.currentUser?.uid || "unknown_user";
@@ -205,14 +210,9 @@ export default function GlobalChat() {
     autoCleanOldGlobalMessages();
   }, []);
 
-  // 🔧 REMOVED: this component no longer writes its own online/offline presence.
-  // GlobalAlerts.jsx (mounted once in App.jsx) now owns presence for the whole
-  // app session — this used to make you appear "offline" the moment you left
-  // this page, even while still using the app elsewhere.
-
-  // 🔧 KEPT (split out from the old presence effect): if I'm still in the
-  // conference call when I close the tab or leave this page, remove myself
-  // from participants so the call never gets stuck "ringing" for no one.
+  // if I'm still in the conference call when I close the tab or leave this
+  // page, remove myself from participants so the call never gets stuck
+  // "ringing" for no one.
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (inCallRef.current) {
@@ -243,21 +243,29 @@ export default function GlobalChat() {
     return () => clearInterval(interval);
   }, [isRecording]);
 
-  // 🔧 NEW: if GlobalAlerts sent us here to auto-join an already-ringing
-  // conference call (its floating "Receive" button), join immediately instead
-  // of waiting for the local "Rejoin Call" button to be clicked.
+  // if GlobalAlerts sent us here to auto-join an already-ringing conference
+  // call (its floating "Receive" button), join immediately.
   useEffect(() => {
     if (location.state?.autoJoinCall && showRejoinBtn && !inCall) {
       handleRejoinCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state, showRejoinBtn]);
+
+  // 🔧 NEW: join the Zego room exactly once, the moment both "inCall" is true
+  // AND the container div actually exists in the DOM.
+  useEffect(() => {
+    if (inCall && videoContainerRef.current && !zpInstanceRef.current) {
+      startGlobalVideoCall(videoContainerRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inCall]);
 
   useEffect(() => {
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "asc"), limit(100));
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
       setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      // 🔧 NEW: mark the global room "read as of now" for Messenger.jsx's unread count
       localStorage.setItem('lastRead_global', String(Date.now()));
     }, (error) => console.error("Global Chat Stream Error:", error));
 
@@ -572,6 +580,8 @@ export default function GlobalChat() {
     } catch (err) { /* best effort only */ }
   };
 
+  // 🔧 NEW: reload the page once I've actually left the conference call after
+  // being in it, so the app always resumes from a clean state.
   const leaveGlobalCall = async () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
@@ -581,15 +591,22 @@ export default function GlobalChat() {
         if (updatedParts.length === 0) await deleteDoc(callDocRef);
         else await updateDoc(callDocRef, { participants: updatedParts });
       }
-      setInCall(false);
-    } catch (err) { console.error("Error leaving global call:", err); setInCall(false); }
+      window.location.reload();
+    } catch (err) {
+      console.error("Error leaving global call:", err);
+      window.location.reload();
+    }
   };
 
+  // 🔧 FIX: guarded against double-invocation, and Zego's own pre-join
+  // "enter your name" screen is skipped (showPreJoinView: false).
   const startGlobalVideoCall = async (element) => {
-    if (!element) return;
+    if (!element || zpInstanceRef.current) return;
     const zp = ZegoUIKitPrebuilt.create(ZegoUIKitPrebuilt.generateKitTokenForTest(32790448, "50737a7cc9627401b05b40c83eff3c2e", globalRoomId, currentUid, currentUserName));
+    zpInstanceRef.current = zp;
     zp.joinRoom({
       container: element, scenario: { mode: ZegoUIKitPrebuilt.GroupCall, config: { showPlayingInMobile: true, showControlBarInMobile: true, showLayoutButton: true, showScreenSharingButton: true, showUserList: true } }, 
+      showPreJoinView: false,
       showScreenSharingButton: true, turnOnCameraWhenJoining: true, turnOnMicrophoneWhenJoining: true, useFrontCamera: true, onLeaveRoom: () => { leaveGlobalCall(); }
     });
   };
@@ -631,7 +648,7 @@ export default function GlobalChat() {
         .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
       `}</style>
       
-      {inCall && <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000' }}><div ref={(el) => el && startGlobalVideoCall(el)} style={{ width: '100%', height: '100%' }} /></div>}
+      {inCall && <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000' }}><div ref={videoContainerRef} style={{ width: '100%', height: '100%' }} /></div>}
       
       {incomingCall && !inCall && (
         <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 999, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>

@@ -61,7 +61,12 @@ export default function AdminPanel() {
 
     return () => {
       clearInterval(interval);
-      unsubscribeUsers(); 
+      unsubscribeUsers();
+      // ফিক্স: কম্পোনেন্ট আনমাউন্ট হওয়ার সময় active chat viewer-এর listener-ও বন্ধ করা হচ্ছে
+      if (activeChatListenerRef.current) {
+        activeChatListenerRef.current();
+        activeChatListenerRef.current = null;
+      }
     }; 
   }, [refreshTrigger]);
   const handleAccept = async (targetId) => { 
@@ -75,12 +80,44 @@ export default function AdminPanel() {
     } 
   }; 
 
+  // নতুন: এই ইউজারের সাথে সম্পর্কিত সব personal-rooms এবং তার ভেতরের সব মেসেজ স্থায়ীভাবে মুছে দেয়,
+  // যাতে reject/remove করার পর মনে হয় এই ইউজার কখনো কোনো মেসেজ বা রুম তৈরিই করেনি
+  const wipeAllChatDataForUser = async (uid) => {
+    try {
+      const roomsSnap = await getDocs(collection(db, "personal-rooms"));
+      const relatedRooms = roomsSnap.docs.filter(roomDoc => roomDoc.id.split("_").includes(uid));
+
+      for (const roomDoc of relatedRooms) {
+        const messagesSnap = await getDocs(collection(db, "personal-rooms", roomDoc.id, "messages"));
+        await Promise.all(
+          messagesSnap.docs.map(msgDoc => deleteDoc(doc(db, "personal-rooms", roomDoc.id, "messages", msgDoc.id)))
+        );
+        await deleteDoc(doc(db, "personal-rooms", roomDoc.id));
+      }
+    } catch (err) {
+      console.error("Error wiping chat data for user:", err);
+      throw err;
+    }
+  };
+
   const handleDelete = async (targetId) => { 
     if (!targetId) return; 
-    if(window.confirm("Are you sure you want to PERMANENTLY delete this ID from the database? This action cannot be undone.")) { 
+    if(window.confirm("আপনি কি নিশ্চিত যে এই আইডি এবং এর সাথে যুক্ত সব চ্যাট/মেসেজ ডেটাবেস থেকে স্থায়ীভাবে মুছে ফেলতে চান? এই কাজটি ফিরিয়ে আনা যাবে না।")) { 
       try { 
+        // আগে এই ইউজারের সব চ্যাট রুম ও মেসেজ মুছে ফেলা হচ্ছে
+        await wipeAllChatDataForUser(targetId);
+        // তারপর ইউজারের আইডি ডকুমেন্ট মুছে ফেলা হচ্ছে
         await deleteDoc(doc(db, "users", targetId)); 
-        alert("🗑️ ID permanently deleted from database! The space has been completely cleared."); 
+
+        // যদি এই ইউজারের কোনো চ্যাট রুম এই মুহূর্তে Live Chat Viewer-এ খোলা থাকে, সেটাও বন্ধ করে দেওয়া হচ্ছে
+        if (activeChatListenerRef.current) {
+          activeChatListenerRef.current();
+          activeChatListenerRef.current = null;
+        }
+        setSelectedChatMessages([]);
+        setActiveChatName("");
+
+        alert("🗑️ ID এবং এর সাথে যুক্ত সব চ্যাট ডেটা স্থায়ীভাবে মুছে ফেলা হয়েছে! এটি এখন আর কখনো কোনো তথ্য/মেসেজ রাখবে না।"); 
         setRefreshTrigger(prev => prev + 1); 
       } catch (err) { 
         console.error("Error deleting ID permanently:", err); 
@@ -162,7 +199,7 @@ export default function AdminPanel() {
         <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}> 
           {pendingUsers.map(user => { 
             const currentDocId = user.id || user.uid; 
-            const dicebearBackup = `https://dicebear.com{encodeURIComponent(user.name || 'Student')}`; 
+            const dicebearBackup = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name || 'Student')}`; 
             return ( 
               <li key={currentDocId} className="admin-list-row" style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', padding: '15px', borderRadius: '8px' }}> 
                 <div style={{ position: 'relative', width: '42px', height: '42px', borderRadius: '50%', overflow: 'hidden', border: '2px solid #0056b3', marginRight: '15px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}> 
@@ -191,7 +228,7 @@ export default function AdminPanel() {
         <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}> 
           {allUsers.map(user => { 
             const activeDocId = user.id || user.uid; 
-            const dicebearBackupActive = `https://dicebear.com{encodeURIComponent(user.name || 'Student')}`; 
+            const dicebearBackupActive = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name || 'Student')}`; 
             return ( 
               <li key={activeDocId} className="admin-list-row-active" style={{ marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px', borderRadius: '8px' }}> 
                 <span style={{ fontSize: '15px', display: 'flex', alignItems: 'center', gap: '12px', position: 'relative' }}> 

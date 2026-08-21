@@ -42,6 +42,26 @@ export default function Login() {
       reader.readAsDataURL(file);
     }
   };
+
+  // নতুন ফাংশন: কোনো ভেরিফিকেশন কোড না পাঠিয়ে, শুধু ইমেইলের ডোমেইনে সত্যিই
+  // মেইল সার্ভার (MX record) আছে কিনা তা Google-এর ফ্রি পাবলিক DNS API দিয়ে চেক করে।
+  // এতে টাইপো করা বা ভুয়া ডোমেইনের ইমেইল ধরা পড়বে।
+  // নোট: এটা ১০০% নিশ্চিত করে না যে ইমেইল অ্যাড্রেসটা আসলেই বাস্তবে ব্যবহৃত হচ্ছে —
+  // সেটা নিশ্চিত করতে ভেরিফিকেশন কোড ছাড়া কোনো ফ্রি উপায় নেই।
+  const checkEmailDomainIsReal = async (emailAddress) => {
+    const domain = emailAddress.split('@')[1];
+    if (!domain) return false;
+    try {
+      const res = await fetch(`https://dns.google/resolve?name=${domain}&type=MX`);
+      const data = await res.json();
+      return data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
+    } catch (err) {
+      console.error("Email domain check failed:", err);
+      // নেটওয়ার্ক/API সমস্যা হলে বৈধ ইউজারকে আটকানো হচ্ছে না
+      return true;
+    }
+  };
+
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
@@ -69,7 +89,9 @@ export default function Login() {
         }
 
         if (!isApprovedTrue) {
-          alert("🚨 Your ID has been removed! Please go to the Sign Up option and send a new application or request again.");
+          // ফিক্স: আগে এখানে "removed" মেসেজ দেখাত, যদিও ইউজারটা আসলে শুধু
+          // pending (এখনো admin অনুমোদন দেয়নি) — এখন সঠিক আলাদা মেসেজ দেখাচ্ছে
+          alert("⏳ Your ID application is still pending admin approval. Please wait until an admin approves your request.");
           await auth.signOut(); 
           setTimeout(() => { window.location.reload(); }, 300);
           return;
@@ -97,6 +119,13 @@ export default function Login() {
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(email)) {
       alert("🚨 Please use a correct and valid email address!");
+      return;
+    }
+
+    // নতুন: ইমেইল ডোমেইন অনলাইনে যাচাই — কোনো কোড পাঠানো হচ্ছে না
+    const isEmailDomainReal = await checkEmailDomainIsReal(email);
+    if (!isEmailDomainReal) {
+      alert("🚨 এই ইমেইল ঠিকানাটি সঠিক বলে মনে হচ্ছে না (এই ডোমেইনে কোনো মেইল সার্ভার পাওয়া যায়নি)। সঠিক ইমেইল দিয়ে আবার চেষ্টা করুন।");
       return;
     }
 
@@ -134,6 +163,21 @@ export default function Login() {
         try {
           const loginCredential = await signInWithEmailAndPassword(auth, email, password);
           const existingUser = loginCredential.user;
+
+          // ফিক্স: re-application-এর আগে চেক করা হচ্ছে যে এই ইমেইলটা কোনো Admin
+          // অ্যাকাউন্টের কিনা। আগে এই চেক না থাকায়, কেউ যদি কোনোভাবে admin-এর
+          // পাসওয়ার্ড মিলিয়ে ফেলত, তাহলে re-application ফ্লো admin-এর role এবং
+          // approved স্ট্যাটাস "student"/false দিয়ে ওভাররাইট করে দিত (demote bug)।
+          const existingDocSnap = await getDoc(doc(db, "users", existingUser.uid));
+          const existingData = existingDocSnap.exists() ? existingDocSnap.data() : null;
+          const isExistingAdmin = existingData && (existingData.role === "admin" || existingData.role === "Admin");
+
+          if (isExistingAdmin) {
+            alert("❌ This email belongs to an Admin account and cannot be re-applied through Sign Up.");
+            await auth.signOut();
+            setTimeout(() => { window.location.reload(); }, 300);
+            return;
+          }
 
           await updateProfile(existingUser, { displayName: name });
 

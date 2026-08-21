@@ -5,7 +5,7 @@ import { getFirestore } from "firebase/firestore";
 // Your actual Firebase configuration keys
 const firebaseConfig = {
   apiKey: "AIzaSyB_kkFWUwfTzjBZsc6V9ui2dE4qHrMp9nY",
-  authDomain: "://firebaseapp.com",
+  authDomain: "student-connect-ffa4a.firebaseapp.com",
   projectId: "student-connect-ffa4a",
   storageBucket: "student-connect-ffa4a.firebasestorage.app",
   messagingSenderId: "952632040307",

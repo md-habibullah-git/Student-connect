@@ -176,6 +176,15 @@ export default function PersonalChat() {
   const recordingAudioCtxRef = useRef(null);
   const recordingRafRef = useRef(null);
 
+  // 🔧 NEW: stable container ref + a "have we already joined" guard, so the
+  // Zego room is only ever joined ONCE per call — previously the container
+  // used an inline arrow-function ref, which React re-invokes on every
+  // re-render (e.g. every time a new chat message arrives), silently
+  // triggering a second joinRoom() call for the same user and causing
+  // "Failed to join the room" (error 1002099).
+  const videoContainerRef = useRef(null);
+  const zpInstanceRef = useRef(null);
+
   const [receiverOnline, setReceiverOnline] = useState(false);
 
   const initialMessagesLoadedRef = useRef(false);
@@ -233,13 +242,8 @@ export default function PersonalChat() {
     return () => unsubscribeUsers();
   }, []);
 
-  // 🔧 REMOVED: this component no longer writes its own online/offline presence.
-  // GlobalAlerts.jsx (mounted once in App.jsx) now owns presence for the whole
-  // app session, so the green dot stays accurate no matter which page is open —
-  // previously, leaving this page turned you "offline" even if you were still
-  // using the app elsewhere.
-
-  // still request browser notification permission once, up front.
+  // request browser notification permission once, up front (presence itself
+  // is now owned by GlobalAlerts.jsx, mounted once in App.jsx).
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
@@ -265,7 +269,7 @@ export default function PersonalChat() {
     return () => clearInterval(interval);
   }, [isRecording]);
 
-  // 🔧 NEW: if GlobalAlerts sent us here to auto-join an already-ringing call
+  // if GlobalAlerts sent us here to auto-join an already-ringing call
   // (its floating "Receive" button), skip the local incoming-call prompt and
   // jump straight into the call once we know it's actually still ringing.
   useEffect(() => {
@@ -275,6 +279,16 @@ export default function PersonalChat() {
       navigate(location.pathname, { replace: true, state: {} });
     }
   }, [location.state, incomingCall]);
+
+  // 🔧 NEW: join the Zego room exactly once, the moment both "inCall" is true
+  // AND the container div actually exists in the DOM — replaces the old
+  // re-render-triggered inline ref callback.
+  useEffect(() => {
+    if (inCall && videoContainerRef.current && !zpInstanceRef.current) {
+      startVideoCall(videoContainerRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inCall]);
 
   useEffect(() => {
     if (!receiverId) return;
@@ -287,8 +301,6 @@ export default function PersonalChat() {
       setMessages(newMessages);
       scrollToBottom();
 
-      // 🔧 NEW: mark this room "read as of now" so Messenger.jsx's unread-count
-      // query (createdAt > this timestamp) resets while the chat is open.
       localStorage.setItem(`lastRead_personal_${chatRoomId}`, String(Date.now()));
 
       if (initialMessagesLoadedRef.current) {
@@ -680,14 +692,19 @@ export default function PersonalChat() {
     setInCall(true);
   };
 
+  // 🔧 NEW: page reloads whenever a call ends — whether it was hung up after
+  // talking, or declined/ignored before ever joining — so the app is
+  // guaranteed to start from a clean state instead of any leftover call UI.
   const endCall = async () => {
     await updateDoc(doc(db, "personal-calls", chatRoomId), { status: "ended" });
-    setIncomingCall(null);
-    setInCall(false);
+    window.location.reload();
   };
 
+  // 🔧 FIX: guarded against double-invocation, and Zego's own pre-join
+  // "enter your name" screen is skipped (showPreJoinView: false) — that
+  // screen was the one showing mismatched light/dark styling on mobile.
   const startVideoCall = async (element) => {
-    if (!element) return;
+    if (!element || zpInstanceRef.current) return;
     const appID = 32790448;
     const serverSecret = "50737a7cc9627401b05b40c83eff3c2e";
     
@@ -696,6 +713,7 @@ export default function PersonalChat() {
     );
 
     const zp = ZegoUIKitPrebuilt.create(kitToken);
+    zpInstanceRef.current = zp;
     zp.joinRoom({
       container: element,
       scenario: { 
@@ -708,6 +726,7 @@ export default function PersonalChat() {
           showUserList: false
         }
       },
+      showPreJoinView: false,
       showScreenSharingButton: true,
       onLeaveRoom: () => { endCall(); }
     });
@@ -792,7 +811,7 @@ export default function PersonalChat() {
 
       {inCall ? (
         <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div ref={startVideoCall} style={{ width: '100%', flex: 1, height: '100%' }} />
+          <div ref={videoContainerRef} style={{ width: '100%', flex: 1, height: '100%' }} />
         </div>
       ) : (
         <>
