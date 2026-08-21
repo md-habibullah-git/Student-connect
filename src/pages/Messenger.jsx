@@ -13,10 +13,14 @@ export default function Messenger() {
   // users/{uid}.online field that GlobalAlerts.jsx keeps up to date app-wide)
   const [onlineMap, setOnlineMap] = useState({});
 
-  // 🔧 NEW: unread message counts — per-student for personal chats, and one
+  // unread message counts — per-student for personal chats, and one
   // combined count for the Campus Global Room card.
   const [unreadCounts, setUnreadCounts] = useState({});
   const [globalUnreadCount, setGlobalUnreadCount] = useState(0);
+
+  // 🔧 NEW: last activity timestamp per student's shared room, used to sort
+  // the list so whoever you most recently chatted with floats to the top.
+  const [roomActivity, setRoomActivity] = useState({});
 
   const currentUid = auth.currentUser?.uid;
 
@@ -49,10 +53,10 @@ export default function Messenger() {
     return () => unsubscribe();
   }, []);
 
-  // 🔧 NEW: per-student unread count. For each visible student, watch their
-  // shared room doc — whenever it changes (a new message arrived), re-run a
-  // lightweight count query for messages sent after this device's last-read
-  // marker for that room.
+  // per-student unread count + last-activity timestamp. For each visible
+  // student, watch their shared room doc — whenever it changes (a new
+  // message arrived), re-run a lightweight count query, and record the
+  // room's lastActive time for sorting the list.
   useEffect(() => {
     if (!currentUid || users.length === 0) return;
 
@@ -65,8 +69,14 @@ export default function Messenger() {
         return onSnapshot(roomRef, async (snap) => {
           if (!snap.exists()) {
             setUnreadCounts((prev) => ({ ...prev, [user.uid]: 0 }));
+            setRoomActivity((prev) => ({ ...prev, [user.uid]: 0 }));
             return;
           }
+
+          const data = snap.data();
+          // 🔧 NEW: record when this room was last active, for sorting
+          setRoomActivity((prev) => ({ ...prev, [user.uid]: data.lastActive || 0 }));
+
           try {
             const lastReadTimestamp = Number(localStorage.getItem(`lastRead_personal_${chatRoomId}`)) || 0;
             const messagesRef = collection(db, "personal-rooms", chatRoomId, "messages");
@@ -82,7 +92,7 @@ export default function Messenger() {
     return () => unsubscribers.forEach((unsub) => unsub && unsub());
   }, [users, currentUid]);
 
-  // 🔧 NEW: unread count for the Campus Global Room card
+  // unread count for the Campus Global Room card
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
@@ -107,13 +117,22 @@ export default function Messenger() {
     }
   };
 
+  // 🔧 NEW: whoever you most recently chatted with floats to the top; students
+  // with no chat history yet keep their original order at the bottom.
+  const sortedUsers = [...users].sort((a, b) => {
+    const aTime = roomActivity[a.uid] || 0;
+    const bTime = roomActivity[b.uid] || 0;
+    return bTime - aTime;
+  });
+
   return (
     <div style={{ maxWidth: '600px', margin: '20px auto', fontFamily: 'Arial', padding: '0 15px' }}>
       <h2 style={{ borderBottom: '2px solid #0056b3', paddingBottom: '10px', color: '#0056b3', textAlign: 'center', marginBottom: '20px' }}>
         Student Messenger 💬
       </h2>
       
-      {/* Campus Global Chat & Conference Room Card Button */}
+      {/* Campus Global Chat & Conference Room Card Button — 🔧 always stays
+          fixed at the top, unaffected by the recency sorting below */}
       <div 
         onClick={() => navigate('/chat/global/Global-Chatroom')}
         style={{ 
@@ -142,7 +161,6 @@ export default function Messenger() {
         <div style={{ flex: 1, color: '#fff' }}>
           <strong style={{ fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px', letterSpacing: '0.3px' }}>
             Campus Global Room 👥
-            {/* 🔧 NEW: unread badge next to the Global Room name */}
             {globalUnreadCount > 0 && (
               <span style={{ background: '#ff3b30', color: '#fff', fontSize: '11px', fontWeight: 'bold', minWidth: '20px', height: '20px', borderRadius: '10px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px' }}>
                 {globalUnreadCount > 99 ? '99+' : globalUnreadCount}
@@ -154,9 +172,10 @@ export default function Messenger() {
         <div style={{ fontSize: '18px', color: '#fff', paddingRight: '5px' }}>⚡</div>
       </div>
 
-      {/* Grid container for formatting students profile display windows */}
+      {/* Grid container for formatting students profile display windows —
+          🔧 now rendered from sortedUsers (most recently chatted first) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '15px' }}>
-        {users.map(user => (
+        {sortedUsers.map(user => (
           <div 
             key={user.id} 
             onClick={() => startChat(user)}
@@ -197,7 +216,6 @@ export default function Messenger() {
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContext: 'center' }}>
               <strong style={{ fontSize: '16px', color: '#ffffff', display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}> {/* ⚡ Fixed: Font size has been set to 16 pixels, just like the text of the global box */}
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.name}</span>
-                {/* 🔧 NEW: unread badge next to the student's name */}
                 {unreadCounts[user.uid] > 0 && (
                   <span style={{ background: '#ff3b30', color: '#fff', fontSize: '10px', fontWeight: 'bold', minWidth: '18px', height: '18px', borderRadius: '9px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px', flexShrink: 0 }}>
                     {unreadCounts[user.uid] > 99 ? '99+' : unreadCounts[user.uid]}
