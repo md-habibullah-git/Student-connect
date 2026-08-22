@@ -194,6 +194,7 @@ export default function GlobalChat() {
   const [usersCache, setUsersCache] = useState({}); 
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
+  const [activeCallType, setActiveCallType] = useState('video'); // 'video' | 'audio'
   const [incomingCall, setIncomingCall] = useState(null);
   const [showRejoinBtn, setShowRejoinBtn] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState(null);
@@ -589,13 +590,22 @@ export default function GlobalChat() {
 
   // gets (or reuses) the local camera/mic stream, shared across every peer
   // connection in the mesh
-  const getLocalStream = async () => {
+  const getLocalStream = async (callType = 'video') => {
     if (localStreamRef.current) return localStreamRef.current;
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
     localStreamRef.current = stream;
-    if (localVideoRef.current) localVideoRef.current.srcObject = stream;
     return stream;
   };
+
+  // ফিক্স: <video> এলিমেন্ট শুধু inCall === true হলেই DOM-এ তৈরি হয়, কিন্তু আগের
+  // কোড stream পাওয়ার সাথে সাথেই (inCall সেট হওয়ার আগেই) localVideoRef-এ
+  // srcObject বসানোর চেষ্টা করত — তখন ref null থাকায় নিজের প্রিভিউ কখনো দেখা যেত না।
+  // এই effect inCall সত্যি হওয়ার পর (ভিডিও ট্যাগ DOM-এ আসার পর) স্ট্রিমটা আবার বসিয়ে দেয়।
+  useEffect(() => {
+    if (inCall && localVideoRef.current && localStreamRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+    }
+  }, [inCall]);
 
   // MESH connections: for every pair (me, peer), whichever UID sorts first
   // alphabetically is always the "offerer" — this way both sides agree on
@@ -725,10 +735,11 @@ export default function GlobalChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inCall]);
 
-  const initiateGlobalCall = async () => {
+  const initiateGlobalCall = async (callType = 'video') => {
     try {
-      await getLocalStream();
-      await setDoc(doc(db, "global-calls", globalRoomId), { status: "ringing", hostName: currentUserName, hostId: currentUid, roomId: globalRoomId, participants: [currentUid] });
+      await getLocalStream(callType);
+      await setDoc(doc(db, "global-calls", globalRoomId), { status: "ringing", callType, hostName: currentUserName, hostId: currentUid, roomId: globalRoomId, participants: [currentUid] });
+      setActiveCallType(callType);
       setInCall(true);
     } catch (err) {
       console.error("Error initiating global call:", err);
@@ -738,14 +749,18 @@ export default function GlobalChat() {
 
   const handleRejoinCall = async () => {
     try {
-      await getLocalStream();
       const callDocRef = doc(db, "global-calls", globalRoomId);
       const snapshot = await getDoc(callDocRef);
       if (snapshot.exists()) {
-        const updatedParts = snapshot.data().participants || [];
+        const data = snapshot.data();
+        const callType = data.callType || 'video'; // পুরনো কল ডেটায় callType না থাকলে video ধরে নেওয়া হয়
+        await getLocalStream(callType);
+        const updatedParts = data.participants || [];
         if (!updatedParts.includes(currentUid)) updatedParts.push(currentUid);
         await updateDoc(callDocRef, { participants: updatedParts });
-        setIncomingCall(null); setInCall(true);
+        setIncomingCall(null);
+        setActiveCallType(callType);
+        setInCall(true);
       }
     } catch (err) {
       console.error("Error rejoining call:", err);
@@ -779,7 +794,8 @@ export default function GlobalChat() {
         else await updateDoc(callDocRef, { participants: updatedParts });
       }
       setInCall(false);
-    } catch (err) { console.error("Error leaving global call:", err); setInCall(false); }
+      setActiveCallType('video');
+    } catch (err) { console.error("Error leaving global call:", err); setInCall(false); setActiveCallType('video'); }
   };
 
   const toggleMenu = (e, msgId) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
@@ -790,6 +806,27 @@ export default function GlobalChat() {
       <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
       <line x1="12" y1="19" x2="12" y2="23"></line>
       <line x1="8" y1="23" x2="16" y2="23"></line>
+    </svg>
+  );
+
+  // ফিক্স: আগে হ্যাংআপ বাটনে 📴 ইমোজি ছিল, যেটা কিছু ব্রাউজার/ফন্টে ঠিকভাবে
+  // রেন্ডার না হয়ে "OFF" টেক্সট দেখাচ্ছিল — তাই আসল SVG আইকন ব্যবহার করা হলো
+  const HangUpIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-1 1c-1.24 0-2.45-.2-3.57-.57a1 1 0 0 1-.68-.95v-3.5a1 1 0 0 1 .74-.97A17.9 17.9 0 0 1 12 7c1.99 0 3.91.31 5.71.88a1 1 0 0 1 .74.97v3.5a1 1 0 0 1-.68.95 11.9 11.9 0 0 1-3.57.57 1 1 0 0 1-1-1v-3.1A17.9 17.9 0 0 0 12 9z" />
+    </svg>
+  );
+
+  const VideoCallIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="23 7 16 12 23 17 23 7"></polygon>
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+    </svg>
+  );
+
+  const AudioCallIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path>
     </svg>
   );
 
@@ -821,21 +858,43 @@ export default function GlobalChat() {
       
       {inCall && (
         <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, Math.min(Math.ceil(Math.sqrt(Object.keys(remoteStreams).length + 1)), 3))}, 1fr)`, gap: '4px', padding: '4px', overflow: 'auto' }}>
-            <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
-              <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>You</span>
+          {activeCallType === 'audio' ? (
+            // অডিও কনফারেন্সে ভিডিও ট্র্যাক থাকে না, তাই খালি গ্রিডের বদলে
+            // অংশগ্রহণকারীদের নামসহ একটা সাধারণ "অডিও কল চলছে" ভিউ দেখানো হচ্ছে
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '18px', color: '#fff' }}>
+              <div style={{ width: '90px', height: '90px', borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' }}>🎙️</div>
+              <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio conference — {Object.keys(remoteStreams).length + 1} in the call</p>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', padding: '0 20px' }}>
+                <span style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>You</span>
+                {Object.keys(remoteStreams).map(uid => (
+                  <span key={uid} style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>{usersCache[uid]?.name || 'Student'}</span>
+                ))}
+              </div>
+              {/* audio still needs to actually play — kept off-screen since there's nothing to show visually */}
+              <video ref={localVideoRef} autoPlay playsInline muted style={{ display: 'none' }} />
+              {Object.entries(remoteStreams).map(([uid, stream]) => (
+                <div key={uid} style={{ display: 'none' }}>
+                  <RemoteVideoTile stream={stream} label={usersCache[uid]?.name || 'Student'} />
+                </div>
+              ))}
             </div>
-            {Object.entries(remoteStreams).map(([uid, stream]) => (
-              <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />
-            ))}
-          </div>
+          ) : (
+            <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, Math.min(Math.ceil(Math.sqrt(Object.keys(remoteStreams).length + 1)), 3))}, 1fr)`, gap: '4px', padding: '4px', overflow: 'auto' }}>
+              <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
+                <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>You</span>
+              </div>
+              {Object.entries(remoteStreams).map(([uid, stream]) => (
+                <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />
+              ))}
+            </div>
+          )}
           <button
             onClick={leaveGlobalCall}
             title="Leave call"
-            style={{ alignSelf: 'center', margin: '14px 0', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', flexShrink: 0 }}
+            style={{ alignSelf: 'center', margin: '14px 0', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', flexShrink: 0 }}
           >
-            📴
+            <HangUpIcon />
           </button>
         </div>
       )}
@@ -850,7 +909,19 @@ export default function GlobalChat() {
       <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
         <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px', textAlign: 'center', flex: 1 }}>Campus Global Room 👥</h3>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>{!inCall && !showRejoinBtn && <button onClick={initiateGlobalCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 18px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>📞 Conference 📹</button>}{!inCall && showRejoinBtn && <button onClick={handleRejoinCall} className="rejoin-pulse-btn">🟢 Rejoin Call 📹</button>}</div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {!inCall && !showRejoinBtn && (
+            <>
+              <button onClick={() => initiateGlobalCall('video')} title="Start video conference" style={{ background: '#28a745', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <VideoCallIcon />
+              </button>
+              <button onClick={() => initiateGlobalCall('audio')} title="Start audio conference" style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <AudioCallIcon />
+              </button>
+            </>
+          )}
+          {!inCall && showRejoinBtn && <button onClick={handleRejoinCall} className="rejoin-pulse-btn">🟢 Rejoin Call</button>}
+        </div>
       </div>
       {!inCall && (
         <>

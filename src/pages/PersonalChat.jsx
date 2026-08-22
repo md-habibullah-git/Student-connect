@@ -184,6 +184,7 @@ export default function PersonalChat() {
   
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
+  const [activeCallType, setActiveCallType] = useState('video'); // 'video' | 'audio'
   const [incomingCall, setIncomingCall] = useState(null);
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
@@ -732,23 +733,34 @@ export default function PersonalChat() {
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
   };
 
-  // CALLER side: opens camera/mic, creates the SDP offer, writes it (and
-  // trickled ICE candidates) into personal-calls/{chatRoomId}, then waits
-  // for the other person's answer + candidates.
-  const initiateCall = async () => {
+  // ফিক্স: <video> এলিমেন্ট দুটো শুধু inCall === true হলেই DOM-এ তৈরি হয়, কিন্তু
+  // আগের কোড stream পাওয়ার সাথে সাথেই (inCall সেট হওয়ার আগেই) localVideoRef/
+  // remoteVideoRef-এ srcObject বসানোর চেষ্টা করত — তখন ref null থাকায় স্ট্রিম
+  // কখনো ভিডিও ট্যাগে বসতই না (কালো স্ক্রিন, কোনো শব্দও না)। এই effect
+  // inCall সত্যি হওয়ার পর (অর্থাৎ <video> ট্যাগ DOM-এ আসার পর) স্ট্রিমগুলো
+  // (ইতিমধ্যে ref-এ জমা থাকা) আবার সংযুক্ত করে দেয়।
+  useEffect(() => {
+    if (inCall) {
+      if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current;
+      if (remoteVideoRef.current && remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
+    }
+  }, [inCall]);
+
+  // CALLER side: opens camera/mic (video+audio, or audio-only), creates the
+  // SDP offer, writes it (and trickled ICE candidates) into
+  // personal-calls/{chatRoomId}, then waits for the other person's answer.
+  const initiateCall = async (callType = 'video') => {
     try {
       cleanupCallLocally();
       const pc = new RTCPeerConnection(rtcConfiguration);
       peerConnectionRef.current = pc;
       registerPeerConnectionListeners(pc);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
       localStreamRef.current = stream;
-      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       remoteStreamRef.current = new MediaStream();
-      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
       pc.addEventListener('track', (event) => {
         event.streams[0].getTracks().forEach(track => remoteStreamRef.current.addTrack(track));
       });
@@ -764,6 +776,7 @@ export default function PersonalChat() {
 
       await setDoc(callRef, {
         status: "ringing",
+        callType,
         hostName: currentUserName,
         hostId: currentUid,
         hostPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
@@ -798,6 +811,7 @@ export default function PersonalChat() {
         });
       });
 
+      setActiveCallType(callType);
       setInCall(true);
     } catch (err) {
       console.error("Error starting call:", err);
@@ -806,9 +820,9 @@ export default function PersonalChat() {
     }
   };
 
-  // CALLEE side: reads the offer already sitting in personal-calls/{chatRoomId},
-  // opens camera/mic, creates the SDP answer, and starts trickling ICE
-  // candidates + listening for the caller's.
+  // CALLEE side: reads the offer (and requested callType) already sitting
+  // in personal-calls/{chatRoomId}, opens matching camera/mic, creates the
+  // SDP answer, and starts trickling ICE candidates + listening for the caller's.
   const answerIncomingCall = async () => {
     try {
       cleanupCallLocally();
@@ -818,19 +832,19 @@ export default function PersonalChat() {
         setIncomingCall(null);
         return;
       }
-      const offer = callSnap.data().offer;
+      const callData = callSnap.data();
+      const offer = callData.offer;
+      const callType = callData.callType || 'video'; // পুরনো কল ডেটায় callType না থাকলে video ধরে নেওয়া হয়
 
       const pc = new RTCPeerConnection(rtcConfiguration);
       peerConnectionRef.current = pc;
       registerPeerConnectionListeners(pc);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
       localStreamRef.current = stream;
-      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       remoteStreamRef.current = new MediaStream();
-      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
       pc.addEventListener('track', (event) => {
         event.streams[0].getTracks().forEach(track => remoteStreamRef.current.addTrack(track));
       });
@@ -869,6 +883,7 @@ export default function PersonalChat() {
       });
 
       setIncomingCall(null);
+      setActiveCallType(callType);
       setInCall(true);
     } catch (err) {
       console.error("Error answering call:", err);
@@ -901,6 +916,7 @@ export default function PersonalChat() {
     cleanupCallLocally();
     setIncomingCall(null);
     setInCall(false);
+    setActiveCallType('video');
   };
 
   // camera/mic and the peer connection must not keep running if the user
@@ -921,6 +937,27 @@ export default function PersonalChat() {
       <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
       <line x1="12" y1="19" x2="12" y2="23"></line>
       <line x1="8" y1="23" x2="16" y2="23"></line>
+    </svg>
+  );
+
+  // ফিক্স: আগে হ্যাংআপ বাটনে 📴 ইমোজি ছিল, যেটা কিছু ব্রাউজার/ফন্টে ঠিকভাবে
+  // রেন্ডার না হয়ে "OFF" টেক্সট দেখাচ্ছিল — তাই আসল SVG আইকন ব্যবহার করা হলো
+  const HangUpIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-1 1c-1.24 0-2.45-.2-3.57-.57a1 1 0 0 1-.68-.95v-3.5a1 1 0 0 1 .74-.97A17.9 17.9 0 0 1 12 7c1.99 0 3.91.31 5.71.88a1 1 0 0 1 .74.97v3.5a1 1 0 0 1-.68.95 11.9 11.9 0 0 1-3.57.57 1 1 0 0 1-1-1v-3.1A17.9 17.9 0 0 0 12 9z" />
+    </svg>
+  );
+
+  const VideoCallIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="23 7 16 12 23 17 23 7"></polygon>
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+    </svg>
+  );
+
+  const AudioCallIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path>
     </svg>
   );
 
@@ -970,8 +1007,11 @@ export default function PersonalChat() {
             {receiverOnline && (
               <span title="Online" style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid rgba(255,255,255,0.6)', display: 'inline-block' }} />
             )}
-            <button onClick={initiateCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 18px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              📞 Start Call 📹
+            <button onClick={() => initiateCall('video')} title="Video call" style={{ background: '#28a745', color: 'white', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <VideoCallIcon />
+            </button>
+            <button onClick={() => initiateCall('audio')} title="Audio call" style={{ background: '#0056b3', color: 'white', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <AudioCallIcon />
             </button>
           </div>
         )}
@@ -990,13 +1030,21 @@ export default function PersonalChat() {
       {inCall ? (
         <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
           <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }} />
-          <video ref={localVideoRef} autoPlay playsInline muted style={{ position: 'absolute', bottom: '16px', right: '16px', width: '110px', height: '150px', objectFit: 'cover', borderRadius: '10px', border: '2px solid #fff', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', background: '#000' }} />
+          {activeCallType === 'audio' && (
+            // অডিও কলে ভিডিও ট্র্যাক থাকে না, তাই খালি কালো স্ক্রিনের বদলে
+            // একটা স্পষ্ট "অডিও কল চলছে" ইঙ্গিত দেখানো হচ্ছে
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', color: '#fff', background: '#111' }}>
+              <div style={{ width: '90px', height: '90px', borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' }}>🎙️</div>
+              <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio call with {receiverName}</p>
+            </div>
+          )}
+          <video ref={localVideoRef} autoPlay playsInline muted style={{ position: 'absolute', bottom: '16px', right: '16px', width: '110px', height: '150px', objectFit: 'cover', borderRadius: '10px', border: '2px solid #fff', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', background: '#000', display: activeCallType === 'audio' ? 'none' : 'block' }} />
           <button
             onClick={endCall}
             title="Hang up"
-            style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)' }}
+            style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)' }}
           >
-            📴
+            <HangUpIcon />
           </button>
         </div>
       ) : (
