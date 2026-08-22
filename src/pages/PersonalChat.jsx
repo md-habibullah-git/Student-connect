@@ -3,11 +3,28 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { 
   collection, addDoc, query, orderBy, onSnapshot, doc, 
-  setDoc, updateDoc, getDocs, where, deleteDoc 
+  setDoc, updateDoc, getDoc, getDocs, where, deleteDoc 
 } from 'firebase/firestore';
-import { ZegoUIKitPrebuilt } from '@zegocloud/zego-uikit-prebuilt';
+
+// WebRTC ICE configuration: Google's free STUN servers + a free public TURN
+// relay (OpenRelay/Metered.ca — shared, no signup, but rate-limited). This
+// replaces ZegoCloud's managed infrastructure, so calls between people on
+// "difficult" networks (mobile data, strict campus wifi/NAT) now depend on
+// this TURN relay working. For real production reliability, swap these
+// credentials for your own dedicated TURN server (e.g. metered.ca, Twilio).
+const rtcConfiguration = {
+  iceServers: [
+    { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+  ],
+  iceCandidatePoolSize: 10,
+};
 
 const MAX_VOICE_BASE64_LENGTH = 1100000;
+const MAX_VIDEO_BASE64_LENGTH = 1100000; // Firestore-এর প্রতি-ডকুমেন্ট ১MB হার্ড লিমিটের নিচে রাখতে
+const MAX_VIDEO_RAW_BYTES = 750000; // ~750KB raw ≈ base64 এনকোডিংয়ের পর ~1MB-এর নিচে থাকবে
 const MAX_RECORDING_SECONDS = 30;
 
 // Self-contained voice message player — circular play/pause button next to a
@@ -66,7 +83,15 @@ function VoiceMessageBubble({ src, isMe }) {
 
   useEffect(() => {
     drawIdleBars();
-    return () => cancelAnimationFrame(rafRef.current);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      // ফিক্স: AudioContext বন্ধ না করলে প্রতিটা ভয়েস মেসেজ বাবল আনমাউন্ট হওয়ার
+      // পরও ব্রাউজারে খোলা থেকে যায় (মেমরি/রিসোর্স লিক)
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -176,16 +201,16 @@ export default function PersonalChat() {
   const recordingAudioCtxRef = useRef(null);
   const recordingRafRef = useRef(null);
 
-  // 🔧 NEW: stable container ref + a "have we already joined" guard, so the
-  // Zego room is only ever joined ONCE per call — previously the container
-  // used an inline arrow-function ref, which React re-invokes on every
-  // re-render (e.g. every time a new chat message arrives), silently
-  // triggering a second joinRoom() call for the same user and causing
-  // "Failed to join the room" (error 1002099).
-  const videoContainerRef = useRef(null);
-  const zpInstanceRef = useRef(null);
-
   const [receiverOnline, setReceiverOnline] = useState(false);
+
+  // WebRTC (Firestore-signaled) call state
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const unsubscribeCallSignalRef = useRef(null);
+  const unsubscribeCandidatesRef = useRef(null);
 
   const initialMessagesLoadedRef = useRef(false);
 
@@ -213,9 +238,11 @@ export default function PersonalChat() {
         const oldMessagesQuery = query(msgCollectionRef, where("createdAt", "<", sevenDaysAgoTimestamp));
         const snapshot = await getDocs(oldMessagesQuery);
         
-        snapshot.forEach(async (docSnapshot) => {
-          await deleteDoc(doc(db, "personal-rooms", chatRoomId, "messages", docSnapshot.id));
-        });
+        // ফিক্স: forEach(async...) ব্যবহার করলে delete গুলো await হতো না এবং
+        // কোনো এরর হলে সেটা silently হারিয়ে যেত — এখন Promise.all দিয়ে সঠিকভাবে await হচ্ছে
+        await Promise.all(
+          snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "personal-rooms", chatRoomId, "messages", docSnapshot.id)))
+        );
       } catch (error) {
         console.error("Firebase Auto Cleanup Error:", error);
       }
@@ -274,21 +301,11 @@ export default function PersonalChat() {
   // jump straight into the call once we know it's actually still ringing.
   useEffect(() => {
     if (location.state?.autoJoinCall && incomingCall) {
-      setIncomingCall(null);
-      setInCall(true);
+      answerIncomingCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
-  }, [location.state, incomingCall]);
-
-  // 🔧 NEW: join the Zego room exactly once, the moment both "inCall" is true
-  // AND the container div actually exists in the DOM — replaces the old
-  // re-render-triggered inline ref callback.
-  useEffect(() => {
-    if (inCall && videoContainerRef.current && !zpInstanceRef.current) {
-      startVideoCall(videoContainerRef.current);
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inCall]);
+  }, [location.state, incomingCall]);
 
   useEffect(() => {
     if (!receiverId) return;
@@ -388,8 +405,11 @@ export default function PersonalChat() {
         setInput('');
       }
 
-      selectedFiles.forEach(async (fileData) => {
-        await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
+      // ফিক্স: forEach(async...) ব্যবহার করলে এই ফাইলগুলো ঠিকমতো পাঠানো হয়েছে কিনা
+      // নিশ্চিত না হয়েই setSelectedFiles([]) চলে যেত এবং এরর ধরাও পড়ত না —
+      // এখন Promise.all দিয়ে সব ফাইল সত্যিই পাঠানো শেষ হওয়া পর্যন্ত অপেক্ষা করা হচ্ছে
+      await Promise.all(selectedFiles.map((fileData) =>
+        addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
           text: "", 
           fileUrl: fileData.url,
           fileType: fileData.type,
@@ -400,8 +420,8 @@ export default function PersonalChat() {
           isEdited: false,
           isDeleted: false,
           replyTo: replyData
-        });
-      });
+        })
+      ));
 
       setSelectedFiles([]); 
       setReplyToMessage(null); 
@@ -475,16 +495,21 @@ export default function PersonalChat() {
         };
         reader.readAsDataURL(file);
       } else if (fileType === 'video') {
-        if (file.size > 10000000) {
-          alert(`⚠️ "${fileName}" video file size exceeds the optimization threshold!`);
+        // ফিক্স: আগে ১০MB পর্যন্ত ভিডিও নেওয়া হতো, কিন্তু Firestore-এর প্রতিটা
+        // ডকুমেন্টের হার্ড লিমিট মাত্র ১MB এবং ভিডিও এখানে আসলে কম্প্রেসও হয় না
+        // (শুধু ছবি হয়) — তাই ৮০০KB-এর বড় প্রায় সব ভিডিওই পরে ব্যর্থ হয়ে "compressed
+        // size exceeded" জাতীয় ভুল/বিভ্রান্তিকর মেসেজ দেখাত। এখন প্রথম ধাপেই বাস্তবসম্মত
+        // সীমা চেক করা হচ্ছে এবং মেসেজও সঠিক করা হয়েছে।
+        if (file.size > MAX_VIDEO_RAW_BYTES) {
+          alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`);
           return;
         }
 
         const reader = new FileReader();
         reader.onload = (event) => {
           const base64Result = event.target.result;
-          if (base64Result.length > 1100000) {
-            alert(`⚠️ "${fileName}" compressed size structural limits exceeded!`);
+          if (base64Result.length > MAX_VIDEO_BASE64_LENGTH) {
+            alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`);
             return;
           }
           setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: base64Result, type: 'video' }]);
@@ -678,59 +703,212 @@ export default function PersonalChat() {
     );
   };
 
+  const registerPeerConnectionListeners = (pc) => {
+    pc.addEventListener('icegatheringstatechange', () => {
+      console.log(`ICE gathering state changed: ${pc.iceGatheringState}`);
+    });
+    pc.addEventListener('connectionstatechange', () => {
+      console.log(`Connection state change: ${pc.connectionState}`);
+    });
+    pc.addEventListener('signalingstatechange', () => {
+      console.log(`Signaling state change: ${pc.signalingState}`);
+    });
+    pc.addEventListener('iceconnectionstatechange', () => {
+      console.log(`ICE connection state change: ${pc.iceConnectionState}`);
+    });
+  };
+
+  // stops local camera/mic, closes the peer connection, and detaches
+  // Firestore listeners — WITHOUT touching the "personal-calls" document
+  // itself (used both for a clean hangup and for reacting to the other
+  // side ending the call).
+  const cleanupCallLocally = () => {
+    if (unsubscribeCallSignalRef.current) { unsubscribeCallSignalRef.current(); unsubscribeCallSignalRef.current = null; }
+    if (unsubscribeCandidatesRef.current) { unsubscribeCandidatesRef.current(); unsubscribeCandidatesRef.current = null; }
+    if (peerConnectionRef.current) { peerConnectionRef.current.close(); peerConnectionRef.current = null; }
+    if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
+    if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach(track => track.stop()); remoteStreamRef.current = null; }
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+  };
+
+  // CALLER side: opens camera/mic, creates the SDP offer, writes it (and
+  // trickled ICE candidates) into personal-calls/{chatRoomId}, then waits
+  // for the other person's answer + candidates.
   const initiateCall = async () => {
-    await setDoc(doc(db, "personal-calls", chatRoomId), {
-      status: "ringing",
-      hostName: currentUserName,
-      hostId: currentUid,
-      hostPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-      receiverId: targetUid,
-      receiverName: receiverName,
-      participants: [currentUid, targetUid],
-      roomId: chatRoomId
-    });
-    setInCall(true);
-  };
+    try {
+      cleanupCallLocally();
+      const pc = new RTCPeerConnection(rtcConfiguration);
+      peerConnectionRef.current = pc;
+      registerPeerConnectionListeners(pc);
 
-  // 🔧 NEW: page reloads whenever a call ends — whether it was hung up after
-  // talking, or declined/ignored before ever joining — so the app is
-  // guaranteed to start from a clean state instead of any leftover call UI.
-  const endCall = async () => {
-    await updateDoc(doc(db, "personal-calls", chatRoomId), { status: "ended" });
-    window.location.reload();
-  };
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-  // 🔧 FIX: guarded against double-invocation, and Zego's own pre-join
-  // "enter your name" screen is skipped (showPreJoinView: false) — that
-  // screen was the one showing mismatched light/dark styling on mobile.
-  const startVideoCall = async (element) => {
-    if (!element || zpInstanceRef.current) return;
-    const appID = 32790448;
-    const serverSecret = "50737a7cc9627401b05b40c83eff3c2e";
-    
-    const kitToken = ZegoUIKitPrebuilt.generateKitTokenForTest(
-      appID, serverSecret, chatRoomId, currentUid, currentUserName
-    );
+      remoteStreamRef.current = new MediaStream();
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      pc.addEventListener('track', (event) => {
+        event.streams[0].getTracks().forEach(track => remoteStreamRef.current.addTrack(track));
+      });
 
-    const zp = ZegoUIKitPrebuilt.create(kitToken);
-    zpInstanceRef.current = zp;
-    zp.joinRoom({
-      container: element,
-      scenario: { 
-        mode: ZegoUIKitPrebuilt.OneONoneCall,
-        config: {
-          showPlayingInMobile: true,
-          showControlBarInMobile: true,
-          showLayoutButton: false,
-          showScreenSharingButton: true,
-          showUserList: false
+      const callRef = doc(db, "personal-calls", chatRoomId);
+      const callerCandidatesRef = collection(callRef, "callerCandidates");
+      pc.addEventListener('icecandidate', (event) => {
+        if (event.candidate) addDoc(callerCandidatesRef, event.candidate.toJSON());
+      });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      await setDoc(callRef, {
+        status: "ringing",
+        hostName: currentUserName,
+        hostId: currentUid,
+        hostPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+        receiverId: targetUid,
+        receiverName: receiverName,
+        participants: [currentUid, targetUid],
+        roomId: chatRoomId,
+        offer: { type: offer.type, sdp: offer.sdp }
+      });
+
+      // wait for the callee's answer, and react if the call gets ended remotely
+      unsubscribeCallSignalRef.current = onSnapshot(callRef, async (snap) => {
+        const data = snap.data();
+        if (!data) return;
+        if (data.answer && pc.signalingState !== 'closed' && !pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         }
-      },
-      showPreJoinView: false,
-      showScreenSharingButton: true,
-      onLeaveRoom: () => { endCall(); }
-    });
+        if (data.status === 'ended') {
+          cleanupCallLocally();
+          setIncomingCall(null);
+          setInCall(false);
+        }
+      });
+
+      // trickle in the callee's ICE candidates as they arrive
+      const calleeCandidatesRef = collection(callRef, "calleeCandidates");
+      unsubscribeCandidatesRef.current = onSnapshot(calleeCandidatesRef, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
+          }
+        });
+      });
+
+      setInCall(true);
+    } catch (err) {
+      console.error("Error starting call:", err);
+      alert("🎤 Could not start the call. Camera/microphone permission may be needed.");
+      cleanupCallLocally();
+    }
   };
+
+  // CALLEE side: reads the offer already sitting in personal-calls/{chatRoomId},
+  // opens camera/mic, creates the SDP answer, and starts trickling ICE
+  // candidates + listening for the caller's.
+  const answerIncomingCall = async () => {
+    try {
+      cleanupCallLocally();
+      const callRef = doc(db, "personal-calls", chatRoomId);
+      const callSnap = await getDoc(callRef);
+      if (!callSnap.exists() || !callSnap.data().offer) {
+        setIncomingCall(null);
+        return;
+      }
+      const offer = callSnap.data().offer;
+
+      const pc = new RTCPeerConnection(rtcConfiguration);
+      peerConnectionRef.current = pc;
+      registerPeerConnectionListeners(pc);
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      remoteStreamRef.current = new MediaStream();
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      pc.addEventListener('track', (event) => {
+        event.streams[0].getTracks().forEach(track => remoteStreamRef.current.addTrack(track));
+      });
+
+      const calleeCandidatesRef = collection(callRef, "calleeCandidates");
+      pc.addEventListener('icecandidate', (event) => {
+        if (event.candidate) addDoc(calleeCandidatesRef, event.candidate.toJSON());
+      });
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      await updateDoc(callRef, {
+        status: "accepted",
+        answer: { type: answer.type, sdp: answer.sdp }
+      });
+
+      // trickle in the caller's ICE candidates as they arrive
+      const callerCandidatesRef = collection(callRef, "callerCandidates");
+      unsubscribeCandidatesRef.current = onSnapshot(callerCandidatesRef, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
+          }
+        });
+      });
+
+      // react if the call gets ended remotely
+      unsubscribeCallSignalRef.current = onSnapshot(callRef, (snap) => {
+        if (snap.data()?.status === 'ended') {
+          cleanupCallLocally();
+          setIncomingCall(null);
+          setInCall(false);
+        }
+      });
+
+      setIncomingCall(null);
+      setInCall(true);
+    } catch (err) {
+      console.error("Error answering call:", err);
+      alert("🎤 Could not join the call. Camera/microphone permission may be needed.");
+      cleanupCallLocally();
+      setIncomingCall(null);
+    }
+  };
+
+  // Hangup: whichever side clicks this marks the call "ended" in Firestore
+  // (so the other side's listener above reacts), then wipes the signaling
+  // data (offer/answer/ICE candidates) and the call document itself so
+  // nothing lingers for the next call in this room.
+  const endCall = async () => {
+    const callRef = doc(db, "personal-calls", chatRoomId);
+    try {
+      await updateDoc(callRef, { status: "ended" }).catch(() => {});
+      const [callerCandidates, calleeCandidates] = await Promise.all([
+        getDocs(collection(callRef, "callerCandidates")),
+        getDocs(collection(callRef, "calleeCandidates"))
+      ]);
+      await Promise.all([
+        ...callerCandidates.docs.map(c => deleteDoc(c.ref)),
+        ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
+      ]);
+      await deleteDoc(callRef).catch(() => {});
+    } catch (err) {
+      console.error("Error ending call:", err);
+    }
+    cleanupCallLocally();
+    setIncomingCall(null);
+    setInCall(false);
+  };
+
+  // camera/mic and the peer connection must not keep running if the user
+  // navigates away from this chat entirely while still in a call
+  useEffect(() => {
+    return () => { cleanupCallLocally(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const toggleMenu = (e, msgId) => {
     e.stopPropagation();
@@ -803,15 +981,23 @@ export default function PersonalChat() {
         <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 999, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
           <p style={{ margin: '0 0 12px 0', fontWeight: 'bold', color: '#333' }}>📞 {receiverName} is calling you...</p>
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-            <button onClick={() => { setIncomingCall(null); setInCall(true); }} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Receive</button>
+            <button onClick={answerIncomingCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Receive</button>
             <button onClick={endCall} style={{ background: '#dc3545', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer' }}>Decline</button>
           </div>
         </div>
       )}
 
       {inCall ? (
-        <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div ref={videoContainerRef} style={{ width: '100%', flex: 1, height: '100%' }} />
+        <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+          <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }} />
+          <video ref={localVideoRef} autoPlay playsInline muted style={{ position: 'absolute', bottom: '16px', right: '16px', width: '110px', height: '150px', objectFit: 'cover', borderRadius: '10px', border: '2px solid #fff', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', background: '#000' }} />
+          <button
+            onClick={endCall}
+            title="Hang up"
+            style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)' }}
+          >
+            📴
+          </button>
         </div>
       ) : (
         <>

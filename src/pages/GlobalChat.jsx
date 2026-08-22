@@ -5,10 +5,39 @@ import {
   collection, addDoc, onSnapshot, query, orderBy, limit, 
   serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where 
 } from 'firebase/firestore';
-import { ZegoUIKitPrebuilt } from '@zegocloud/zego-uikit-prebuilt';
+
+// same ICE configuration as PersonalChat.jsx — Google STUN + a free public
+// TURN relay (OpenRelay/Metered.ca, shared/rate-limited). See the note in
+// PersonalChat.jsx for production-hardening advice.
+const rtcConfiguration = {
+  iceServers: [
+    { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+  ],
+  iceCandidatePoolSize: 10,
+};
 
 const MAX_VOICE_BASE64_LENGTH = 1100000;
+const MAX_VIDEO_BASE64_LENGTH = 1100000; // Firestore-এর প্রতি-ডকুমেন্ট ১MB হার্ড লিমিটের নিচে রাখতে
+const MAX_VIDEO_RAW_BYTES = 750000; // ~750KB raw ≈ base64 এনকোডিংয়ের পর ~1MB-এর নিচে থাকবে
 const MAX_RECORDING_SECONDS = 30;
+
+// one tile in the group-call grid — MediaStream objects can't go directly
+// in JSX, so each remote peer's stream is attached to its own <video> via a ref.
+function RemoteVideoTile({ stream, label }) {
+  const videoRef = useRef(null);
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.srcObject = stream;
+  }, [stream]);
+  return (
+    <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
+      <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
+    </div>
+  );
+}
 
 // identical voice message player used in PersonalChat.jsx — circular
 // play/pause button + a canvas that draws the audio's REAL frequency data
@@ -66,7 +95,15 @@ function VoiceMessageBubble({ src, isMe }) {
 
   useEffect(() => {
     drawIdleBars();
-    return () => cancelAnimationFrame(rafRef.current);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      // ফিক্স: AudioContext বন্ধ না করলে প্রতিটা ভয়েস মেসেজ বাবল আনমাউন্ট হওয়ার
+      // পরও ব্রাউজারে খোলা থেকে যায় (মেমরি/রিসোর্স লিক)
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -175,13 +212,6 @@ export default function GlobalChat() {
   const recordingAudioCtxRef = useRef(null);
   const recordingRafRef = useRef(null);
 
-  // 🔧 NEW: stable container ref + "already joined" guard — the old inline
-  // arrow-function ref re-fired on every re-render (e.g. every new chat
-  // message while in the call), silently triggering a second joinRoom() call
-  // and causing "Failed to join the room" (error 1002099).
-  const videoContainerRef = useRef(null);
-  const zpInstanceRef = useRef(null);
-
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
     const saved = localStorage.getItem(`global_deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
     return saved ? JSON.parse(saved) : [];
@@ -191,6 +221,15 @@ export default function GlobalChat() {
   const fileInputRef = useRef(null); 
 
   const inCallRef = useRef(false);
+
+  // WebRTC (Firestore-signaled, mesh) group call state
+  const localVideoRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const peerConnectionsRef = useRef({});   // { [peerUid]: RTCPeerConnection }
+  const peerUnsubscribersRef = useRef({}); // { [peerUid]: [unsubscribeFns] }
+  const remoteStreamsMapRef = useRef({});  // { [peerUid]: MediaStream }
+  const knownPeersRef = useRef(new Set());
+  const [remoteStreams, setRemoteStreams] = useState({}); // triggers re-render for new video tiles
   
   const currentUid = auth.currentUser?.uid || "unknown_user";
   const currentUserName = auth.currentUser?.displayName || "Campus Student";
@@ -202,9 +241,11 @@ export default function GlobalChat() {
         sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7); 
         const oldMessagesQuery = query(collection(db, "global-room-messages"), where("createdAt", "<", sevenDaysAgo));
         const snapshot = await getDocs(oldMessagesQuery);
-        snapshot.forEach(async (docSnapshot) => {
-          await deleteDoc(doc(db, "global-room-messages", docSnapshot.id));
-        });
+        // ফিক্স: forEach(async...) ব্যবহার করলে delete গুলো await হতো না এবং কোনো
+        // এরর হলে সেটা silently হারিয়ে যেত — এখন Promise.all দিয়ে সঠিকভাবে await হচ্ছে
+        await Promise.all(
+          snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "global-room-messages", docSnapshot.id)))
+        );
       } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
     };
     autoCleanOldGlobalMessages();
@@ -253,15 +294,6 @@ export default function GlobalChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state, showRejoinBtn]);
 
-  // 🔧 NEW: join the Zego room exactly once, the moment both "inCall" is true
-  // AND the container div actually exists in the DOM.
-  useEffect(() => {
-    if (inCall && videoContainerRef.current && !zpInstanceRef.current) {
-      startGlobalVideoCall(videoContainerRef.current);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inCall]);
-
   useEffect(() => {
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "asc"), limit(100));
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
@@ -274,7 +306,7 @@ export default function GlobalChat() {
       snapshot.docs.forEach(doc => {
         const data = doc.data();
         const uidKey = data.uid || doc.id;
-        cache[uidKey] = { photo: data.photo || "", online: data.online === true };
+        cache[uidKey] = { photo: data.photo || "", online: data.online === true, name: data.name || "" };
       });
       setUsersCache(cache);
     });
@@ -334,7 +366,9 @@ export default function GlobalChat() {
       } catch (error) { console.error("Error sending text message:", error); }
     }
 
-    selectedFiles.forEach(async (fileData) => {
+    // ফিক্স: forEach(async...) ব্যবহার করলে এই ফাইলগুলো ঠিকমতো পাঠানো শেষ হওয়ার
+    // আগেই setSelectedFiles([]) চলে যেত — এখন Promise.all দিয়ে ঠিকভাবে অপেক্ষা করা হচ্ছে
+    await Promise.all(selectedFiles.map(async (fileData) => {
       try {
         await addDoc(collection(db, "global-room-messages"), {
           text: "", fileUrl: fileData.url, fileType: fileData.type, fileName: fileData.name,
@@ -343,7 +377,7 @@ export default function GlobalChat() {
           createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
         });
       } catch (error) { console.error("Error sending file to firestore:", error); }
-    });
+    }));
     setSelectedFiles([]); setReplyToMessage(null); 
   };
 
@@ -388,15 +422,19 @@ export default function GlobalChat() {
           img.src = event.target.result;
         };
         reader.readAsDataURL(file);
-      } else if (fileType === 'video' && file.size <= 10000000) {
+      } else if (fileType === 'video' && file.size <= MAX_VIDEO_RAW_BYTES) {
+        // ফিক্স: আগে ১০MB পর্যন্ত ভিডিও নেওয়া হতো, কিন্তু Firestore-এর প্রতিটা
+        // ডকুমেন্টের হার্ড লিমিট মাত্র ১MB এবং ভিডিও এখানে আসলে কম্প্রেসও হয় না —
+        // তাই ৮০০KB-এর বড় প্রায় সব ভিডিওই পরে ব্যর্থ হয়ে বিভ্রান্তিকর মেসেজ দেখাত।
+        // এখন প্রথম ধাপেই বাস্তবসম্মত সীমা চেক করা হচ্ছে এবং মেসেজও সঠিক করা হয়েছে।
         const reader = new FileReader();
         reader.onload = (event) => {
-          if (event.target.result.length <= 1100000) {
+          if (event.target.result.length <= MAX_VIDEO_BASE64_LENGTH) {
             setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: event.target.result, type: 'video' }]);
-          } else { alert(`⚠️ "${fileName}" exceeds database transaction frame capacity!`); }
+          } else { alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`); }
         };
         reader.readAsDataURL(file);
-      } else if (file.size > 10000000) { alert(`⚠️ "${fileName}" video file size exceeds the strict optimization limit!`); }
+      } else if (fileType === 'video') { alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`); }
     });
     e.target.value = null; 
   };
@@ -549,13 +587,158 @@ export default function GlobalChat() {
     }
   };
 
+  // gets (or reuses) the local camera/mic stream, shared across every peer
+  // connection in the mesh
+  const getLocalStream = async () => {
+    if (localStreamRef.current) return localStreamRef.current;
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localStreamRef.current = stream;
+    if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+    return stream;
+  };
+
+  // MESH connections: for every pair (me, peer), whichever UID sorts first
+  // alphabetically is always the "offerer" — this way both sides agree on
+  // who initiates without needing to coordinate who joined first.
+  // Signaling lives at global-calls/{roomId}/connections/{pairKey}, with
+  // "candidatesA"/"candidatesB" subcollections for trickled ICE candidates.
+  const connectToPeer = async (peerUid) => {
+    if (!peerUid || peerUid === currentUid || peerConnectionsRef.current[peerUid]) return;
+
+    const isInitiator = currentUid < peerUid;
+    const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
+    const connRef = doc(db, "global-calls", globalRoomId, "connections", pairKey);
+    const myCandidatesRef = collection(connRef, isInitiator ? "candidatesA" : "candidatesB");
+    const theirCandidatesRef = collection(connRef, isInitiator ? "candidatesB" : "candidatesA");
+
+    try {
+      const pc = new RTCPeerConnection(rtcConfiguration);
+      peerConnectionsRef.current[peerUid] = pc;
+
+      const stream = await getLocalStream();
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      const remoteStream = new MediaStream();
+      remoteStreamsMapRef.current[peerUid] = remoteStream;
+      setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
+      pc.addEventListener('track', (event) => {
+        event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+      });
+
+      pc.addEventListener('icecandidate', (event) => {
+        if (event.candidate) addDoc(myCandidatesRef, event.candidate.toJSON());
+      });
+
+      const unsubscribers = [
+        onSnapshot(theirCandidatesRef, (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added') {
+              pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
+            }
+          });
+        })
+      ];
+
+      if (isInitiator) {
+        // fresh start for this pair — clear any stale offer/answer/candidates
+        // left over from a previous call between these two people
+        const [staleA, staleB] = await Promise.all([
+          getDocs(collection(connRef, "candidatesA")),
+          getDocs(collection(connRef, "candidatesB"))
+        ]);
+        await Promise.all([...staleA.docs, ...staleB.docs].map(d => deleteDoc(d.ref)));
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } });
+
+        unsubscribers.push(onSnapshot(connRef, async (snap) => {
+          const data = snap.data();
+          if (data?.answer && !pc.currentRemoteDescription) {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          }
+        }));
+      } else {
+        unsubscribers.push(onSnapshot(connRef, async (snap) => {
+          const data = snap.data();
+          if (data?.offer && !pc.currentRemoteDescription) {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
+          }
+        }));
+      }
+
+      peerUnsubscribersRef.current[peerUid] = unsubscribers;
+    } catch (err) {
+      console.error(`Error connecting to peer ${peerUid}:`, err);
+    }
+  };
+
+  const disconnectFromPeer = (peerUid) => {
+    const pc = peerConnectionsRef.current[peerUid];
+    if (pc) { pc.close(); delete peerConnectionsRef.current[peerUid]; }
+    const unsubs = peerUnsubscribersRef.current[peerUid];
+    if (unsubs) { unsubs.forEach(u => u && u()); delete peerUnsubscribersRef.current[peerUid]; }
+    if (remoteStreamsMapRef.current[peerUid]) {
+      remoteStreamsMapRef.current[peerUid].getTracks().forEach(track => track.stop());
+      delete remoteStreamsMapRef.current[peerUid];
+    }
+    setRemoteStreams(prev => {
+      const next = { ...prev };
+      delete next[peerUid];
+      return next;
+    });
+  };
+
+  // while in the call view, watch the room's participant list and
+  // connect/disconnect peer connections to match it in real time
+  useEffect(() => {
+    if (!inCall) {
+      Object.keys(peerConnectionsRef.current).forEach(disconnectFromPeer);
+      knownPeersRef.current = new Set();
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
+      }
+      if (localVideoRef.current) localVideoRef.current.srcObject = null;
+      return;
+    }
+
+    const callRef = doc(db, "global-calls", globalRoomId);
+    const unsubscribe = onSnapshot(callRef, (snap) => {
+      if (!snap.exists()) return;
+      const otherParticipants = (snap.data().participants || []).filter(uid => uid !== currentUid);
+      const currentSet = new Set(otherParticipants);
+
+      otherParticipants.forEach(uid => {
+        if (!knownPeersRef.current.has(uid)) connectToPeer(uid);
+      });
+      knownPeersRef.current.forEach(uid => {
+        if (!currentSet.has(uid)) disconnectFromPeer(uid);
+      });
+      knownPeersRef.current = currentSet;
+    });
+
+    return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inCall]);
+
   const initiateGlobalCall = async () => {
-    try { await setDoc(doc(db, "global-calls", globalRoomId), { status: "ringing", hostName: currentUserName, hostId: currentUid, roomId: globalRoomId, participants: [currentUid] }); setInCall(true); } 
-    catch (err) { console.error("Error initiating global call:", err); }
+    try {
+      await getLocalStream();
+      await setDoc(doc(db, "global-calls", globalRoomId), { status: "ringing", hostName: currentUserName, hostId: currentUid, roomId: globalRoomId, participants: [currentUid] });
+      setInCall(true);
+    } catch (err) {
+      console.error("Error initiating global call:", err);
+      alert("🎤 Could not start the conference. Camera/microphone permission may be needed.");
+    }
   };
 
   const handleRejoinCall = async () => {
     try {
+      await getLocalStream();
       const callDocRef = doc(db, "global-calls", globalRoomId);
       const snapshot = await getDoc(callDocRef);
       if (snapshot.exists()) {
@@ -564,7 +747,10 @@ export default function GlobalChat() {
         await updateDoc(callDocRef, { participants: updatedParts });
         setIncomingCall(null); setInCall(true);
       }
-    } catch (err) { console.error("Error rejoining call:", err); }
+    } catch (err) {
+      console.error("Error rejoining call:", err);
+      alert("🎤 Could not join the conference. Camera/microphone permission may be needed.");
+    }
   };
 
   const leaveGlobalCallBeacon = () => {
@@ -580,8 +766,9 @@ export default function GlobalChat() {
     } catch (err) { /* best effort only */ }
   };
 
-  // 🔧 NEW: reload the page once I've actually left the conference call after
-  // being in it, so the app always resumes from a clean state.
+  // leaving removes me from the participants list in Firestore, then
+  // setInCall(false) triggers the effect above to tear down every peer
+  // connection and stop the camera/mic.
   const leaveGlobalCall = async () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
@@ -591,24 +778,8 @@ export default function GlobalChat() {
         if (updatedParts.length === 0) await deleteDoc(callDocRef);
         else await updateDoc(callDocRef, { participants: updatedParts });
       }
-      window.location.reload();
-    } catch (err) {
-      console.error("Error leaving global call:", err);
-      window.location.reload();
-    }
-  };
-
-  // 🔧 FIX: guarded against double-invocation, and Zego's own pre-join
-  // "enter your name" screen is skipped (showPreJoinView: false).
-  const startGlobalVideoCall = async (element) => {
-    if (!element || zpInstanceRef.current) return;
-    const zp = ZegoUIKitPrebuilt.create(ZegoUIKitPrebuilt.generateKitTokenForTest(32790448, "50737a7cc9627401b05b40c83eff3c2e", globalRoomId, currentUid, currentUserName));
-    zpInstanceRef.current = zp;
-    zp.joinRoom({
-      container: element, scenario: { mode: ZegoUIKitPrebuilt.GroupCall, config: { showPlayingInMobile: true, showControlBarInMobile: true, showLayoutButton: true, showScreenSharingButton: true, showUserList: true } }, 
-      showPreJoinView: false,
-      showScreenSharingButton: true, turnOnCameraWhenJoining: true, turnOnMicrophoneWhenJoining: true, useFrontCamera: true, onLeaveRoom: () => { leaveGlobalCall(); }
-    });
+      setInCall(false);
+    } catch (err) { console.error("Error leaving global call:", err); setInCall(false); }
   };
 
   const toggleMenu = (e, msgId) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
@@ -648,7 +819,26 @@ export default function GlobalChat() {
         .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
       `}</style>
       
-      {inCall && <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000' }}><div ref={videoContainerRef} style={{ width: '100%', height: '100%' }} /></div>}
+      {inCall && (
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, Math.min(Math.ceil(Math.sqrt(Object.keys(remoteStreams).length + 1)), 3))}, 1fr)`, gap: '4px', padding: '4px', overflow: 'auto' }}>
+            <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
+              <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>You</span>
+            </div>
+            {Object.entries(remoteStreams).map(([uid, stream]) => (
+              <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />
+            ))}
+          </div>
+          <button
+            onClick={leaveGlobalCall}
+            title="Leave call"
+            style={{ alignSelf: 'center', margin: '14px 0', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', fontSize: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', flexShrink: 0 }}
+          >
+            📴
+          </button>
+        </div>
+      )}
       
       {incomingCall && !inCall && (
         <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 999, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>

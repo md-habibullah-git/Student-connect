@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'; 
 import { db } from '../firebase'; 
-import { collection, doc, updateDoc, deleteDoc, onSnapshot, getDocs } from 'firebase/firestore'; 
+import { collection, doc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where, getDoc } from 'firebase/firestore'; 
 
 export default function AdminPanel() { 
   const [pendingUsers, setPendingUsers] = useState([]); 
@@ -80,19 +80,58 @@ export default function AdminPanel() {
     } 
   }; 
 
-  // নতুন: এই ইউজারের সাথে সম্পর্কিত সব personal-rooms এবং তার ভেতরের সব মেসেজ স্থায়ীভাবে মুছে দেয়,
-  // যাতে reject/remove করার পর মনে হয় এই ইউজার কখনো কোনো মেসেজ বা রুম তৈরিই করেনি
+  // নতুন: এই ইউজারের সাথে সম্পর্কিত সব চ্যাট/কল ডেটা (প্রাইভেট রুম, গ্লোবাল চ্যাট
+  // মেসেজ, প্রাইভেট কল, গ্লোবাল কনফারেন্স কল উপস্থিতি) স্থায়ীভাবে মুছে দেয়,
+  // যাতে reject/remove করার পর মনে হয় এই ইউজার কখনো এই মেসেঞ্জারে কিছুই করেনি
   const wipeAllChatDataForUser = async (uid) => {
     try {
+      // ১) প্রাইভেট চ্যাট রুম ও তার সব মেসেজ
       const roomsSnap = await getDocs(collection(db, "personal-rooms"));
       const relatedRooms = roomsSnap.docs.filter(roomDoc => roomDoc.id.split("_").includes(uid));
-
       for (const roomDoc of relatedRooms) {
         const messagesSnap = await getDocs(collection(db, "personal-rooms", roomDoc.id, "messages"));
         await Promise.all(
           messagesSnap.docs.map(msgDoc => deleteDoc(doc(db, "personal-rooms", roomDoc.id, "messages", msgDoc.id)))
         );
         await deleteDoc(doc(db, "personal-rooms", roomDoc.id));
+      }
+
+      // ২) এই ইউজারের পাঠানো সব গ্লোবাল (পাবলিক) চ্যাট মেসেজ
+      const globalMsgsSnap = await getDocs(query(collection(db, "global-room-messages"), where("senderUid", "==", uid)));
+      await Promise.all(globalMsgsSnap.docs.map(m => deleteDoc(doc(db, "global-room-messages", m.id))));
+
+      // ৩) এই ইউজার জড়িত এমন সব প্রাইভেট কল সেশন
+      const personalCallsSnap = await getDocs(query(collection(db, "personal-calls"), where("participants", "array-contains", uid)));
+      await Promise.all(personalCallsSnap.docs.map(c => deleteDoc(doc(db, "personal-calls", c.id))));
+
+      // ৪) গ্লোবাল কনফারেন্স কল-এ এই ইউজার host/participant থাকলে সেখান থেকে সরানো
+      const globalCallRef = doc(db, "global-calls", "campus_global_conference_room");
+      const globalCallSnap = await getDoc(globalCallRef);
+      if (globalCallSnap.exists()) {
+        const callData = globalCallSnap.data();
+        if (callData.hostId === uid) {
+          await deleteDoc(globalCallRef);
+        } else if ((callData.participants || []).includes(uid)) {
+          const updatedParts = (callData.participants || []).filter(id => id !== uid);
+          if (updatedParts.length === 0) {
+            await deleteDoc(globalCallRef);
+          } else {
+            await updateDoc(globalCallRef, { participants: updatedParts });
+          }
+        }
+      }
+
+      // ৫) নতুন: গ্লোবাল কল-এর WebRTC signaling ডেটা (connections সাব-কালেকশন) থেকেও
+      // এই ইউজার জড়িত এমন সব জোড়া (pair) এবং তাদের ICE candidates মুছে ফেলা
+      const connectionsSnap = await getDocs(collection(db, "global-calls", "campus_global_conference_room", "connections"));
+      const relatedConnections = connectionsSnap.docs.filter(c => c.id.split("_").includes(uid));
+      for (const connDoc of relatedConnections) {
+        const [candidatesA, candidatesB] = await Promise.all([
+          getDocs(collection(db, "global-calls", "campus_global_conference_room", "connections", connDoc.id, "candidatesA")),
+          getDocs(collection(db, "global-calls", "campus_global_conference_room", "connections", connDoc.id, "candidatesB"))
+        ]);
+        await Promise.all([...candidatesA.docs, ...candidatesB.docs].map(d => deleteDoc(d.ref)));
+        await deleteDoc(connDoc.ref);
       }
     } catch (err) {
       console.error("Error wiping chat data for user:", err);
