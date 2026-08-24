@@ -5,6 +5,7 @@ import {
   collection, addDoc, onSnapshot, query, orderBy, limit, 
   serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where 
 } from 'firebase/firestore';
+import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 
 // same ICE configuration as PersonalChat.jsx — Google STUN + a free public
 // TURN relay (OpenRelay/Metered.ca, shared/rate-limited). See the note in
@@ -195,9 +196,9 @@ export default function GlobalChat() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
   const [activeCallType, setActiveCallType] = useState('video'); // 'video' | 'audio'
-  const [incomingCall, setIncomingCall] = useState(null);
   const [showRejoinBtn, setShowRejoinBtn] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState(null);
+  const [avatarMenuFor, setAvatarMenuFor] = useState(null); // নতুন: কোন মেসেজের ছবির উপর ক্লিক করে View Profile/Message মেনু খোলা হয়েছে
   const [replyToMessage, setReplyToMessage] = useState(null);
 
   const [isRecording, setIsRecording] = useState(false);
@@ -223,13 +224,25 @@ export default function GlobalChat() {
 
   const inCallRef = useRef(false);
 
-  // WebRTC (Firestore-signaled, mesh) group call state
+  // WebRTC (Firestore-signaled, mesh) group call state.
+  // নতুন: localStream/peerConnections/etc আর plain local ref না — বরং
+  // callSession.js-এর একটা shared session অবজেক্টের ভেতরের ফিল্ড। এই পেজ
+  // থেকে সরে গেলেও (Back চাপলে) একই অবজেক্ট module-এ বেঁচে থাকে, তাই কল
+  // চলতেই থাকে — PersonalChat.jsx-এর মতোই।
   const localVideoRef = useRef(null);
-  const localStreamRef = useRef(null);
-  const peerConnectionsRef = useRef({});   // { [peerUid]: RTCPeerConnection }
-  const peerUnsubscribersRef = useRef({}); // { [peerUid]: [unsubscribeFns] }
-  const remoteStreamsMapRef = useRef({});  // { [peerUid]: MediaStream }
-  const knownPeersRef = useRef(new Set());
+  const sessionRef = useRef(null); // { callType, localStream, peerConnections, peerUnsubscribers, remoteStreams, knownPeers }
+
+  const ensureSession = () => {
+    if (!sessionRef.current) {
+      const existing = getActiveGlobalCallSession();
+      sessionRef.current = existing || {
+        callType: 'video', localStream: null,
+        peerConnections: {}, peerUnsubscribers: {}, remoteStreams: {}, knownPeers: new Set()
+      };
+    }
+    return sessionRef.current;
+  };
+
   const [remoteStreams, setRemoteStreams] = useState({}); // triggers re-render for new video tiles
   
   const currentUid = auth.currentUser?.uid || "unknown_user";
@@ -320,21 +333,18 @@ export default function GlobalChat() {
           if (participants.length === 0) {
             deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
             setShowRejoinBtn(false);
-            setIncomingCall(null);
             setInCall(false);
             return;
           }
           setShowRejoinBtn(true);
-          if (callData.hostId !== currentUid && !inCall) setIncomingCall(callData);
         }
       } else {
         setShowRejoinBtn(false);
-        setIncomingCall(null);
         setInCall(false);
       }
     });
 
-    const handleOutsideClick = () => setActiveMenuId(null);
+    const handleOutsideClick = () => { setActiveMenuId(null); setAvatarMenuFor(null); };
     window.addEventListener('click', handleOutsideClick);
     return () => {
       unsubscribeMessages(); unsubscribeUsers(); unsubscribeCall();
@@ -395,7 +405,11 @@ export default function GlobalChat() {
     setActiveMenuId(null); 
     if (window.confirm("Are you sure you want to delete this message?")) {
       if (isSenderMe) {
-        try { await updateDoc(doc(db, "global-room-messages", msgId), { text: "", fileUrl: "", fileType: "", isDeleted: true }); } 
+        // ফিক্স: text/fileUrl/fileType আর খালি করা হচ্ছে না — শুধু isDeleted:true
+        // সেট হচ্ছে। normal ইউজাররা এমনিতেই isDeleted flag দেখে "deleted" দেখে
+        // (নিচের render-এ), আসল কনটেন্ট রয়ে যাওয়ায় ৭ দিনের মধ্যে অ্যাডমিন
+        // প্যানেল থেকে ডিলিট করা মেসেজও দেখা যাবে।
+        try { await updateDoc(doc(db, "global-room-messages", msgId), { isDeleted: true }); } 
         catch (error) { console.error("Error deleting message globally:", error); }
       } else {
         const updatedDeletedIds = [...localDeletedIds, msgId];
@@ -591,19 +605,49 @@ export default function GlobalChat() {
   // gets (or reuses) the local camera/mic stream, shared across every peer
   // connection in the mesh
   const getLocalStream = async (callType = 'video') => {
-    if (localStreamRef.current) return localStreamRef.current;
+    const s = ensureSession();
+    if (s.localStream) return s.localStream;
     const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
-    localStreamRef.current = stream;
+    s.localStream = stream;
+    s.callType = callType;
     return stream;
   };
+
+  // নতুন: এই রুমে ইতিমধ্যে একটা চলমান গ্রুপ কল থাকলে (অন্য পেজে গিয়ে "Back"
+  // চেপে ফিরে এসেছেন) সেটাতে আবার যুক্ত হও — session module-এ যা আছে তাই ব্যবহার হয়
+  useEffect(() => {
+    const existing = getActiveGlobalCallSession();
+    if (existing && (existing.localStream || Object.keys(existing.peerConnections).length > 0)) {
+      sessionRef.current = existing;
+      setActiveCallType(existing.callType || 'video');
+      setRemoteStreams({ ...existing.remoteStreams });
+      setInCall(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // session অন্য কোথাও (GlobalAlerts কেন্দ্রীয়ভাবে "সবাই চলে গেছে" শনাক্ত করলে)
+  // পরিষ্কার হয়ে গেলে এই কম্পোনেন্টের লোকাল UI-ও রিসেট হবে
+  useEffect(() => {
+    const unsubscribe = subscribeActiveGlobalCallSession((s) => {
+      if (!s) {
+        sessionRef.current = null;
+        setInCall(false);
+        setActiveCallType('video');
+        setRemoteStreams({});
+        if (localVideoRef.current) localVideoRef.current.srcObject = null;
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   // ফিক্স: <video> এলিমেন্ট শুধু inCall === true হলেই DOM-এ তৈরি হয়, কিন্তু আগের
   // কোড stream পাওয়ার সাথে সাথেই (inCall সেট হওয়ার আগেই) localVideoRef-এ
   // srcObject বসানোর চেষ্টা করত — তখন ref null থাকায় নিজের প্রিভিউ কখনো দেখা যেত না।
   // এই effect inCall সত্যি হওয়ার পর (ভিডিও ট্যাগ DOM-এ আসার পর) স্ট্রিমটা আবার বসিয়ে দেয়।
   useEffect(() => {
-    if (inCall && localVideoRef.current && localStreamRef.current) {
-      localVideoRef.current.srcObject = localStreamRef.current;
+    if (inCall && localVideoRef.current && sessionRef.current?.localStream) {
+      localVideoRef.current.srcObject = sessionRef.current.localStream;
     }
   }, [inCall]);
 
@@ -613,7 +657,8 @@ export default function GlobalChat() {
   // Signaling lives at global-calls/{roomId}/connections/{pairKey}, with
   // "candidatesA"/"candidatesB" subcollections for trickled ICE candidates.
   const connectToPeer = async (peerUid) => {
-    if (!peerUid || peerUid === currentUid || peerConnectionsRef.current[peerUid]) return;
+    const s = ensureSession();
+    if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
 
     const isInitiator = currentUid < peerUid;
     const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
@@ -623,13 +668,13 @@ export default function GlobalChat() {
 
     try {
       const pc = new RTCPeerConnection(rtcConfiguration);
-      peerConnectionsRef.current[peerUid] = pc;
+      s.peerConnections[peerUid] = pc;
 
-      const stream = await getLocalStream();
+      const stream = await getLocalStream(s.callType);
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       const remoteStream = new MediaStream();
-      remoteStreamsMapRef.current[peerUid] = remoteStream;
+      s.remoteStreams[peerUid] = remoteStream;
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       pc.addEventListener('track', (event) => {
         event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
@@ -637,6 +682,16 @@ export default function GlobalChat() {
 
       pc.addEventListener('icecandidate', (event) => {
         if (event.candidate) addDoc(myCandidatesRef, event.candidate.toJSON());
+      });
+
+      // নতুন: কারো ব্রাউজার ক্র্যাশ করলে/হঠাৎ নেট চলে গেলে (সঠিক hangup সিগন্যাল
+      // ছাড়াই) সেই মানুষের সাথে connection চিরতরে "failed" অবস্থায় আটকে থাকতে
+      // পারে — কালো টাইল হয়ে থেকে যায়, রুমও কখনো খালি হয় না। যে কেউ এই failure
+      // ধরতে পারলেই সেই "ghost" পার্টিসিপ্যান্টকে রুম থেকে সরিয়ে দেয়।
+      pc.addEventListener('connectionstatechange', () => {
+        if (pc.connectionState === 'failed') {
+          removeStalePeerFromRoom(peerUid);
+        }
       });
 
       const unsubscribers = [
@@ -680,20 +735,22 @@ export default function GlobalChat() {
         }));
       }
 
-      peerUnsubscribersRef.current[peerUid] = unsubscribers;
+      s.peerUnsubscribers[peerUid] = unsubscribers;
     } catch (err) {
       console.error(`Error connecting to peer ${peerUid}:`, err);
     }
   };
 
   const disconnectFromPeer = (peerUid) => {
-    const pc = peerConnectionsRef.current[peerUid];
-    if (pc) { pc.close(); delete peerConnectionsRef.current[peerUid]; }
-    const unsubs = peerUnsubscribersRef.current[peerUid];
-    if (unsubs) { unsubs.forEach(u => u && u()); delete peerUnsubscribersRef.current[peerUid]; }
-    if (remoteStreamsMapRef.current[peerUid]) {
-      remoteStreamsMapRef.current[peerUid].getTracks().forEach(track => track.stop());
-      delete remoteStreamsMapRef.current[peerUid];
+    const s = sessionRef.current;
+    if (!s) return;
+    const pc = s.peerConnections[peerUid];
+    if (pc) { pc.close(); delete s.peerConnections[peerUid]; }
+    const unsubs = s.peerUnsubscribers[peerUid];
+    if (unsubs) { unsubs.forEach(u => u && u()); delete s.peerUnsubscribers[peerUid]; }
+    if (s.remoteStreams[peerUid]) {
+      s.remoteStreams[peerUid].getTracks().forEach(track => track.stop());
+      delete s.remoteStreams[peerUid];
     }
     setRemoteStreams(prev => {
       const next = { ...prev };
@@ -702,19 +759,29 @@ export default function GlobalChat() {
     });
   };
 
-  // while in the call view, watch the room's participant list and
-  // connect/disconnect peer connections to match it in real time
-  useEffect(() => {
-    if (!inCall) {
-      Object.keys(peerConnectionsRef.current).forEach(disconnectFromPeer);
-      knownPeersRef.current = new Set();
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => track.stop());
-        localStreamRef.current = null;
+  const removeStalePeerFromRoom = async (peerUid) => {
+    disconnectFromPeer(peerUid);
+    try {
+      const callRef = doc(db, "global-calls", globalRoomId);
+      const snap = await getDoc(callRef);
+      if (snap.exists()) {
+        const updated = (snap.data().participants || []).filter(id => id !== peerUid);
+        if (updated.length === 0) await deleteDoc(callRef);
+        else await updateDoc(callRef, { participants: updated });
       }
-      if (localVideoRef.current) localVideoRef.current.srcObject = null;
-      return;
+    } catch (err) {
+      console.error("Error removing stale peer from room:", err);
     }
+  };
+
+  // while in the call view, watch the room's participant list and
+  // connect/disconnect peer connections to match it in real time.
+  // নোট: আগে এখানে "inCall false হলে সব বন্ধ করে দাও" — এমন logic ছিল, যেটা
+  // navigate করে সরে গেলেও চলত। এখন সেই দায়িত্ব leaveGlobalCall (explicit hangup)
+  // আর GlobalAlerts-এর কেন্দ্রীয় cleanup-এর — এখানে শুধু participants sync হয়।
+  useEffect(() => {
+    if (!inCall) return;
+    const s = ensureSession();
 
     const callRef = doc(db, "global-calls", globalRoomId);
     const unsubscribe = onSnapshot(callRef, (snap) => {
@@ -723,12 +790,12 @@ export default function GlobalChat() {
       const currentSet = new Set(otherParticipants);
 
       otherParticipants.forEach(uid => {
-        if (!knownPeersRef.current.has(uid)) connectToPeer(uid);
+        if (!s.knownPeers.has(uid)) connectToPeer(uid);
       });
-      knownPeersRef.current.forEach(uid => {
+      s.knownPeers.forEach(uid => {
         if (!currentSet.has(uid)) disconnectFromPeer(uid);
       });
-      knownPeersRef.current = currentSet;
+      s.knownPeers = currentSet;
     });
 
     return () => unsubscribe();
@@ -741,6 +808,7 @@ export default function GlobalChat() {
       await setDoc(doc(db, "global-calls", globalRoomId), { status: "ringing", callType, hostName: currentUserName, hostId: currentUid, roomId: globalRoomId, participants: [currentUid] });
       setActiveCallType(callType);
       setInCall(true);
+      setActiveGlobalCallSession(sessionRef.current); // shared module-এ প্রকাশ করা হচ্ছে
     } catch (err) {
       console.error("Error initiating global call:", err);
       alert("🎤 Could not start the conference. Camera/microphone permission may be needed.");
@@ -758,9 +826,9 @@ export default function GlobalChat() {
         const updatedParts = data.participants || [];
         if (!updatedParts.includes(currentUid)) updatedParts.push(currentUid);
         await updateDoc(callDocRef, { participants: updatedParts });
-        setIncomingCall(null);
         setActiveCallType(callType);
         setInCall(true);
+        setActiveGlobalCallSession(sessionRef.current); // শেয়ার্ড module-এ প্রকাশ করা হচ্ছে
       }
     } catch (err) {
       console.error("Error rejoining call:", err);
@@ -781,9 +849,8 @@ export default function GlobalChat() {
     } catch (err) { /* best effort only */ }
   };
 
-  // leaving removes me from the participants list in Firestore, then
-  // setInCall(false) triggers the effect above to tear down every peer
-  // connection and stop the camera/mic.
+  // এখানেই একমাত্র জায়গা যেখানে গ্রুপ কল সত্যিই বন্ধ হয় — participants থেকে
+  // নিজেকে সরানো, তারপর সব peer connection বন্ধ করে shared session মুছে দেওয়া।
   const leaveGlobalCall = async () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
@@ -793,9 +860,20 @@ export default function GlobalChat() {
         if (updatedParts.length === 0) await deleteDoc(callDocRef);
         else await updateDoc(callDocRef, { participants: updatedParts });
       }
-      setInCall(false);
-      setActiveCallType('video');
-    } catch (err) { console.error("Error leaving global call:", err); setInCall(false); setActiveCallType('video'); }
+    } catch (err) {
+      console.error("Error leaving global call:", err);
+    }
+    const s = sessionRef.current;
+    if (s) {
+      Object.keys(s.peerConnections).forEach(disconnectFromPeer);
+      if (s.localStream) s.localStream.getTracks().forEach(t => t.stop());
+    }
+    sessionRef.current = null;
+    clearActiveGlobalCallSession();
+    setInCall(false);
+    setActiveCallType('video');
+    setRemoteStreams({});
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
   };
 
   const toggleMenu = (e, msgId) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
@@ -898,13 +976,6 @@ export default function GlobalChat() {
           </button>
         </div>
       )}
-      
-      {incomingCall && !inCall && (
-        <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 999, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-          <p style={{ margin: '0 0 12px 0', fontWeight: 'bold', color: '#333' }}>📢 {incomingCall.hostName} started a global conference call!</p>
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}><button onClick={handleRejoinCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Join Now</button><button onClick={() => setIncomingCall(null)} style={{ background: '#dc3545', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer' }}>Ignore</button></div>
-        </div>
-      )}
 
       <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
@@ -934,11 +1005,45 @@ export default function GlobalChat() {
               const senderOnline = usersCache[getMsg.senderUid]?.online === true;
 
               return (
-                <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px' }}>
+                <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px', position: 'relative', zIndex: avatarMenuFor === getMsg.id ? 50 : 'auto' }}>
                   <div style={{ position: 'relative', flexShrink: 0 }}>
-                    <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block' }} />
+                    <img
+                      src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar}
+                      alt=""
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isMe) { navigate(`/profile/${currentUid}`); return; } // নিজের ছবিতে ক্লিক করলে সরাসরি নিজের প্রোফাইলে — কোনো মেনু ছাড়াই
+                        setAvatarMenuFor(avatarMenuFor === getMsg.id ? null : getMsg.id);
+                      }}
+                      onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }}
+                      style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block', cursor: 'pointer' }}
+                    />
                     {senderOnline && (
                       <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />
+                    )}
+                    {/* নতুন: অন্য কারো ছবিতে ক্লিক করলে এই মেনু খোলে */}
+                    {avatarMenuFor === getMsg.id && !isMe && (
+                      <div
+                        className="threedot-dropdown-menu"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ top: 'auto', bottom: 'calc(100% + 6px)', left: 0, right: 'auto', zIndex: 999 }}
+                      >
+                        <button
+                          type="button"
+                          className="threedot-menu-item"
+                          style={{ color: '#0056b3' }}
+                          onClick={() => { setAvatarMenuFor(null); navigate(`/profile/${getMsg.senderUid}`); }}
+                        >
+                          👤 View Profile
+                        </button>
+                        <button
+                          type="button"
+                          className="threedot-menu-item reply-btn"
+                          onClick={() => { setAvatarMenuFor(null); navigate(`/chat/${getMsg.senderUid}/${encodeURIComponent(getMsg.senderName || 'Student')}`); }}
+                        >
+                          💬 Message
+                        </button>
+                      </div>
                     )}
                   </div>
                   <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>

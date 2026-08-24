@@ -1,15 +1,78 @@
 import React, { useState, useEffect, useRef } from 'react'; 
+import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase'; 
 import { collection, doc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where, getDoc } from 'firebase/firestore'; 
 
+// ফিক্স: নেটিভ <audio controls> ব্যবহার করলে কিছু ব্রাউজারে (Chrome-এর একটা
+// পরিচিত রেন্ডারিং কুইর্ক) স্লাইডার/ভলিউমের টুলটিপ "1.00" আকারে পুরো পেজের
+// এদিক-ওদিক ভেসে থাকত — স্ক্রল করার সাথে সাথে নিচেও দেখা যেত। তাই নেটিভ
+// কন্ট্রোল একদমই ব্যবহার না করে এই ছোট নিজস্ব প্লে/পজ প্লেয়ার বানানো হলো।
+function AdminAudioPlayer({ src }) {
+  const audioRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onEnded = () => { setIsPlaying(false); setCurrentTime(0); };
+    const onLoaded = () => setDuration(audio.duration || 0);
+    const onTimeUpdate = () => setCurrentTime(audio.currentTime || 0);
+    audio.addEventListener('play', onPlay);
+    audio.addEventListener('pause', onPause);
+    audio.addEventListener('ended', onEnded);
+    audio.addEventListener('loadedmetadata', onLoaded);
+    audio.addEventListener('timeupdate', onTimeUpdate);
+    return () => {
+      audio.removeEventListener('play', onPlay);
+      audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('ended', onEnded);
+      audio.removeEventListener('loadedmetadata', onLoaded);
+      audio.removeEventListener('timeupdate', onTimeUpdate);
+    };
+  }, []);
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isPlaying) audio.pause(); else audio.play();
+  };
+
+  const formatTime = (secs) => {
+    if (!isFinite(secs) || secs < 0) return '0:00';
+    return `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`;
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '150px' }}>
+      <audio ref={audioRef} src={src} preload="metadata" style={{ display: 'none' }} />
+      <button
+        type="button"
+        onClick={toggle}
+        style={{ width: '26px', height: '26px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: 'rgba(0,86,179,0.15)', color: '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '11px' }}
+      >
+        {isPlaying ? '⏸️' : '▶️'}
+      </button>
+      <span style={{ fontSize: '11px', opacity: 0.8 }}>{formatTime(isPlaying || currentTime > 0 ? currentTime : duration)}</span>
+    </div>
+  );
+}
+
 export default function AdminPanel() { 
+  const navigate = useNavigate();
   const [pendingUsers, setPendingUsers] = useState([]); 
   const [allUsers, setAllUsers] = useState([]); 
   const [rawDbUsers, setRawDbUsers] = useState([]); 
   const [allPrivateChats, setAllPrivateChats] = useState([]); 
   const [selectedChatMessages, setSelectedChatMessages] = useState([]); 
-  const [activeChatName, setActiveChatName] = useState(""); 
-  const [refreshTrigger, setRefreshTrigger] = useState(0); 
+  // ফিক্স: আগে শুধু একটা কম্বাইন্ড নাম-স্ট্রিং রাখা হতো (activeChatName) —
+  // এখন দুই পক্ষের uid/নাম/ছবি আলাদা করে রাখা হচ্ছে, যাতে মেসেঞ্জারের মতো
+  // ছবি-সহ বাবল রেন্ডার করা যায়
+  const [activeChatInfo, setActiveChatInfo] = useState(null); // { roomId, user1:{uid,name,photo}, user2:{uid,name,photo} }
+  const [showChatViewer, setShowChatViewer] = useState(false);
   const [dataLoading, setDataLoading] = useState(true); 
   const activeChatListenerRef = useRef(null);
 
@@ -18,7 +81,6 @@ export default function AdminPanel() {
     return saved ? JSON.parse(saved) : []; 
   }); 
 
-  const bloodGroupList = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
   useEffect(() => { 
     const usersRef = collection(db, "users"); 
     const unsubscribeUsers = onSnapshot(usersRef, (snapshot) => { 
@@ -68,13 +130,16 @@ export default function AdminPanel() {
         activeChatListenerRef.current = null;
       }
     }; 
-  }, [refreshTrigger]);
+    // নোট: আগে এখানে "Sync Data" বাটনের জন্য refreshTrigger dependency ছিল।
+    // users onSnapshot এমনিতেই realtime, আর rooms প্রতি ৫ সেকেন্ডে নিজে থেকেই
+    // রিফ্রেশ হয় — তাই ম্যানুয়াল সিঙ্ক বাটনের কোনো দরকার ছিল না, তাই বাদ দেওয়া হলো
+  }, []);
+
   const handleAccept = async (targetId) => { 
     if (!targetId) return; 
     try { 
       await updateDoc(doc(db, "users", targetId), { approved: true }); 
       alert("✅ ID activated successfully!"); 
-      setRefreshTrigger(prev => prev + 1); 
     } catch (err) { 
       console.error("Error accepting ID:", err); 
     } 
@@ -154,10 +219,9 @@ export default function AdminPanel() {
           activeChatListenerRef.current = null;
         }
         setSelectedChatMessages([]);
-        setActiveChatName("");
+        setActiveChatInfo(null);
 
         alert("🗑️ ID এবং এর সাথে যুক্ত সব চ্যাট ডেটা স্থায়ীভাবে মুছে ফেলা হয়েছে! এটি এখন আর কখনো কোনো তথ্য/মেসেজ রাখবে না।"); 
-        setRefreshTrigger(prev => prev + 1); 
       } catch (err) { 
         console.error("Error deleting ID permanently:", err); 
         alert("❌ Error deleting user. Check Firestore permissions.");
@@ -171,9 +235,11 @@ export default function AdminPanel() {
       setHiddenRooms(updatedHidden); 
       localStorage.setItem('admin_hidden_rooms', JSON.stringify(updatedHidden)); 
       setSelectedChatMessages([]); 
-      setActiveChatName(""); 
+      setActiveChatInfo(null); 
     } 
   };
+
+  const fallbackAvatar = (name) => `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name || 'Student')}`;
 
   const viewPrivateConversation = (roomId) => { 
     if (!roomId || !rawDbUsers || rawDbUsers.length === 0) return; 
@@ -189,10 +255,12 @@ export default function AdminPanel() {
     const foundUser1 = rawDbUsers.find(u => String(u.id) === firstUid || String(u.uid) === firstUid); 
     const foundUser2 = rawDbUsers.find(u => String(u.id) === secondUid || String(u.uid) === secondUid); 
 
-    const user1 = foundUser1 ? foundUser1.name : `Student (${firstUid.substring(0, 4)})`; 
-    const user2 = foundUser2 ? foundUser2.name : `Student (${secondUid.substring(0, 4)})`; 
-
-    setActiveChatName(`${user1} 💬 ${user2}`); 
+    setActiveChatInfo({
+      roomId,
+      user1: { uid: firstUid, name: foundUser1 ? foundUser1.name : `Student (${firstUid.substring(0, 4)})`, photo: foundUser1?.photo || '' },
+      user2: { uid: secondUid, name: foundUser2 ? foundUser2.name : `Student (${secondUid.substring(0, 4)})`, photo: foundUser2?.photo || '' },
+    });
+    setShowChatViewer(true); // রুম বাছাই করলেই viewer প্যানেল খুলে যাবে
 
     const qMsg = collection(db, "personal-rooms", roomId, "messages"); 
     activeChatListenerRef.current = onSnapshot(qMsg, (snapshot) => { 
@@ -203,6 +271,7 @@ export default function AdminPanel() {
       console.error("Messages Loading Error:", error); 
     }); 
   };
+
   if (dataLoading) { 
     return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', fontFamily: 'Arial', fontSize: '16px', color: '#fff' }}>⚙️ Accessing Control Room Data...</div>; 
   } 
@@ -224,21 +293,32 @@ export default function AdminPanel() {
         :root[data-theme='dark'] .admin-chat-room-btn { background: #1b1d28; border: 1px solid #2d3142; color: #ffffff; } 
         .admin-chat-box-viewer { border: 1px solid #ddd; background: #fafafa; } 
         :root[data-theme='dark'] .admin-chat-box-viewer { border: 1px solid #2d3142; background: #1b1d28; } 
-        .admin-msg-log { color: #333333; border-bottom: 1px dashed #eee; } 
-        :root[data-theme='dark'] .admin-msg-log { color: #ffffff; border-bottom: 1px dashed #2d3142; } 
+        .admin-avatar-clickable { cursor: pointer; transition: transform 0.15s; }
+        .admin-avatar-clickable:hover { transform: scale(1.08); }
+        .admin-msg-bubble { max-width: 78%; padding: 8px 12px; border-radius: 14px; font-size: 13px; word-break: break-word; }
+        .admin-msg-bubble.left { background: #f0f2f5; color: #1a1a1a; border-bottom-left-radius: 3px; }
+        :root[data-theme='dark'] .admin-msg-bubble.left { background: #22242f; color: #fff; }
+        .admin-msg-bubble.right { background: #0056b3; color: #fff; border-bottom-right-radius: 3px; }
+
+        /* মোবাইলের জন্য: দুই কলাম পাশাপাশির বদলে একটার নিচে একটা, ছোট প্যাডিং */
+        @media (max-width: 640px) {
+          .admin-panel-wrapper { padding: 10px; gap: 16px; }
+          .admin-section-box { padding: 14px !important; }
+          .admin-two-col { flex-direction: column !important; }
+          .admin-two-col > div { min-width: 0 !important; width: 100% !important; }
+          .admin-msg-bubble { max-width: 88%; }
+        }
       `}</style>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #0056b3', paddingBottom: '10px' }}> 
-        <h2 style={{ color: '#0056b3', margin: 0 }}>Admin Control Room 🛠️</h2> 
-        <button onClick={() => setRefreshTrigger(prev => prev + 1)} style={{ background: '#0056b3', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>🔄 Sync Data</button> 
-      </div>
+      <h2 style={{ color: '#0056b3', margin: 0, textAlign: 'center', borderBottom: '2px solid #0056b3', paddingBottom: '10px' }}>Admin Control Room 🛠️</h2>
+
       {/* New ID Requests Section */}
       <div className="admin-section-box" style={{ padding: '25px', borderRadius: '12px' }}> 
         <h3 style={{ textAlign: 'center', marginBottom: '20px' }}>New ID Requests ({pendingUsers.length})</h3> 
         <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}> 
           {pendingUsers.map(user => { 
             const currentDocId = user.id || user.uid; 
-            const dicebearBackup = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name || 'Student')}`; 
+            const dicebearBackup = fallbackAvatar(user.name); 
             return ( 
               <li key={currentDocId} className="admin-list-row" style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', padding: '15px', borderRadius: '8px' }}> 
                 <div style={{ position: 'relative', width: '42px', height: '42px', borderRadius: '50%', overflow: 'hidden', border: '2px solid #0056b3', marginRight: '15px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}> 
@@ -267,11 +347,17 @@ export default function AdminPanel() {
         <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}> 
           {allUsers.map(user => { 
             const activeDocId = user.id || user.uid; 
-            const dicebearBackupActive = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name || 'Student')}`; 
+            const dicebearBackupActive = fallbackAvatar(user.name); 
             return ( 
               <li key={activeDocId} className="admin-list-row-active" style={{ marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px', borderRadius: '8px' }}> 
                 <span style={{ fontSize: '15px', display: 'flex', alignItems: 'center', gap: '12px', position: 'relative' }}> 
-                  <div style={{ position: 'relative', width: '38px', height: '38px' }}> 
+                  {/* নতুন: ছবিতে ক্লিক করলে সেই ইউজারের প্রোফাইল/আইডি পেজে চলে যাবে */}
+                  <div
+                    className="admin-avatar-clickable"
+                    onClick={() => navigate(`/profile/${activeDocId}`)}
+                    title={`${user.name || 'Student'}-এর প্রোফাইলে যান`}
+                    style={{ position: 'relative', width: '38px', height: '38px' }}
+                  >
                     <div style={{ width: '38px', height: '38px', borderRadius: '50%', overflow: 'hidden', border: user.role === "admin" ? '2px solid #ffb300' : '2px solid #0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}> 
                       <img src={(user.photo && user.photo.trim() !== "") ? user.photo : dicebearBackupActive} alt="Member" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} onError={(e) => { e.target.onerror = null; e.target.src = dicebearBackupActive; }} /> 
                     </div> 
@@ -291,7 +377,8 @@ export default function AdminPanel() {
           {allUsers.length === 0 && <p style={{ opacity: 0.7, textAlign: 'center', margin: '10px 0', fontSize: '14px' }}>No active members found.</p>} 
         </ul> 
       </div>
-      <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}> 
+
+      <div className="admin-two-col" style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}> 
         {/* Conversations List */}
         <div className="admin-section-box" style={{ padding: '20px', borderRadius: '12px', flex: '1', minWidth: '280px' }}> 
           <h3 style={{ marginBottom: '5px' }}>All Private Conversations 🔐</h3> 
@@ -308,10 +395,27 @@ export default function AdminPanel() {
               const foundUser2 = rawDbUsers.find(u => String(u.id) === secondUid || String(u.uid) === secondUid); 
               const s1 = foundUser1 ? foundUser1.name : `Student (${firstUid.substring(0, 4)})`; 
               const s2 = foundUser2 ? foundUser2.name : `Student (${secondUid.substring(0, 4)})`; 
+              const p1 = (foundUser1?.photo && foundUser1.photo.trim() !== '') ? foundUser1.photo : fallbackAvatar(s1);
+              const p2 = (foundUser2?.photo && foundUser2.photo.trim() !== '') ? foundUser2.photo : fallbackAvatar(s2);
               return ( 
-                <div key={chat.id} className="admin-chat-room-btn" onClick={() => viewPrivateConversation(chat.id)} style={{ padding: '12px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}> 
-                  <span style={{ flex: 1, textAlign: 'left', color: 'inherit' }}>📁 {s1} ⇆ {s2}</span> 
-                  <button onClick={(e) => handleAdminDeleteRoom(e, chat.id, chat.lastActive)} style={{ background: '#dc3545', color: 'white', border: 'none', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>Delete</button> 
+                <div key={chat.id} className="admin-chat-room-btn" onClick={() => viewPrivateConversation(chat.id)} style={{ padding: '12px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}> 
+                  <span style={{ flex: 1, textAlign: 'left', color: 'inherit', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                    {/* নতুন: ছবিতে ক্লিক করলে সেই ইউজারের প্রোফাইলে চলে যাবে (রুম না খুলে) */}
+                    <img
+                      src={p1} alt="" className="admin-avatar-clickable"
+                      onClick={(e) => { e.stopPropagation(); navigate(`/profile/${firstUid}`); }}
+                      title={`${s1}-এর প্রোফাইলে যান`}
+                      style={{ width: '22px', height: '22px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                    />
+                    {s1} ⇆ {s2}
+                    <img
+                      src={p2} alt="" className="admin-avatar-clickable"
+                      onClick={(e) => { e.stopPropagation(); navigate(`/profile/${secondUid}`); }}
+                      title={`${s2}-এর প্রোফাইলে যান`}
+                      style={{ width: '22px', height: '22px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                    />
+                  </span> 
+                  <button onClick={(e) => handleAdminDeleteRoom(e, chat.id, chat.lastActive)} style={{ background: '#dc3545', color: 'white', border: 'none', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold', flexShrink: 0 }}>Delete</button> 
                 </div> 
               ); 
             })} 
@@ -321,18 +425,64 @@ export default function AdminPanel() {
 
         {/* Live Chat Viewer Box */}
         <div className="admin-section-box" style={{ padding: '20px', borderRadius: '12px', flex: '1.5', minWidth: '320px' }}> 
-          <h3 style={{ marginBottom: '10px' }}>Live Chat Viewer 👁️ {activeChatName && <span style={{ background: '#0056b3', color: 'white', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 'bold', marginLeft: '10px', display: 'inline-block' }}>{activeChatName}</span>}</h3> 
-          <div className="admin-chat-box-viewer" style={{ height: '230px', overflowY: 'auto', padding: '12px', borderRadius: '8px' }}> 
-            {selectedChatMessages && selectedChatMessages.map((msg, idx) => ( 
-              <div key={msg.id || idx} className="admin-msg-log" style={{ margin: '8px 0', fontSize: '13px', paddingBottom: '5px' }}> 
-                <span style={{ opacity: 0.6, fontSize: '11px' }}>[{msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : 'Live'}]</span> 
-                <strong style={{ color: '#0056b3' }}> {msg.senderName || 'Student'}:</strong>{' '} 
-                {msg.isDeleted ? <span style={{ fontStyle: 'italic', color: '#dc3545' }}>(Deleted Message)</span> : <><span style={{ color: 'inherit' }}>{msg.text}</span>{msg.isEdited && <span style={{ fontSize: '10px', opacity: 0.7, marginLeft: '5px', fontStyle: 'italic' }}>(Edited)</span>}</>} 
-                {msg.media && !msg.isDeleted && <p style={{ margin: '4px 0 0 0', fontSize: '12px' }}><a href={msg.media} target="_blank" rel="noreferrer" style={{ color: '#0056b3', fontWeight: 'bold', textDecoration: 'underline' }}>🔗 Shared Media</a></p>} 
+          {/* ফিক্স: চোখের ইমোজি বাদ; এখন মাঝখানে একটা টগল বাটন — চাপলে নিচের
+              viewer প্যানেলটা খোলে/বন্ধ হয় */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: showChatViewer ? '12px' : '0' }}>
+            <button
+              onClick={() => setShowChatViewer(v => !v)}
+              style={{ background: '#0056b3', color: 'white', border: 'none', padding: '9px 22px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+            >
+              Live Chat Viewer {showChatViewer ? '▲' : '▼'}
+            </button>
+          </div>
+
+          {showChatViewer && (
+            <>
+              {/* নতুন: শুধু নাম না, দুই পক্ষের প্রোফাইল ছবিও দেখানো হচ্ছে */}
+              {activeChatInfo && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                  <img src={(activeChatInfo.user1.photo && activeChatInfo.user1.photo.trim() !== '') ? activeChatInfo.user1.photo : fallbackAvatar(activeChatInfo.user1.name)} alt="" style={{ width: '26px', height: '26px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3' }} />
+                  <span style={{ fontSize: '12px', fontWeight: 'bold' }}>{activeChatInfo.user1.name}</span>
+                  <span style={{ opacity: 0.6, fontSize: '12px' }}>⇆</span>
+                  <span style={{ fontSize: '12px', fontWeight: 'bold' }}>{activeChatInfo.user2.name}</span>
+                  <img src={(activeChatInfo.user2.photo && activeChatInfo.user2.photo.trim() !== '') ? activeChatInfo.user2.photo : fallbackAvatar(activeChatInfo.user2.name)} alt="" style={{ width: '26px', height: '26px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3' }} />
+                </div>
+              )}
+
+              <div className="admin-chat-box-viewer" style={{ height: '320px', overflowY: 'auto', padding: '12px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}> 
+                {activeChatInfo && selectedChatMessages && selectedChatMessages.map((msg, idx) => {
+                  const isUser1 = msg.senderId === activeChatInfo.user1.uid;
+                  const senderInfo = isUser1 ? activeChatInfo.user1 : activeChatInfo.user2;
+                  return (
+                    <div key={msg.id || idx} style={{ display: 'flex', flexDirection: isUser1 ? 'row' : 'row-reverse', alignItems: 'flex-end', gap: '8px' }}>
+                      <img src={(senderInfo.photo && senderInfo.photo.trim() !== '') ? senderInfo.photo : fallbackAvatar(senderInfo.name)} alt="" style={{ width: '26px', height: '26px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: isUser1 ? 'flex-start' : 'flex-end', maxWidth: '80%' }}>
+                        <small style={{ opacity: 0.6, fontSize: '10px', marginBottom: '2px' }}>{msg.senderName || senderInfo.name} · {msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : 'Live'}</small>
+                        <div className={`admin-msg-bubble ${isUser1 ? 'left' : 'right'}`}>
+                          {/* নতুন: মেসেজ ডিলিট করা হলেও এখন আসল কনটেন্ট (টেক্সট/ছবি) দেখা যাবে,
+                              শুধু একটা ছোট "(deleted)" ট্যাগ যোগ হবে — normal ইউজাররা এটা
+                              দেখে না, শুধু অ্যাডমিন প্যানেল থেকেই দেখা যায় */}
+                          {msg.isDeleted && <span style={{ fontSize: '10px', fontStyle: 'italic', opacity: 0.8, display: 'block', marginBottom: '3px' }}>🚫 deleted by user</span>}
+                          {msg.fileUrl && msg.fileType === 'image' && (
+                            <img src={msg.fileUrl} alt="" style={{ maxWidth: '180px', borderRadius: '8px', display: 'block', marginBottom: msg.text ? '4px' : 0 }} />
+                          )}
+                          {msg.fileUrl && msg.fileType === 'video' && (
+                            <video src={msg.fileUrl} controls style={{ maxWidth: '180px', borderRadius: '8px', display: 'block', marginBottom: msg.text ? '4px' : 0 }} />
+                          )}
+                          {msg.fileUrl && msg.fileType === 'audio' && (
+                            <AdminAudioPlayer src={msg.fileUrl} />
+                          )}
+                          {msg.text && <span>{msg.text}</span>}
+                          {msg.isEdited && <span style={{ fontSize: '10px', opacity: 0.7, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })} 
+                {(!activeChatInfo || selectedChatMessages.length === 0) && <p style={{ opacity: 0.6, textAlign: 'center', marginTop: '90px', fontSize: '13px' }}>Select a chat from the left to view messages.</p>} 
               </div> 
-            ))} 
-            {selectedChatMessages.length === 0 && <p style={{ opacity: 0.6, textAlign: 'center', marginTop: '90px', fontSize: '13px' }}>Select a chat from the left to view messages.</p>} 
-          </div> 
+            </>
+          )}
         </div> 
       </div> 
     </div> 

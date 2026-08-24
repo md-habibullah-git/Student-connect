@@ -6,6 +6,7 @@ import {
   collection, doc, onSnapshot, query, where, orderBy, limit,
   updateDoc, setDoc
 } from 'firebase/firestore';
+import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 
 const GLOBAL_ROOM_ID = "campus_global_conference_room";
 
@@ -30,6 +31,37 @@ export default function GlobalAlerts() {
   const [incomingPersonalCall, setIncomingPersonalCall] = useState(null);
   const [incomingGlobalCall, setIncomingGlobalCall] = useState(null);
 
+  // নতুন: বর্তমানে চলমান (connected) পার্সোনাল কল — এটা shared session থেকে
+  // আসে, তাই PersonalChat.jsx-এর পেজ খোলা না থাকলেও (অন্য পেজে চলে গেলেও)
+  // এখানে দেখা যায়, আর তখন একটা ছোট "minimized call" bubble দেখানো হয়।
+  const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
+  useEffect(() => {
+    const unsubscribe = subscribeActiveCallSession(setActiveSession);
+    return unsubscribe;
+  }, []);
+
+  // যে পার্সোনাল কলটা এখন সক্রিয় (session-এ আছে), তার Firestore ডকুমেন্ট
+  // watch করা হচ্ছে — অন্য পাশ কেটে দিলে (status "ended" হলে, বা ডকুমেন্টটাই
+  // মুছে গেলে) এখান থেকেই connection বন্ধ করে session পরিষ্কার করে দেওয়া হয়।
+  // এটা ইচ্ছাকৃতভাবে এখানে রাখা — GlobalAlerts সবসময় মাউন্ট থাকে, তাই
+  // PersonalChat.jsx-এর পেজ বন্ধ থাকা অবস্থাতেও এই cleanup কাজ করবে।
+  useEffect(() => {
+    if (!activeSession || activeSession.type !== 'personal') return;
+    const unsubscribe = onSnapshot(doc(db, "personal-calls", activeSession.chatRoomId), (snap) => {
+      const data = snap.data();
+      if (!snap.exists() || data?.status === 'ended') {
+        const current = getActiveCallSession();
+        if (current && current.chatRoomId === activeSession.chatRoomId) {
+          if (current.peerConnection) current.peerConnection.close();
+          if (current.localStream) current.localStream.getTracks().forEach(t => t.stop());
+          if (current.remoteStream) current.remoteStream.getTracks().forEach(t => t.stop());
+          clearActiveCallSession();
+        }
+      }
+    });
+    return unsubscribe;
+  }, [activeSession?.chatRoomId]);
+
   // 🔧 NEW: the floating message bubble stack can be dragged anywhere on
   // screen; its position is remembered across visits.
   const [bubblePos, setBubblePos] = useState(() => {
@@ -52,20 +84,81 @@ export default function GlobalAlerts() {
   const lastKnownGlobalMessageAtRef = useRef(0);
   const isFirstGlobalLoadRef = useRef(true);
 
-  // ── Presence: online anywhere in the app, not just inside a specific chat ──
+  // নতুন: বর্তমানে চলমান গ্লোবাল (গ্রুপ) কল — GlobalChat.jsx-এর পেজ খোলা না
+  // থাকলেও এখানে দেখা যায়, তখন একটা ছোট "Global Room call" bubble দেখানো হয়।
+  const [activeGlobalSession, setActiveGlobalSession] = useState(() => getActiveGlobalCallSession());
+  useEffect(() => {
+    const unsubscribe = subscribeActiveGlobalCallSession(setActiveGlobalSession);
+    return unsubscribe;
+  }, []);
+
+  // গ্লোবাল কল রুমের ডকুমেন্ট watch করা হচ্ছে — আমাকে participants থেকে সরিয়ে
+  // দেওয়া হলে (বা পুরো রুমটাই মুছে গেলে, অর্থাৎ সবাই বেরিয়ে গেলে) এখান থেকেই
+  // local session বন্ধ করে দেওয়া হয়, GlobalChat.jsx-এর পেজ খোলা না থাকলেও।
+  useEffect(() => {
+    if (!activeGlobalSession || !currentUid) return;
+    const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
+      const data = snap.data();
+      const stillIn = snap.exists() && (data.participants || []).includes(currentUid);
+      if (!stillIn) {
+        const current = getActiveGlobalCallSession();
+        if (current) {
+          Object.values(current.peerConnections || {}).forEach(pc => pc.close());
+          Object.values(current.peerUnsubscribers || {}).forEach(fns => fns.forEach(f => f && f()));
+          if (current.localStream) current.localStream.getTracks().forEach(t => t.stop());
+          Object.values(current.remoteStreams || {}).forEach(s => s.getTracks().forEach(t => t.stop()));
+          clearActiveGlobalCallSession();
+        }
+      }
+    });
+    return unsubscribe;
+  }, [!!activeGlobalSession, currentUid]);
+
+
+  // ── Presence: ট্যাব/অ্যাপে সত্যিই তাকিয়ে আছি কিনা তার ওপর ভিত্তি করে online
+  // status — কিন্তু ট্যাব সুইচ করলেই সাথে সাথে অফলাইন দেখাবে না। ৫ মিনিটের
+  // গ্রেস পিরিয়ড আছে: এর মধ্যে ফিরে এলে ডট থেকেই যায়, না ফিরলে অফলাইন হয়ে যায়।
   useEffect(() => {
     if (!currentUid) return;
     const selfRef = doc(db, "users", currentUid);
-    setDoc(selfRef, { online: true, lastSeen: new Date().getTime() }, { merge: true }).catch(() => {});
+    const OFFLINE_GRACE_MS = 5 * 60 * 1000; // ৫ মিনিট
+    let offlineTimer = null;
 
+    const goOnline = () => {
+      if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
+      setDoc(selfRef, { online: true, lastSeen: new Date().getTime() }, { merge: true }).catch(() => {});
+    };
+
+    const scheduleGoOffline = () => {
+      if (offlineTimer) clearTimeout(offlineTimer);
+      offlineTimer = setTimeout(() => {
+        updateDoc(selfRef, { online: false }).catch(() => {});
+        offlineTimer = null;
+      }, OFFLINE_GRACE_MS);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        scheduleGoOffline(); // ট্যাব থেকে সরে গেলাম — এখনই অফলাইন না, ৫ মিনিটের কাউন্টডাউন শুরু
+      } else {
+        goOnline(); // ফিরে এলাম — সাথে সাথে অনলাইন, আগের কাউন্টডাউন বাতিল
+      }
+    };
+
+    goOnline(); // মাউন্ট হওয়ার সময় ট্যাব খোলা মানেই ধরে নেওয়া হচ্ছে visible/active
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // ট্যাব/ব্রাউজার সত্যিই বন্ধ করে দিলে ৫ মিনিট অপেক্ষা না করে সাথে সাথে অফলাইন
     const handleBeforeUnload = () => {
       updateDoc(selfRef, { online: false }).catch(() => {});
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
-      updateDoc(selfRef, { online: false }).catch(() => {});
+      if (offlineTimer) clearTimeout(offlineTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      updateDoc(selfRef, { online: false }).catch(() => {});
     };
   }, [currentUid]);
 
@@ -186,11 +279,19 @@ export default function GlobalAlerts() {
     }));
   }, [location.pathname]);
 
-  const personalCallVisible = incomingPersonalCall && !location.pathname.startsWith(`/chat/${incomingPersonalCall.hostId}/`);
-  const globalCallVisible = incomingGlobalCall && location.pathname !== '/chat/global/Global-Chatroom';
-  const activeCall = personalCallVisible
+  // ফিক্স: আগে "আমি যদি এই মুহূর্তে সেই নির্দিষ্ট চ্যাট পেজেই থাকি" তাহলে এই
+  // top bar-টা লুকানো থাকত (কারণ তখন চ্যাটের ভিতরে আলাদা একটা বড় ব্যানার
+  // দেখানো হতো)। এখন সেই আলাদা in-page ব্যানার তুলে দেওয়া হয়েছে — এই একটাই
+  // top bar এখন সব জায়গা থেকে (এমনকি সেই চ্যাটের ভিতর থেকেও) দেখা যাবে।
+  const activeCall = incomingPersonalCall
     ? { type: 'personal', ...incomingPersonalCall }
-    : (globalCallVisible ? { type: 'global', ...incomingGlobalCall } : null);
+    : (incomingGlobalCall ? { type: 'global', ...incomingGlobalCall } : null);
+
+  // মিনিমাইজড কল bubble — শুধু তখনই দেখানো হয় যখন আমি ওই চ্যাটের পেজে নেই
+  // (ওই পেজেই থাকলে PersonalChat.jsx নিজেই ফুলস্ক্রিন কল UI দেখাচ্ছে)
+  const showMinimizedCallBubble = activeSession
+    && activeSession.type === 'personal'
+    && !location.pathname.startsWith(`/chat/${activeSession.otherUid}/`);
 
   const handleReceive = () => {
     if (!activeCall) return;
@@ -214,6 +315,11 @@ export default function GlobalAlerts() {
       // conference keeps running for everyone else, so only dismiss locally.
       setIncomingGlobalCall(null);
     }
+  };
+
+  const handleMinimizedCallClick = () => {
+    if (!activeSession) return;
+    navigate(`/chat/${activeSession.otherUid}/${encodeURIComponent(activeSession.otherName || 'Student')}`);
   };
 
   const handleBubbleClick = (bubble) => {
@@ -265,8 +371,8 @@ export default function GlobalAlerts() {
   return (
     <>
       {/* thin floating call bar — appears at the very top, above everything,
-          from anywhere in the app, whenever someone is calling and I'm not already
-          looking at that exact chat/room. */}
+          from anywhere in the app (including inside the relevant chat itself)
+          whenever someone is calling and I haven't answered yet. */}
       {activeCall && (
         <div style={{
           position: 'fixed', top: '8px', left: '50%', transform: 'translateX(-50%)',
@@ -274,7 +380,6 @@ export default function GlobalAlerts() {
           padding: '6px 14px', boxShadow: '0 6px 18px rgba(0,0,0,0.25)',
           display: 'flex', alignItems: 'center', gap: '10px', maxWidth: '92vw'
         }}>
-          {/* 🔧 UPDATED: smarter hangup-style decline icon */}
           <button
             onClick={handleDecline}
             title="Decline"
@@ -292,7 +397,6 @@ export default function GlobalAlerts() {
             📞 {activeCall.hostName} {activeCall.type === 'global' ? 'started a conference' : 'is calling'}
           </span>
 
-          {/* 🔧 UPDATED: smarter phone-accept icon */}
           <button
             onClick={handleReceive}
             title="Receive"
@@ -301,6 +405,53 @@ export default function GlobalAlerts() {
             <PhoneAcceptIcon />
           </button>
         </div>
+      )}
+
+      {/* নতুন: চলমান পার্সোনাল কল থেকে অন্য পেজে চলে গেলে এখানে ছোট একটা
+          "call in progress" bubble দেখায় — ট্যাপ করলে সরাসরি কলে ফিরে যাওয়া যায়।
+          কলটা আসলেই ব্যাকগ্রাউন্ডে চলতে থাকে (callSession.js দেখুন)। */}
+      {showMinimizedCallBubble && (
+        <button
+          onClick={handleMinimizedCallClick}
+          title={`Return to call with ${activeSession.otherName || 'Student'}`}
+          style={{
+            position: 'fixed', top: '8px', left: '16px', zIndex: 1950,
+            background: '#28a745', border: 'none', borderRadius: '30px', padding: '5px 14px 5px 5px',
+            display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.3)'
+          }}
+        >
+          <img
+            src={(activeSession.otherPhoto && activeSession.otherPhoto.trim() !== "") ? activeSession.otherPhoto : fallbackAvatar(activeSession.otherName)}
+            alt=""
+            style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', flexShrink: 0 }}
+          />
+          <span style={{ color: '#fff', fontSize: '12px', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+            {activeSession.callType === 'audio' ? '🎙️' : '📹'} {activeSession.otherName || 'Student'}
+          </span>
+        </button>
+      )}
+
+      {/* নতুন: চলমান গ্লোবাল (গ্রুপ) কল থেকে অন্য পেজে গেলে এখানে ছোট একটা
+          "Global Room call" bubble দেখায় — ট্যাপ করলে সরাসরি কনফারেন্সে ফিরে যাওয়া যায় */}
+      {activeGlobalSession && location.pathname !== '/chat/global/Global-Chatroom' && (
+        <button
+          onClick={() => navigate('/chat/global/Global-Chatroom')}
+          title="Return to the Global Room call"
+          style={{
+            position: 'fixed', top: '8px', right: '16px', zIndex: 1950,
+            background: '#0056b3', border: 'none', borderRadius: '30px', padding: '5px 14px 5px 5px',
+            display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.3)'
+          }}
+        >
+          <span style={{ width: '30px', height: '30px', borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px', flexShrink: 0 }}>
+            🌐
+          </span>
+          <span style={{ color: '#fff', fontSize: '12px', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+            {activeGlobalSession.callType === 'audio' ? '🎙️' : '📹'} Global Room
+          </span>
+        </button>
       )}
 
       {/* 🔧 UPDATED: floating message bubble stack is now draggable anywhere

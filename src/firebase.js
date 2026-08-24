@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 // Your actual Firebase configuration keys
 const firebaseConfig = {
@@ -15,4 +16,5 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app); // Only Authentication and Firestore Database will remain
+export const db = getFirestore(app);
+export const storage = getStorage(app); // পোস্টের ভিডিওর জন্য — Firestore-এর ১MB ডকুমেন্ট লিমিট এড়াতে

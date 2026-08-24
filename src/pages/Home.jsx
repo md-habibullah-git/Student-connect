@@ -1,14 +1,83 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { db, auth } from '../firebase';
+import { db, auth, storage } from '../firebase';
 import { 
   collection, addDoc, query, onSnapshot, doc, updateDoc, 
   arrayUnion, arrayRemove, deleteDoc, getDocs, where 
 } from 'firebase/firestore';
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 
 const commentFormStyle = { display: 'flex', marginTop: '8px', position: 'relative', width: '100%', alignItems: 'center' };
 const commentInputStyle = { width: '100%', padding: '8px 40px 8px 10px', fontSize: '13px', borderRadius: '20px', border: '1px solid var(--border, #ccc)', backgroundColor: 'transparent', outline: 'none', boxSizing: 'border-box' };
 const commentIconBtnStyle = { position: 'absolute', right: '10px', background: 'none', border: 'none', color: '#0056b3', cursor: 'pointer', fontSize: '16px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' };
+
+// নতুন: ভিডিও ব্রাউজারেই ৩৬০p-তে re-encode করা হয় (canvas + MediaRecorder দিয়ে) —
+// কোনো এক্সটার্নাল লাইব্রেরি (ffmpeg ইত্যাদি) ছাড়াই। যে কোয়ালিটির ভিডিও দেওয়া
+// হোক না কেন, Firebase Storage-এ যতটা সম্ভব ছোট সাইজে (৩৬০p, কম বিটরেট) সেভ
+// হবে — যেহেতু ৭ দিন পর এমনিতেই মুছে যাবে, তাই সাইজ কমানোই অগ্রাধিকার।
+// নোট: এটা real-time-এ চলে (৬০ সেকেন্ডের ভিডিও কম্প্রেস হতে ~৬০ সেকেন্ড লাগে),
+// আর আউটপুট ফরম্যাট ব্রাউজারভেদে আলাদা হতে পারে (Chrome/Firefox-এ WebM,
+// Safari সাপোর্ট করলে MP4) — সব ব্রাউজারে প্লেব্যাক কম্প্যাটিবিলিটি ১০০% গ্যারান্টি
+// করা কঠিন, তবে বেশিরভাগ আধুনিক ব্রাউজারেই কাজ করবে।
+function compressVideoTo360p(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const videoEl = document.createElement('video');
+    videoEl.muted = false;
+    videoEl.playsInline = true;
+    videoEl.src = URL.createObjectURL(file);
+
+    videoEl.onloadedmetadata = () => {
+      const targetHeight = 360;
+      const scale = Math.min(1, targetHeight / videoEl.videoHeight);
+      const targetWidth = Math.max(2, Math.round((videoEl.videoWidth * scale) / 2) * 2);
+      const targetHeightEven = Math.max(2, Math.round((videoEl.videoHeight * scale) / 2) * 2);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = targetHeightEven;
+      const ctx = canvas.getContext('2d');
+
+      let combinedStream;
+      try {
+        const canvasStream = canvas.captureStream(30);
+        const rawAudioStream = videoEl.captureStream ? videoEl.captureStream() : (videoEl.mozCaptureStream ? videoEl.mozCaptureStream() : null);
+        const audioTracks = rawAudioStream ? rawAudioStream.getAudioTracks() : [];
+        combinedStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+
+      if (!window.MediaRecorder) { reject(new Error('MediaRecorder not supported')); return; }
+      const mimeCandidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/mp4', 'video/webm'];
+      const mimeType = mimeCandidates.find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm';
+
+      const recordedChunks = [];
+      const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 500000 }); // ~500kbps — ৩৬০p-এর জন্য যথেষ্ট, সাইজ ছোট রাখে
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+      recorder.onstop = () => {
+        URL.revokeObjectURL(videoEl.src);
+        resolve(new Blob(recordedChunks, { type: mimeType }));
+      };
+      recorder.onerror = (e) => reject(e.error || new Error('Recording failed'));
+
+      let rafId;
+      const drawFrame = () => {
+        if (videoEl.paused || videoEl.ended) return;
+        ctx.drawImage(videoEl, 0, 0, targetWidth, targetHeightEven);
+        if (onProgress && videoEl.duration) onProgress(Math.min(100, Math.round((videoEl.currentTime / videoEl.duration) * 100)));
+        rafId = requestAnimationFrame(drawFrame);
+      };
+
+      videoEl.onplay = () => { drawFrame(); };
+      videoEl.onended = () => { cancelAnimationFrame(rafId); recorder.stop(); };
+
+      recorder.start();
+      videoEl.play().catch(reject);
+    };
+    videoEl.onerror = () => reject(new Error('Could not read video for compression'));
+  });
+}
 
 export default function Home({ isAdmin }) {
   const location = useLocation();
@@ -21,6 +90,9 @@ export default function Home({ isAdmin }) {
   const [text, setText] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');
   const [selectedFile, setSelectedFile] = useState(null); 
+  const [isPosting, setIsPosting] = useState(false); // নতুন: ভিডিও আপলোড হওয়া পর্যন্ত বাটন disabled রাখতে
+  const [isCompressing, setIsCompressing] = useState(false); // নতুন: ৩৬০p কম্প্রেশন চলাকালীন
+  const [compressionProgress, setCompressionProgress] = useState(0);
   const [commentInput, setCommentInput] = useState({});
   const [showPostModal, setShowPostModal] = useState(false);
   const [editingComment, setEditingComment] = useState(null);
@@ -69,6 +141,12 @@ export default function Home({ isAdmin }) {
         const qOld = query(collection(db, "posts"), where("createdAt", "<", sevenDaysAgo));
         const oldPostsSnapshot = await getDocs(qOld);
         oldPostsSnapshot.forEach(async (postDoc) => {
+          const data = postDoc.data();
+          // নতুন: Firestore ডকুমেন্ট মোছার সাথে সাথে, ভিডিওটা Firebase Storage-এ
+          // থাকলে সেটাও মুছে ফেলা হচ্ছে — নাহলে Storage-এ অবহেলিত ফাইল জমতেই থাকত
+          if (data.mediaStoragePath) {
+            await deleteObject(storageRef(storage, data.mediaStoragePath)).catch(() => {});
+          }
           await deleteDoc(doc(db, "posts", postDoc.id)); 
         });
       } catch (error) {
@@ -128,18 +206,27 @@ export default function Home({ isAdmin }) {
     if (file.type.startsWith('video/')) {
       const video = document.createElement('video');
       video.preload = 'metadata';
-      video.onloadedmetadata = () => {
+      video.onloadedmetadata = async () => {
         window.URL.revokeObjectURL(video.src);
         if (video.duration > 60) {
           alert("Error: Video duration cannot exceed 1 minute!");
           e.target.value = ""; 
           setSelectedFile(null);
-        } else {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            setSelectedFile(event.target.result);
-          };
-          reader.readAsDataURL(file);
+          return;
+        }
+        // নতুন: ফাইল বাছাই করার সাথে সাথেই ৩৬০p-তে কম্প্রেস শুরু হয়ে যায়, যাতে
+        // "Post" চাপার সময়ে আপলোড দ্রুত হয় (কম্প্রেশন ততক্ষণে শেষ থাকবে)
+        setIsCompressing(true);
+        setCompressionProgress(0);
+        try {
+          const compressedBlob = await compressVideoTo360p(file, setCompressionProgress);
+          setSelectedFile({ kind: 'video', blob: compressedBlob, previewUrl: URL.createObjectURL(compressedBlob) });
+        } catch (err) {
+          console.error("Video compression failed, using the original file instead:", err);
+          // ফিক্স: কম্প্রেশন কোনো কারণে ব্যর্থ হলেও পোস্ট করা যেন আটকে না যায় — মূল ফাইলটাই ব্যবহার হবে
+          setSelectedFile({ kind: 'video', blob: file, previewUrl: URL.createObjectURL(file) });
+        } finally {
+          setIsCompressing(false);
         }
       };
       video.src = URL.createObjectURL(file);
@@ -165,32 +252,43 @@ export default function Home({ isAdmin }) {
           ctx.drawImage(img, 0, 0, width, height);
           
           const compressedBase64 = canvas.toDataURL('image/jpeg', 0.6);
-          setSelectedFile(compressedBase64);
+          setSelectedFile({ kind: 'image', base64: compressedBase64 });
         };
       };
       reader.readAsDataURL(file);
-    } else {
-      setSelectedFile(file);
     }
   };
   const handlePost = async (e) => {
     e.preventDefault();
     if (!text.trim() && !mediaUrl.trim() && !selectedFile) return;
 
-    let finalMediaUrl = mediaUrl;
-    if (selectedFile) {
-      finalMediaUrl = selectedFile;
-    }
-
-    if (finalMediaUrl && finalMediaUrl.length > 1048480) {
-      alert("🚨 Video size is too large! Please reduce your resolution or shorten it before uploading.");
-      return;
-    }
-
+    setIsPosting(true);
     try {
+      let finalMediaUrl = mediaUrl;
+      let mediaStoragePath = null;
+
+      if (selectedFile?.kind === 'video') {
+        // ভিডিও ইতিমধ্যেই handleFileChange-এ ৩৬০p-তে কম্প্রেস হয়ে গেছে —
+        // এখন সরাসরি সেই Blob-টাই Firebase Storage-এ আপলোড হচ্ছে। Firestore
+        // ডকুমেন্টে raw base64 গুঁজে দেওয়া হচ্ছে না, তাই ১MB লিমিটে আটকায় না।
+        const ext = (selectedFile.blob.type || '').includes('mp4') ? 'mp4' : 'webm';
+        mediaStoragePath = `post-videos/${auth.currentUser?.uid || 'unknown'}_${Date.now()}.${ext}`;
+        const vRef = storageRef(storage, mediaStoragePath);
+        await uploadBytes(vRef, selectedFile.blob);
+        finalMediaUrl = await getDownloadURL(vRef);
+      } else if (selectedFile?.kind === 'image') {
+        finalMediaUrl = selectedFile.base64;
+        if (finalMediaUrl.length > 1048480) {
+          alert("🚨 Image size is too large! Please choose a smaller image.");
+          setIsPosting(false);
+          return;
+        }
+      }
+
       await addDoc(collection(db, "posts"), {
         text,
         mediaUrl: finalMediaUrl,
+        mediaStoragePath: mediaStoragePath || null, // শুধু ভিডিওর ক্ষেত্রেই একটা পাথ থাকবে — cleanup-এর জন্য দরকার
         userName: auth.currentUser?.displayName || "Student",
         userId: auth.currentUser?.uid,
         likes: [],
@@ -206,6 +304,8 @@ export default function Home({ isAdmin }) {
     } catch (error) {
       console.error("Posting Error:", error);
       alert("Posting failed: " + error.message);
+    } finally {
+      setIsPosting(false);
     }
   };
 
@@ -295,8 +395,12 @@ export default function Home({ isAdmin }) {
     setEditingComment(null);
   };
 
-  const handleDeletePost = async (postId) => {
+  const handleDeletePost = async (postId, mediaStoragePath) => {
     if (window.confirm("Are you sure you want to delete this post? This will empty its space from database permanently.")) {
+      // নতুন: এই পোস্টের ভিডিও Firebase Storage-এ থাকলে সেটাও মুছে ফেলা হচ্ছে
+      if (mediaStoragePath) {
+        await deleteObject(storageRef(storage, mediaStoragePath)).catch(() => {});
+      }
       await deleteDoc(doc(db, "posts", postId));
     }
   };
@@ -363,20 +467,27 @@ export default function Home({ isAdmin }) {
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: 'var(--text, #555)', marginBottom: '5px' }}>Upload from Device:</label>
                 <input type="file" accept="image/*,video/*" onChange={handleFileChange} style={{ fontSize: '13px' }} />
                 
-                {selectedFile && (
+                {isCompressing && (
+                  <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '12px', color: '#0056b3', fontWeight: 'bold' }}>
+                    ৩৬০p-তে কম্প্রেস হচ্ছে… {compressionProgress}%
+                  </div>
+                )}
+                {selectedFile?.kind === 'video' && !isCompressing && (
                   <div style={{ marginTop: '10px', textAlign: 'center' }}>
-                    {selectedFile.startsWith('data:video/') ? (
-                      <span style={{ color: '#28a745', fontSize: '12px', fontWeight: 'bold' }}>✓ Video Loaded (Ready to Post)</span>
-                    ) : selectedFile.startsWith('data:image/') ? (
-                      <div>
-                        <img src={selectedFile} alt="Compressed Preview" style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #ddd' }} />
-                        <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ Image Auto-Compressed</small>
-                      </div>
-                    ) : null}
+                    <video src={selectedFile.previewUrl} controls style={{ width: '160px', maxHeight: '120px', borderRadius: '4px', border: '1px solid #ddd' }} />
+                    <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ ৩৬০p-তে কম্প্রেস হয়ে গেছে — পোস্ট করার জন্য প্রস্তুত</small>
+                  </div>
+                )}
+                {selectedFile?.kind === 'image' && (
+                  <div style={{ marginTop: '10px', textAlign: 'center' }}>
+                    <img src={selectedFile.base64} alt="Compressed Preview" style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #ddd' }} />
+                    <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ Image Auto-Compressed</small>
                   </div>
                 )}
               </div>
-              <button type="submit" style={{ width: '100%', marginTop: '15px', padding: '10px', backgroundColor: '#0056b3', color: '#fff', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Post to Feed</button>
+              <button type="submit" disabled={isPosting || isCompressing} style={{ width: '100%', marginTop: '15px', padding: '10px', backgroundColor: (isPosting || isCompressing) ? '#7fa8d9' : '#0056b3', color: '#fff', border: 'none', borderRadius: '5px', cursor: (isPosting || isCompressing) ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}>
+                {isCompressing ? 'কম্প্রেস হচ্ছে…' : (isPosting ? 'Uploading…' : 'Post to Feed')}
+              </button>
             </form>
           </div>
         </div>
@@ -405,7 +516,7 @@ export default function Home({ isAdmin }) {
               {(auth.currentUser?.uid === post.userId || isAdmin) && (
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', fontSize: '12px' }}>
                   <span onClick={() => handleEditPost(post.id, post.text)} style={{ color: '#0072ff', cursor: 'pointer' }}>Edit</span>
-                  <span onClick={() => handleDeletePost(post.id)} style={{ color: '#ff3366', cursor: 'pointer' }}>Delete</span>
+                  <span onClick={() => handleDeletePost(post.id, post.mediaStoragePath)} style={{ color: '#ff3366', cursor: 'pointer' }}>Delete</span>
                 </div>
               )}
             </div>
@@ -414,7 +525,7 @@ export default function Home({ isAdmin }) {
             
             {post.mediaUrl && (
               <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px' }}>
-                {post.mediaUrl.startsWith('data:video/') || post.mediaUrl.includes('video/') || post.mediaUrl.endsWith('.mp4') ? (
+                {post.mediaUrl.startsWith('data:video/') || post.mediaStoragePath || post.mediaUrl.includes('video/') || post.mediaUrl.endsWith('.mp4') ? (
                   <video src={post.mediaUrl} controls style={{ maxWidth: '100%', maxHeight: '400px', width: '100%' }} />
                 ) : (
                   <img src={post.mediaUrl} alt="Post Content" style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }} />

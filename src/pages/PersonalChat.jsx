@@ -5,6 +5,7 @@ import {
   collection, addDoc, query, orderBy, onSnapshot, doc, 
   setDoc, updateDoc, getDoc, getDocs, where, deleteDoc 
 } from 'firebase/firestore';
+import { getActiveCallSession, setActiveCallSession, clearActiveCallSession, subscribeActiveCallSession } from '../callSession';
 
 // WebRTC ICE configuration: Google's free STUN servers + a free public TURN
 // relay (OpenRelay/Metered.ca — shared, no signup, but rate-limited). This
@@ -185,7 +186,6 @@ export default function PersonalChat() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
   const [activeCallType, setActiveCallType] = useState('video'); // 'video' | 'audio'
-  const [incomingCall, setIncomingCall] = useState(null);
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
 
@@ -298,15 +298,16 @@ export default function PersonalChat() {
   }, [isRecording]);
 
   // if GlobalAlerts sent us here to auto-join an already-ringing call
-  // (its floating "Receive" button), skip the local incoming-call prompt and
-  // jump straight into the call once we know it's actually still ringing.
+  // (its floating "Receive" button), join right away. answerIncomingCall()
+  // itself re-reads the call doc, so it's safe even if this fires before
+  // any local Firestore listener here has caught up.
   useEffect(() => {
-    if (location.state?.autoJoinCall && incomingCall) {
+    if (location.state?.autoJoinCall) {
       answerIncomingCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state, incomingCall]);
+  }, [location.state]);
 
   useEffect(() => {
     if (!receiverId) return;
@@ -337,24 +338,11 @@ export default function PersonalChat() {
       }
     });
 
-    const unsubscribeCall = onSnapshot(doc(db, "personal-calls", chatRoomId), (snapshot) => {
-      if (snapshot.exists()) {
-        const callData = snapshot.data();
-        if (callData.status === "ringing" && callData.hostId !== currentUid) {
-          setIncomingCall(callData);
-        } else if (callData.status === "ended") {
-          setIncomingCall(null);
-          setInCall(false);
-        }
-      }
-    });
-
     const handleOutsideClick = () => setActiveMenuId(null);
     window.addEventListener('click', handleOutsideClick);
 
     return () => { 
       unsubscribeMsg(); 
-      unsubscribeCall(); 
       window.removeEventListener('click', handleOutsideClick);
     };
   }, [chatRoomId, receiverId, currentUid]);
@@ -452,12 +440,13 @@ export default function PersonalChat() {
       if (isSenderMe) {
         try {
           const msgDocRef = doc(db, "personal-rooms", chatRoomId, "messages", msgId);
-          await updateDoc(msgDocRef, {
-            text: "",
-            fileUrl: "", 
-            fileType: "",
-            isDeleted: true
-          });
+          // ফিক্স: আগে এখানে text/fileUrl/fileType খালি করে দেওয়া হতো, তাই আসল
+          // মেসেজ চিরতরে হারিয়ে যেত। কিন্তু normal ইউজাররা এমনিতেই isDeleted flag
+          // দেখে "This message was deleted" দেখে (নিচের render-এ), আসল কনটেন্ট
+          // খালি থাকা লাগে না। তাই এখন শুধু isDeleted:true সেট হচ্ছে — কনটেন্ট
+          // অক্ষত থাকছে (৭ দিন পর auto-cleanup-এ পুরো মেসেজটাই মুছে যাবে যেমন আগে
+          // যেত), এই সময়ের মধ্যে অ্যাডমিন প্যানেল থেকে ডিলিট করা মেসেজও দেখা যাবে।
+          await updateDoc(msgDocRef, { isDeleted: true });
         } catch (error) {
           console.error("Error deleting message globally:", error);
         }
@@ -720,9 +709,9 @@ export default function PersonalChat() {
   };
 
   // stops local camera/mic, closes the peer connection, and detaches
-  // Firestore listeners — WITHOUT touching the "personal-calls" document
-  // itself (used both for a clean hangup and for reacting to the other
-  // side ending the call).
+  // Firestore listeners — used both for a clean hangup and for reacting to
+  // the other side ending the call. Also clears the shared call-session,
+  // so GlobalAlerts.jsx's minimized "call in progress" bubble disappears too.
   const cleanupCallLocally = () => {
     if (unsubscribeCallSignalRef.current) { unsubscribeCallSignalRef.current(); unsubscribeCallSignalRef.current = null; }
     if (unsubscribeCandidatesRef.current) { unsubscribeCandidatesRef.current(); unsubscribeCandidatesRef.current = null; }
@@ -731,7 +720,41 @@ export default function PersonalChat() {
     if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach(track => track.stop()); remoteStreamRef.current = null; }
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    clearActiveCallSession();
   };
+
+  // নতুন: এই রুমে ইতিমধ্যে একটা চলমান কল থাকলে (অন্য পেজে গিয়ে "Back" চেপে
+  // ফিরে এসেছেন, বা GlobalAlerts-এর মিনিমাইজড বাবল থেকে ক্লিক করেছেন) সেটাতে
+  // আবার যুক্ত হও — নতুন করে ক্যামেরা/মাইক না চেয়ে ইতিমধ্যে চলা কানেকশনটাই ব্যবহার হয়
+  useEffect(() => {
+    const existing = getActiveCallSession();
+    if (existing && existing.type === 'personal' && existing.chatRoomId === chatRoomId) {
+      peerConnectionRef.current = existing.peerConnection;
+      localStreamRef.current = existing.localStream;
+      remoteStreamRef.current = existing.remoteStream;
+      setActiveCallType(existing.callType);
+      setInCall(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatRoomId]);
+
+  // নতুন: session অন্য কোথাও (GlobalAlerts, বা রিমোট সাইড কল কেটে দেওয়ায়) মুছে
+  // গেলে/বদলে গেলে এই কম্পোনেন্টের লোকাল UI-ও সেটার প্রতিফলন করবে
+  useEffect(() => {
+    const unsubscribe = subscribeActiveCallSession((session) => {
+      if (!session || session.chatRoomId !== chatRoomId) {
+        peerConnectionRef.current = null;
+        localStreamRef.current = null;
+        remoteStreamRef.current = null;
+        if (localVideoRef.current) localVideoRef.current.srcObject = null;
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+        setInCall(false);
+        setActiveCallType('video');
+      }
+    });
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatRoomId]);
 
   // ফিক্স: <video> এলিমেন্ট দুটো শুধু inCall === true হলেই DOM-এ তৈরি হয়, কিন্তু
   // আগের কোড stream পাওয়ার সাথে সাথেই (inCall সেট হওয়ার আগেই) localVideoRef/
@@ -796,7 +819,6 @@ export default function PersonalChat() {
         }
         if (data.status === 'ended') {
           cleanupCallLocally();
-          setIncomingCall(null);
           setInCall(false);
         }
       });
@@ -813,6 +835,12 @@ export default function PersonalChat() {
 
       setActiveCallType(callType);
       setInCall(true);
+      // এই কলটাকে shared session-এ রাখা হচ্ছে — এখন অন্য পেজে গেলেও কলটা চলতেই থাকবে
+      setActiveCallSession({
+        type: 'personal', chatRoomId, otherUid: targetUid, otherName: receiverName,
+        otherPhoto: usersCache[targetUid] || '', callType,
+        peerConnection: pc, localStream: stream, remoteStream: remoteStreamRef.current,
+      });
     } catch (err) {
       console.error("Error starting call:", err);
       alert("🎤 Could not start the call. Camera/microphone permission may be needed.");
@@ -829,7 +857,6 @@ export default function PersonalChat() {
       const callRef = doc(db, "personal-calls", chatRoomId);
       const callSnap = await getDoc(callRef);
       if (!callSnap.exists() || !callSnap.data().offer) {
-        setIncomingCall(null);
         return;
       }
       const callData = callSnap.data();
@@ -877,19 +904,22 @@ export default function PersonalChat() {
       unsubscribeCallSignalRef.current = onSnapshot(callRef, (snap) => {
         if (snap.data()?.status === 'ended') {
           cleanupCallLocally();
-          setIncomingCall(null);
           setInCall(false);
         }
       });
 
-      setIncomingCall(null);
       setActiveCallType(callType);
       setInCall(true);
+      // এই কলটাকে shared session-এ রাখা হচ্ছে — এখন অন্য পেজে গেলেও কলটা চলতেই থাকবে
+      setActiveCallSession({
+        type: 'personal', chatRoomId, otherUid: targetUid, otherName: receiverName,
+        otherPhoto: usersCache[targetUid] || '', callType,
+        peerConnection: pc, localStream: stream, remoteStream: remoteStreamRef.current,
+      });
     } catch (err) {
       console.error("Error answering call:", err);
       alert("🎤 Could not join the call. Camera/microphone permission may be needed.");
       cleanupCallLocally();
-      setIncomingCall(null);
     }
   };
 
@@ -914,17 +944,14 @@ export default function PersonalChat() {
       console.error("Error ending call:", err);
     }
     cleanupCallLocally();
-    setIncomingCall(null);
     setInCall(false);
     setActiveCallType('video');
   };
 
-  // camera/mic and the peer connection must not keep running if the user
-  // navigates away from this chat entirely while still in a call
-  useEffect(() => {
-    return () => { cleanupCallLocally(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // নোট: আগে এখানে "component unmount হলেই কল বন্ধ করে দাও" — এমন একটা effect
+  // ছিল। এখন সেটা ইচ্ছাকৃতভাবে সরানো হয়েছে — কল চলাকালীন অন্য পেজে গেলে
+  // (যেমন Back চাপলে) কলটা shared session-এ চলতেই থাকবে, বন্ধ হবে শুধু
+  // ব্যবহারকারী সত্যিই হ্যাংআপ করলে (endCall) বা অন্য পাশ কেটে দিলে।
 
   const toggleMenu = (e, msgId) => {
     e.stopPropagation();
@@ -1001,7 +1028,19 @@ export default function PersonalChat() {
 
       <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
-        <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px' }}>{receiverName}</h3>
+        {/* নতুন: হেডারে এখন নামের পাশে প্রোফাইল ছবিও দেখাবে, ক্লিক করলে প্রোফাইলে যাবে */}
+        <div
+          onClick={() => navigate(`/profile/${targetUid}`)}
+          title={`${receiverName}-এর প্রোফাইলে যান`}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
+        >
+          <img
+            src={(usersCache[targetUid] && usersCache[targetUid].trim() !== '') ? usersCache[targetUid] : `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(receiverName || 'Student')}`}
+            alt=""
+            style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(255,255,255,0.6)' }}
+          />
+          <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px' }}>{receiverName}</h3>
+        </div>
         {!inCall && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             {receiverOnline && (
@@ -1010,22 +1049,12 @@ export default function PersonalChat() {
             <button onClick={() => initiateCall('video')} title="Video call" style={{ background: '#28a745', color: 'white', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <VideoCallIcon />
             </button>
-            <button onClick={() => initiateCall('audio')} title="Audio call" style={{ background: '#0056b3', color: 'white', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <button onClick={() => initiateCall('audio')} title="Audio call" style={{ background: 'rgba(255,255,255,0.25)', color: 'white', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <AudioCallIcon />
             </button>
           </div>
         )}
       </div>
-
-      {incomingCall && !inCall && (
-        <div style={{ position: 'absolute', top: '70px', left: '15px', right: '15px', background: '#fff', border: '2px solid #28a745', borderRadius: '8px', padding: '15px', zIndex: 999, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-          <p style={{ margin: '0 0 12px 0', fontWeight: 'bold', color: '#333' }}>📞 {receiverName} is calling you...</p>
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-            <button onClick={answerIncomingCall} style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Receive</button>
-            <button onClick={endCall} style={{ background: '#dc3545', color: 'white', border: 'none', padding: '8px 20px', borderRadius: '5px', cursor: 'pointer' }}>Decline</button>
-          </div>
-        </div>
-      )}
 
       {inCall ? (
         <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
@@ -1067,8 +1096,9 @@ export default function PersonalChat() {
                   <img 
                     src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} 
                     alt="Profile" 
+                    onClick={() => navigate(`/profile/${getMsg.senderId}`)}
                     onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }}
-                    style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', flexShrink: 0 }} 
+                    style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', flexShrink: 0, cursor: 'pointer' }} 
                   />
                   <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
                     <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px', paddingLeft: isMe ? '0' : '4px', paddingRight: isMe ? '4px' : '0' }}>{getMsg.senderName}</small>
