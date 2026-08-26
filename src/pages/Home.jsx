@@ -5,77 +5,50 @@ import {
   collection, addDoc, query, onSnapshot, doc, updateDoc, 
   arrayUnion, arrayRemove, deleteDoc, getDocs, where 
 } from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { ref as storageRef, deleteObject } from 'firebase/storage'; // পুরনো পোস্ট (আগে Firebase Storage-এ আপলোড হওয়া ভিডিও) cleanup-এর জন্য এখনো রাখা হয়েছে — নতুন পোস্টে আর ব্যবহার হয় না
+
+// নতুন: পোস্টের ছবি ও ভিডিও — দুটোই এখন Cloudinary-তে (আনসাইনড আপলোড প্রিসেট
+// দিয়ে) আপলোড হয়, Firebase Storage বা Firestore-এ raw base64/binary না রেখে।
+// এই cloud name/preset আপনার Cloudinary কনসোল থেকে নেওয়া (Upload Presets পেজ)।
+const CLOUDINARY_CLOUD_NAME = 'hvdnthrl';
+const CLOUDINARY_UPLOAD_PRESET = 'student-connect';
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024; // 100MB — Cloudinary প্রিসেটের আপলোড সীমা অনুযায়ী
 
 const commentFormStyle = { display: 'flex', marginTop: '8px', position: 'relative', width: '100%', alignItems: 'center' };
 const commentInputStyle = { width: '100%', padding: '8px 40px 8px 10px', fontSize: '13px', borderRadius: '20px', border: '1px solid var(--border, #ccc)', backgroundColor: 'transparent', outline: 'none', boxSizing: 'border-box' };
 const commentIconBtnStyle = { position: 'absolute', right: '10px', background: 'none', border: 'none', color: '#0056b3', cursor: 'pointer', fontSize: '16px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' };
 
-// নতুন: ভিডিও ব্রাউজারেই ৩৬০p-তে re-encode করা হয় (canvas + MediaRecorder দিয়ে) —
-// কোনো এক্সটার্নাল লাইব্রেরি (ffmpeg ইত্যাদি) ছাড়াই। যে কোয়ালিটির ভিডিও দেওয়া
-// হোক না কেন, Firebase Storage-এ যতটা সম্ভব ছোট সাইজে (৩৬০p, কম বিটরেট) সেভ
-// হবে — যেহেতু ৭ দিন পর এমনিতেই মুছে যাবে, তাই সাইজ কমানোই অগ্রাধিকার।
-// নোট: এটা real-time-এ চলে (৬০ সেকেন্ডের ভিডিও কম্প্রেস হতে ~৬০ সেকেন্ড লাগে),
-// আর আউটপুট ফরম্যাট ব্রাউজারভেদে আলাদা হতে পারে (Chrome/Firefox-এ WebM,
-// Safari সাপোর্ট করলে MP4) — সব ব্রাউজারে প্লেব্যাক কম্প্যাটিবিলিটি ১০০% গ্যারান্টি
-// করা কঠিন, তবে বেশিরভাগ আধুনিক ব্রাউজারেই কাজ করবে।
-function compressVideoTo360p(file, onProgress) {
+// XMLHttpRequest ব্যবহার করা হচ্ছে (fetch না) যাতে আপলোড progress % পাওয়া যায়
+function uploadMediaToCloudinary(fileOrBlob, resourceType, onProgress) {
   return new Promise((resolve, reject) => {
-    const videoEl = document.createElement('video');
-    videoEl.muted = false;
-    videoEl.playsInline = true;
-    videoEl.src = URL.createObjectURL(file);
+    const formData = new FormData();
+    formData.append('file', fileOrBlob);
+    formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
 
-    videoEl.onloadedmetadata = () => {
-      const targetHeight = 360;
-      const scale = Math.min(1, targetHeight / videoEl.videoHeight);
-      const targetWidth = Math.max(2, Math.round((videoEl.videoWidth * scale) / 2) * 2);
-      const targetHeightEven = Math.max(2, Math.round((videoEl.videoHeight * scale) / 2) * 2);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`);
 
-      const canvas = document.createElement('canvas');
-      canvas.width = targetWidth;
-      canvas.height = targetHeightEven;
-      const ctx = canvas.getContext('2d');
-
-      let combinedStream;
-      try {
-        const canvasStream = canvas.captureStream(30);
-        const rawAudioStream = videoEl.captureStream ? videoEl.captureStream() : (videoEl.mozCaptureStream ? videoEl.mozCaptureStream() : null);
-        const audioTracks = rawAudioStream ? rawAudioStream.getAudioTracks() : [];
-        combinedStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
-      } catch (err) {
-        reject(err);
-        return;
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
       }
-
-      if (!window.MediaRecorder) { reject(new Error('MediaRecorder not supported')); return; }
-      const mimeCandidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/mp4', 'video/webm'];
-      const mimeType = mimeCandidates.find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm';
-
-      const recordedChunks = [];
-      const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 500000 }); // ~500kbps — ৩৬০p-এর জন্য যথেষ্ট, সাইজ ছোট রাখে
-      recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
-      recorder.onstop = () => {
-        URL.revokeObjectURL(videoEl.src);
-        resolve(new Blob(recordedChunks, { type: mimeType }));
-      };
-      recorder.onerror = (e) => reject(e.error || new Error('Recording failed'));
-
-      let rafId;
-      const drawFrame = () => {
-        if (videoEl.paused || videoEl.ended) return;
-        ctx.drawImage(videoEl, 0, 0, targetWidth, targetHeightEven);
-        if (onProgress && videoEl.duration) onProgress(Math.min(100, Math.round((videoEl.currentTime / videoEl.duration) * 100)));
-        rafId = requestAnimationFrame(drawFrame);
-      };
-
-      videoEl.onplay = () => { drawFrame(); };
-      videoEl.onended = () => { cancelAnimationFrame(rafId); recorder.stop(); };
-
-      recorder.start();
-      videoEl.play().catch(reject);
     };
-    videoEl.onerror = () => reject(new Error('Could not read video for compression'));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data.secure_url);
+        } catch (err) {
+          reject(new Error('Could not parse Cloudinary response'));
+        }
+      } else {
+        let message = `Upload failed (HTTP ${xhr.status})`;
+        try { message = JSON.parse(xhr.responseText)?.error?.message || message; } catch (e) { /* ignore */ }
+        reject(new Error(message));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.send(formData);
   });
 }
 
@@ -91,8 +64,7 @@ export default function Home({ isAdmin }) {
   const [mediaUrl, setMediaUrl] = useState('');
   const [selectedFile, setSelectedFile] = useState(null); 
   const [isPosting, setIsPosting] = useState(false); // নতুন: ভিডিও আপলোড হওয়া পর্যন্ত বাটন disabled রাখতে
-  const [isCompressing, setIsCompressing] = useState(false); // নতুন: ৩৬০p কম্প্রেশন চলাকালীন
-  const [compressionProgress, setCompressionProgress] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState(0); // নতুন: Cloudinary আপলোড প্রগ্রেস %
   const [commentInput, setCommentInput] = useState({});
   const [showPostModal, setShowPostModal] = useState(false);
   const [editingComment, setEditingComment] = useState(null);
@@ -204,9 +176,34 @@ export default function Home({ isAdmin }) {
     if (!file) return;
 
     if (file.type.startsWith('video/')) {
+      // নতুন: Cloudinary-তে আপলোড হবে বলে আর কম্প্রেশনের দরকার নেই — শুধু
+      // ১০০MB সাইজ-সীমা (আপনার আপলোড প্রিসেট অনুযায়ী) আগেই চেক করা হচ্ছে
+      if (file.size > MAX_VIDEO_BYTES) {
+        alert("This video is larger than 100MB. Please choose a smaller video file.");
+        e.target.value = "";
+        setSelectedFile(null);
+        return;
+      }
+
       const video = document.createElement('video');
       video.preload = 'metadata';
-      video.onloadedmetadata = async () => {
+
+      let settled = false;
+      const metadataTimeoutId = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        window.URL.revokeObjectURL(video.src);
+        // কিছু ভিডিও ফরম্যাট (যেমন কিছু ফোনের HEVC) ব্রাউজার প্রিভিউ করতে
+        // পারে না — সাইজ-চেক আগেই পাস হয়েছে বলে ফাইলটা এখনো গ্রহণ করা হচ্ছে,
+        // শুধু ডিউরেশন যাচাই করা যায়নি এই বার্তাটুকু দেখানো হচ্ছে
+        alert("This video's duration could not be verified (your browser may not support previewing this format). It will be uploaded as-is — please make sure it's under 1 minute.");
+        setSelectedFile({ kind: 'video', file, previewUrl: null });
+      }, 15000);
+
+      video.onloadedmetadata = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(metadataTimeoutId);
         window.URL.revokeObjectURL(video.src);
         if (video.duration > 60) {
           alert("Error: Video duration cannot exceed 1 minute!");
@@ -214,20 +211,14 @@ export default function Home({ isAdmin }) {
           setSelectedFile(null);
           return;
         }
-        // নতুন: ফাইল বাছাই করার সাথে সাথেই ৩৬০p-তে কম্প্রেস শুরু হয়ে যায়, যাতে
-        // "Post" চাপার সময়ে আপলোড দ্রুত হয় (কম্প্রেশন ততক্ষণে শেষ থাকবে)
-        setIsCompressing(true);
-        setCompressionProgress(0);
-        try {
-          const compressedBlob = await compressVideoTo360p(file, setCompressionProgress);
-          setSelectedFile({ kind: 'video', blob: compressedBlob, previewUrl: URL.createObjectURL(compressedBlob) });
-        } catch (err) {
-          console.error("Video compression failed, using the original file instead:", err);
-          // ফিক্স: কম্প্রেশন কোনো কারণে ব্যর্থ হলেও পোস্ট করা যেন আটকে না যায় — মূল ফাইলটাই ব্যবহার হবে
-          setSelectedFile({ kind: 'video', blob: file, previewUrl: URL.createObjectURL(file) });
-        } finally {
-          setIsCompressing(false);
-        }
+        setSelectedFile({ kind: 'video', file, previewUrl: URL.createObjectURL(file) });
+      };
+      video.onerror = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(metadataTimeoutId);
+        alert("This video could not be previewed in this browser. It will be uploaded as-is — please make sure it's under 1 minute.");
+        setSelectedFile({ kind: 'video', file, previewUrl: null });
       };
       video.src = URL.createObjectURL(file);
     } else if (file.type.startsWith('image/')) {
@@ -237,7 +228,7 @@ export default function Home({ isAdmin }) {
         img.src = event.target.result;
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 500;
+          const MAX_WIDTH = 800; // Cloudinary-তে আপলোড হবে বলে সামান্য বড় রেজোলিউশন রাখা হলো
           let width = img.width;
           let height = img.height;
 
@@ -250,9 +241,11 @@ export default function Home({ isAdmin }) {
           canvas.height = height;
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
-          
-          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.6);
-          setSelectedFile({ kind: 'image', base64: compressedBase64 });
+
+          // নতুন: base64 স্ট্রিং না বানিয়ে সরাসরি Blob বানানো হচ্ছে — এটাই Cloudinary-তে আপলোড হবে
+          canvas.toBlob((blob) => {
+            setSelectedFile({ kind: 'image', blob, previewUrl: URL.createObjectURL(blob) });
+          }, 'image/jpeg', 0.7);
         };
       };
       reader.readAsDataURL(file);
@@ -263,32 +256,25 @@ export default function Home({ isAdmin }) {
     if (!text.trim() && !mediaUrl.trim() && !selectedFile) return;
 
     setIsPosting(true);
+    setUploadProgress(0);
     try {
       let finalMediaUrl = mediaUrl;
-      let mediaStoragePath = null;
 
       if (selectedFile?.kind === 'video') {
-        // ভিডিও ইতিমধ্যেই handleFileChange-এ ৩৬০p-তে কম্প্রেস হয়ে গেছে —
-        // এখন সরাসরি সেই Blob-টাই Firebase Storage-এ আপলোড হচ্ছে। Firestore
-        // ডকুমেন্টে raw base64 গুঁজে দেওয়া হচ্ছে না, তাই ১MB লিমিটে আটকায় না।
-        const ext = (selectedFile.blob.type || '').includes('mp4') ? 'mp4' : 'webm';
-        mediaStoragePath = `post-videos/${auth.currentUser?.uid || 'unknown'}_${Date.now()}.${ext}`;
-        const vRef = storageRef(storage, mediaStoragePath);
-        await uploadBytes(vRef, selectedFile.blob);
-        finalMediaUrl = await getDownloadURL(vRef);
+        // নতুন: ভিডিও এখন সরাসরি Cloudinary-তে আপলোড হচ্ছে (কোনো কম্প্রেশন
+        // ছাড়াই) — Firestore ডকুমেন্টে raw base64 গুঁজে দেওয়া হচ্ছে না, তাই
+        // ১MB লিমিটে আটকায় না। সাইজ ইতিমধ্যে handleFileChange-এ ১০০MB-এর
+        // মধ্যে যাচাই করা হয়েছে।
+        finalMediaUrl = await uploadMediaToCloudinary(selectedFile.file, 'video', setUploadProgress);
       } else if (selectedFile?.kind === 'image') {
-        finalMediaUrl = selectedFile.base64;
-        if (finalMediaUrl.length > 1048480) {
-          alert("🚨 Image size is too large! Please choose a smaller image.");
-          setIsPosting(false);
-          return;
-        }
+        // ছবিও এখন Cloudinary-তে আপলোড হচ্ছে (আগে ছিল base64 হিসেবে Firestore-এই)
+        finalMediaUrl = await uploadMediaToCloudinary(selectedFile.blob, 'image', setUploadProgress);
       }
 
       await addDoc(collection(db, "posts"), {
         text,
         mediaUrl: finalMediaUrl,
-        mediaStoragePath: mediaStoragePath || null, // শুধু ভিডিওর ক্ষেত্রেই একটা পাথ থাকবে — cleanup-এর জন্য দরকার
+        mediaStoragePath: null, // নতুন পোস্টে আর ব্যবহার হয় না (Firebase Storage-এর বদলে Cloudinary) — শুধু পুরনো পোস্ট cleanup-এর জন্য ফিল্ডটা রাখা হলো
         userName: auth.currentUser?.displayName || "Student",
         userId: auth.currentUser?.uid,
         likes: [],
@@ -466,27 +452,32 @@ export default function Home({ isAdmin }) {
               <div style={{ marginTop: '12px', width: '95%' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: 'var(--text, #555)', marginBottom: '5px' }}>Upload from Device:</label>
                 <input type="file" accept="image/*,video/*" onChange={handleFileChange} style={{ fontSize: '13px' }} />
-                
-                {isCompressing && (
-                  <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '12px', color: '#0056b3', fontWeight: 'bold' }}>
-                    ৩৬০p-তে কম্প্রেস হচ্ছে… {compressionProgress}%
-                  </div>
-                )}
-                {selectedFile?.kind === 'video' && !isCompressing && (
+
+                {selectedFile?.kind === 'video' && selectedFile.previewUrl && (
                   <div style={{ marginTop: '10px', textAlign: 'center' }}>
                     <video src={selectedFile.previewUrl} controls style={{ width: '160px', maxHeight: '120px', borderRadius: '4px', border: '1px solid #ddd' }} />
-                    <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ ৩৬০p-তে কম্প্রেস হয়ে গেছে — পোস্ট করার জন্য প্রস্তুত</small>
+                    <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ Video ready to post</small>
+                  </div>
+                )}
+                {selectedFile?.kind === 'video' && !selectedFile.previewUrl && (
+                  <div style={{ marginTop: '10px', textAlign: 'center' }}>
+                    <small style={{ display: 'block', color: '#ffc107', fontSize: '11px' }}>⚠️ Preview unavailable, but the video is ready to post</small>
                   </div>
                 )}
                 {selectedFile?.kind === 'image' && (
                   <div style={{ marginTop: '10px', textAlign: 'center' }}>
-                    <img src={selectedFile.base64} alt="Compressed Preview" style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #ddd' }} />
-                    <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ Image Auto-Compressed</small>
+                    <img src={selectedFile.previewUrl} alt="Preview" style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #ddd' }} />
+                    <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ Image ready to post</small>
+                  </div>
+                )}
+                {isPosting && selectedFile && (
+                  <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '12px', color: '#0056b3', fontWeight: 'bold' }}>
+                    Uploading… {uploadProgress}%
                   </div>
                 )}
               </div>
-              <button type="submit" disabled={isPosting || isCompressing} style={{ width: '100%', marginTop: '15px', padding: '10px', backgroundColor: (isPosting || isCompressing) ? '#7fa8d9' : '#0056b3', color: '#fff', border: 'none', borderRadius: '5px', cursor: (isPosting || isCompressing) ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}>
-                {isCompressing ? 'কম্প্রেস হচ্ছে…' : (isPosting ? 'Uploading…' : 'Post to Feed')}
+              <button type="submit" disabled={isPosting} style={{ width: '100%', marginTop: '15px', padding: '10px', backgroundColor: isPosting ? '#7fa8d9' : '#0056b3', color: '#fff', border: 'none', borderRadius: '5px', cursor: isPosting ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}>
+                {isPosting ? 'Uploading…' : 'Post to Feed'}
               </button>
             </form>
           </div>

@@ -7,6 +7,11 @@ import {
   updateDoc, setDoc
 } from 'firebase/firestore';
 import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
+// নতুন: মোবাইল অ্যাপে (Capacitor-এ বিল্ড করলে) ব্যাকগ্রাউন্ড/ফোরগ্রাউন্ড রিলায়েবলি
+// ধরার জন্য। ওয়েবে এটা কিছু করে না (নিচে Capacitor.isNativePlatform() দিয়ে গার্ড
+// করা আছে), তাই ওয়েব ভার্সনের আচরণ অক্ষত থাকছে।
+import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
 
 const GLOBAL_ROOM_ID = "campus_global_conference_room";
 
@@ -122,14 +127,31 @@ export default function GlobalAlerts() {
     if (!currentUid) return;
     const selfRef = doc(db, "users", currentUid);
     const OFFLINE_GRACE_MS = 5 * 60 * 1000; // ৫ মিনিট
+    const HEARTBEAT_MS = 60 * 1000; // ৬০ সেকেন্ড — presence.js-এর STALE_THRESHOLD_MS-এর সাথে মিলিয়ে
     let offlineTimer = null;
+    let heartbeatInterval = null;
 
     const goOnline = () => {
       if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
       setDoc(selfRef, { online: true, lastSeen: new Date().getTime() }, { merge: true }).catch(() => {});
+      // নতুন: যতক্ষণ সত্যিই visible/active থাকি, ততক্ষণ প্রতি ৬০ সেকেন্ডে
+      // lastSeen রিফ্রেশ হতে থাকে — ট্যাব ক্র্যাশ করলে/হুট করে বন্ধ হয়ে গেলে এই
+      // heartbeat বন্ধ হয়ে যাবে, আর presence.js-এর isUserOnline() কিছুক্ষণ পর
+      // (২ মিনিট) সেটা নিজে থেকেই ধরে ফেলবে — অন্য কোথাও "online: true" লেখাটা
+      // চিরতরে আটকে থাকবে না।
+      if (!heartbeatInterval) {
+        heartbeatInterval = setInterval(() => {
+          updateDoc(selfRef, { lastSeen: new Date().getTime() }).catch(() => {});
+        }, HEARTBEAT_MS);
+      }
+    };
+
+    const stopHeartbeat = () => {
+      if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
     };
 
     const scheduleGoOffline = () => {
+      stopHeartbeat(); // ব্যাকগ্রাউন্ডে থাকা অবস্থায় heartbeat দেওয়ার দরকার নেই
       if (offlineTimer) clearTimeout(offlineTimer);
       offlineTimer = setTimeout(() => {
         updateDoc(selfRef, { online: false }).catch(() => {});
@@ -154,10 +176,25 @@ export default function GlobalAlerts() {
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
 
+    // নতুন: Capacitor দিয়ে বানানো নেটিভ মোবাইল অ্যাপে visibilitychange-এর চেয়ে
+    // বেশি নির্ভরযোগ্যভাবে অ্যাপ ব্যাকগ্রাউন্ড/ফোরগ্রাউন্ড ধরার জন্য। ওয়েবে
+    // Capacitor.isNativePlatform() false হবে, তাই এই ব্লকটা ওয়েবে কিছুই করবে না।
+    let appStateListenerHandle = null;
+    if (Capacitor.isNativePlatform()) {
+      CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) goOnline();
+        else scheduleGoOffline();
+      }).then((handle) => { appStateListenerHandle = handle; }).catch((err) => {
+        console.error("Capacitor App lifecycle listener error:", err);
+      });
+    }
+
     return () => {
+      stopHeartbeat();
       if (offlineTimer) clearTimeout(offlineTimer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (appStateListenerHandle) appStateListenerHandle.remove();
       updateDoc(selfRef, { online: false }).catch(() => {});
     };
   }, [currentUid]);

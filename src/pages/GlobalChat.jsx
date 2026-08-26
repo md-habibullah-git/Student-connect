@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
+import { isUserOnline } from '../presence';
 import { 
   collection, addDoc, onSnapshot, query, orderBy, limit, 
   serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where 
@@ -320,7 +321,7 @@ export default function GlobalChat() {
       snapshot.docs.forEach(doc => {
         const data = doc.data();
         const uidKey = data.uid || doc.id;
-        cache[uidKey] = { photo: data.photo || "", online: data.online === true, name: data.name || "" };
+        cache[uidKey] = { photo: data.photo || "", online: isUserOnline(data), name: data.name || "" };
       });
       setUsersCache(cache);
     });

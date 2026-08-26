@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { collection, query, where, onSnapshot, doc, orderBy, limit, getCountFromServer, Timestamp } from 'firebase/firestore';
+import { isUserOnline } from '../presence';
 
 export default function Messenger() {
   const navigate = useNavigate();
@@ -40,10 +41,13 @@ export default function Messenger() {
       setUsers(filtered);
 
       // build a quick lookup of who's online from the same snapshot
+      // ফিক্স: শুধু user.online === true দেখলে ক্র্যাশ/জোর করে বন্ধ হওয়া
+      // অ্যাকাউন্টও চিরতরে "online" আটকে থাকতে পারত (কোনো cleanup সিগন্যাল
+      // ছাড়াই) — এখন lastSeen কতটা সাম্প্রতিক তাও চেক করা হচ্ছে (presence.js)
       const online = {};
       usersList.forEach(user => {
         const uidKey = user.uid || user.id;
-        if (uidKey) online[uidKey] = user.online === true;
+        if (uidKey) online[uidKey] = isUserOnline(user);
       });
       setOnlineMap(online);
     }, (error) => {

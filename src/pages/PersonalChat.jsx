@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
+import { isUserOnline } from '../presence';
 import { 
   collection, addDoc, query, orderBy, onSnapshot, doc, 
   setDoc, updateDoc, getDoc, getDocs, where, deleteDoc 
@@ -282,7 +283,7 @@ export default function PersonalChat() {
   useEffect(() => {
     if (!targetUid) return;
     const unsubscribePresence = onSnapshot(doc(db, "users", targetUid), (snap) => {
-      setReceiverOnline(snap.exists() && snap.data().online === true);
+      setReceiverOnline(snap.exists() && isUserOnline(snap.data()));
     });
     return () => unsubscribePresence();
   }, [targetUid]);
