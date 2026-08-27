@@ -37,7 +37,9 @@ function uploadMediaToCloudinary(fileOrBlob, resourceType, onProgress) {
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const data = JSON.parse(xhr.responseText);
-          resolve(data.secure_url);
+          // নতুন: শুধু URL না, public_id/resource_type-ও রাখা হচ্ছে — পরে
+          // পোস্ট ডিলিট হলে এগুলো দিয়েই Cloudinary থেকে আসল ফাইলটা মুছতে হবে
+          resolve({ url: data.secure_url, publicId: data.public_id, resourceType: data.resource_type });
         } catch (err) {
           reject(new Error('Could not parse Cloudinary response'));
         }
@@ -50,6 +52,25 @@ function uploadMediaToCloudinary(fileOrBlob, resourceType, onProgress) {
     xhr.onerror = () => reject(new Error('Network error during upload'));
     xhr.send(formData);
   });
+}
+
+// নতুন: /api/delete-cloudinary-media.js (Vercel serverless function) কল করে
+// Cloudinary থেকে আসল ফাইলটা মুছে ফেলে — API secret এখানে নেই, শুধু সার্ভারে আছে
+async function deleteMediaFromCloudinary(publicId, resourceType) {
+  if (!publicId) return;
+  try {
+    const res = await fetch('/api/delete-cloudinary-media', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ publicId, resourceType }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      console.error('Cloudinary delete failed:', data.error || res.status);
+    }
+  } catch (err) {
+    console.error('Error calling delete-cloudinary-media:', err);
+  }
 }
 
 export default function Home({ isAdmin }) {
@@ -67,6 +88,11 @@ export default function Home({ isAdmin }) {
   const [uploadProgress, setUploadProgress] = useState(0); // নতুন: Cloudinary আপলোড প্রগ্রেস %
   const [commentInput, setCommentInput] = useState({});
   const [showPostModal, setShowPostModal] = useState(false);
+  const [expandedImage, setExpandedImage] = useState(null); // নতুন: ছবিতে ক্লিক করলে বড় করে (Facebook-স্টাইল lightbox) দেখানোর জন্য
+
+  // নতুন: ফিডে একসাথে একটাই ভিডিও চলবে, আর স্ক্রল করে viewport-এ আসা ভিডিও
+  // অটো-প্লে হবে (আগেরটা থেমে যাবে) — এই দুটো ref সেটাই ব্যবস্থাপনা করে
+  const videoRefs = useRef({}); // postId -> <video> DOM element
   const [editingComment, setEditingComment] = useState(null);
   const [usersCache, setUsersCache] = useState({});
   const [visibleComments, setVisibleComments] = useState({});
@@ -106,6 +132,25 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
+  // নতুন: স্ক্রল করার সময় viewport-এ যথেষ্ট দেখা যাওয়া ভিডিওটা অটো-প্লে হবে
+  // (মিউটেড — ব্রাউজারের autoplay নীতি মেনে চলার জন্য), viewport থেকে বেরিয়ে
+  // গেলে থেমে যাবে। posts লোড/পরিবর্তন হলে observer রিফ্রেশ হয়।
+  useEffect(() => {
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        const videoEl = entry.target;
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+          videoEl.play().catch(() => {}); // autoplay ব্লক হলে silently ignore
+        } else if (!videoEl.paused) {
+          videoEl.pause();
+        }
+      });
+    }, { threshold: [0, 0.6, 1] });
+
+    Object.values(videoRefs.current).forEach((v) => { if (v) observer.observe(v); });
+    return () => observer.disconnect();
+  }, [posts]);
+
   useEffect(() => {
     const cleanupOldPosts = async () => {
       try {
@@ -114,10 +159,14 @@ export default function Home({ isAdmin }) {
         const oldPostsSnapshot = await getDocs(qOld);
         oldPostsSnapshot.forEach(async (postDoc) => {
           const data = postDoc.data();
-          // নতুন: Firestore ডকুমেন্ট মোছার সাথে সাথে, ভিডিওটা Firebase Storage-এ
-          // থাকলে সেটাও মুছে ফেলা হচ্ছে — নাহলে Storage-এ অবহেলিত ফাইল জমতেই থাকত
+          // পুরনো (Firebase Storage যুগের) পোস্টের ভিডিও থাকলে সেটাও মুছে ফেলা হচ্ছে
           if (data.mediaStoragePath) {
             await deleteObject(storageRef(storage, data.mediaStoragePath)).catch(() => {});
+          }
+          // নতুন: Cloudinary-তে থাকা আসল ফাইলটাও ৭ দিন পর মুছে ফেলা হচ্ছে —
+          // নাহলে শুধু Firestore-এর এন্ট্রি যেত, Cloudinary-তে জায়গা ভরেই থাকত
+          if (data.mediaPublicId) {
+            await deleteMediaFromCloudinary(data.mediaPublicId, data.mediaResourceType);
           }
           await deleteDoc(doc(db, "posts", postDoc.id)); 
         });
@@ -176,51 +225,16 @@ export default function Home({ isAdmin }) {
     if (!file) return;
 
     if (file.type.startsWith('video/')) {
-      // নতুন: Cloudinary-তে আপলোড হবে বলে আর কম্প্রেশনের দরকার নেই — শুধু
-      // ১০০MB সাইজ-সীমা (আপনার আপলোড প্রিসেট অনুযায়ী) আগেই চেক করা হচ্ছে
+      // নতুন: শুধু ১০০MB সাইজ-সীমা চেক করা হচ্ছে (আপনার Cloudinary আপলোড প্রিসেট
+      // অনুযায়ী) — ডিউরেশন-চেক আর দরকার নেই, তাই video metadata লোড করার
+      // ঝামেলাও বাদ (আগে এখানেই HEVC-এর মতো ফরম্যাটে সমস্যা হতো)
       if (file.size > MAX_VIDEO_BYTES) {
         alert("This video is larger than 100MB. Please choose a smaller video file.");
         e.target.value = "";
         setSelectedFile(null);
         return;
       }
-
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-
-      let settled = false;
-      const metadataTimeoutId = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        window.URL.revokeObjectURL(video.src);
-        // কিছু ভিডিও ফরম্যাট (যেমন কিছু ফোনের HEVC) ব্রাউজার প্রিভিউ করতে
-        // পারে না — সাইজ-চেক আগেই পাস হয়েছে বলে ফাইলটা এখনো গ্রহণ করা হচ্ছে,
-        // শুধু ডিউরেশন যাচাই করা যায়নি এই বার্তাটুকু দেখানো হচ্ছে
-        alert("This video's duration could not be verified (your browser may not support previewing this format). It will be uploaded as-is — please make sure it's under 1 minute.");
-        setSelectedFile({ kind: 'video', file, previewUrl: null });
-      }, 15000);
-
-      video.onloadedmetadata = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(metadataTimeoutId);
-        window.URL.revokeObjectURL(video.src);
-        if (video.duration > 60) {
-          alert("Error: Video duration cannot exceed 1 minute!");
-          e.target.value = ""; 
-          setSelectedFile(null);
-          return;
-        }
-        setSelectedFile({ kind: 'video', file, previewUrl: URL.createObjectURL(file) });
-      };
-      video.onerror = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(metadataTimeoutId);
-        alert("This video could not be previewed in this browser. It will be uploaded as-is — please make sure it's under 1 minute.");
-        setSelectedFile({ kind: 'video', file, previewUrl: null });
-      };
-      video.src = URL.createObjectURL(file);
+      setSelectedFile({ kind: 'video', file, previewUrl: URL.createObjectURL(file) });
     } else if (file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -259,22 +273,32 @@ export default function Home({ isAdmin }) {
     setUploadProgress(0);
     try {
       let finalMediaUrl = mediaUrl;
+      let mediaPublicId = null;
+      let mediaResourceType = null;
 
       if (selectedFile?.kind === 'video') {
         // নতুন: ভিডিও এখন সরাসরি Cloudinary-তে আপলোড হচ্ছে (কোনো কম্প্রেশন
         // ছাড়াই) — Firestore ডকুমেন্টে raw base64 গুঁজে দেওয়া হচ্ছে না, তাই
         // ১MB লিমিটে আটকায় না। সাইজ ইতিমধ্যে handleFileChange-এ ১০০MB-এর
         // মধ্যে যাচাই করা হয়েছে।
-        finalMediaUrl = await uploadMediaToCloudinary(selectedFile.file, 'video', setUploadProgress);
+        const result = await uploadMediaToCloudinary(selectedFile.file, 'video', setUploadProgress);
+        finalMediaUrl = result.url;
+        mediaPublicId = result.publicId;
+        mediaResourceType = result.resourceType;
       } else if (selectedFile?.kind === 'image') {
         // ছবিও এখন Cloudinary-তে আপলোড হচ্ছে (আগে ছিল base64 হিসেবে Firestore-এই)
-        finalMediaUrl = await uploadMediaToCloudinary(selectedFile.blob, 'image', setUploadProgress);
+        const result = await uploadMediaToCloudinary(selectedFile.blob, 'image', setUploadProgress);
+        finalMediaUrl = result.url;
+        mediaPublicId = result.publicId;
+        mediaResourceType = result.resourceType;
       }
 
       await addDoc(collection(db, "posts"), {
         text,
         mediaUrl: finalMediaUrl,
-        mediaStoragePath: null, // নতুন পোস্টে আর ব্যবহার হয় না (Firebase Storage-এর বদলে Cloudinary) — শুধু পুরনো পোস্ট cleanup-এর জন্য ফিল্ডটা রাখা হলো
+        mediaPublicId, // নতুন: Cloudinary থেকে পরে মুছতে হলে এটা লাগবে
+        mediaResourceType, // 'image' | 'video' | null
+        mediaStoragePath: null, // পুরনো পোস্ট (Firebase Storage যুগের) cleanup-এর জন্য এখনো রাখা — নতুন পোস্টে ব্যবহার হয় না
         userName: auth.currentUser?.displayName || "Student",
         userId: auth.currentUser?.uid,
         likes: [],
@@ -292,16 +316,6 @@ export default function Home({ isAdmin }) {
       alert("Posting failed: " + error.message);
     } finally {
       setIsPosting(false);
-    }
-  };
-
-  const handleEditPost = async (postId, currentText) => {
-    const promptText = prompt("Edit your post text:", currentText);
-    if (promptText === null || promptText.trim() === "") return;
-    try {
-      await updateDoc(doc(db, "posts", postId), { text: promptText });
-    } catch (error) {
-      console.error("Error editing post: ", error);
     }
   };
 
@@ -381,13 +395,37 @@ export default function Home({ isAdmin }) {
     setEditingComment(null);
   };
 
-  const handleDeletePost = async (postId, mediaStoragePath) => {
+  const handleDeletePost = async (postId, mediaStoragePath, mediaPublicId, mediaResourceType) => {
     if (window.confirm("Are you sure you want to delete this post? This will empty its space from database permanently.")) {
-      // নতুন: এই পোস্টের ভিডিও Firebase Storage-এ থাকলে সেটাও মুছে ফেলা হচ্ছে
+      // পুরনো (Firebase Storage যুগের) পোস্ট হলে সেটাও মুছে ফেলা হচ্ছে
       if (mediaStoragePath) {
         await deleteObject(storageRef(storage, mediaStoragePath)).catch(() => {});
       }
+      // নতুন: Cloudinary-তে থাকা আসল ফাইলটাও মুছে ফেলা হচ্ছে — প্রজেক্ট থেকে
+      // ডিলিট করলে এখন Cloudinary থেকেও চলে যাবে
+      if (mediaPublicId) {
+        await deleteMediaFromCloudinary(mediaPublicId, mediaResourceType);
+      }
       await deleteDoc(doc(db, "posts", postId));
+    }
+  };
+
+  // নতুন: Cloudinary → প্রজেক্ট সিঙ্ক — কোনো পোস্টের ছবি/ভিডিও লোড হতে ব্যর্থ
+  // হলে (সম্ভবত Cloudinary কনসোল থেকে সরাসরি মুছে ফেলা হয়েছে), প্রথমবার একটা
+  // রিট্রাই দেওয়া হয় (transient নেটওয়ার্ক সমস্যার কারণে ভুলভাবে পোস্ট মুছে
+  // যাওয়া এড়াতে) — দ্বিতীয়বারও ব্যর্থ হলে তখন নিশ্চিত হয়ে পোস্টটা Firestore
+  // থেকে সরিয়ে ফেলা হয়।
+  const handleMediaError = (e, post) => {
+    const el = e.target;
+    if (el.dataset.retried) {
+      console.warn(`Media for post ${post.id} could not be loaded (likely deleted from Cloudinary directly) — removing the post.`);
+      deleteDoc(doc(db, "posts", post.id)).catch(() => {});
+    } else {
+      el.dataset.retried = "1";
+      setTimeout(() => {
+        const sep = post.mediaUrl.includes('?') ? '&' : '?';
+        el.src = `${post.mediaUrl}${sep}retry=${Date.now()}`;
+      }, 3000);
     }
   };
 
@@ -506,8 +544,7 @@ export default function Home({ isAdmin }) {
               </div>
               {(auth.currentUser?.uid === post.userId || isAdmin) && (
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', fontSize: '12px' }}>
-                  <span onClick={() => handleEditPost(post.id, post.text)} style={{ color: '#0072ff', cursor: 'pointer' }}>Edit</span>
-                  <span onClick={() => handleDeletePost(post.id, post.mediaStoragePath)} style={{ color: '#ff3366', cursor: 'pointer' }}>Delete</span>
+                  <span onClick={() => handleDeletePost(post.id, post.mediaStoragePath, post.mediaPublicId, post.mediaResourceType)} style={{ color: '#ff3366', cursor: 'pointer' }}>Delete</span>
                 </div>
               )}
             </div>
@@ -516,10 +553,34 @@ export default function Home({ isAdmin }) {
             
             {post.mediaUrl && (
               <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px' }}>
-                {post.mediaUrl.startsWith('data:video/') || post.mediaStoragePath || post.mediaUrl.includes('video/') || post.mediaUrl.endsWith('.mp4') ? (
-                  <video src={post.mediaUrl} controls style={{ maxWidth: '100%', maxHeight: '400px', width: '100%' }} />
+                {post.mediaUrl.startsWith('data:video/') || post.mediaStoragePath || post.mediaResourceType === 'video' || post.mediaUrl.includes('/video/') || post.mediaUrl.endsWith('.mp4') ? (
+                  // নতুন: ref দিয়ে videoRefs-এ রেজিস্টার করা হচ্ছে (একসাথে একটাই
+                  // ভিডিও চলার জন্য), muted+playsInline (স্ক্রল-অটোপ্লের জন্য
+                  // জরুরি — নাহলে ব্রাউজার ব্লক করে দেয়), আর onError দিয়ে
+                  // Cloudinary থেকে সরাসরি মুছে ফেলা হলে পোস্টটাও এখান থেকে সরানো হয়
+                  <video
+                    ref={(el) => { if (el) videoRefs.current[post.id] = el; else delete videoRefs.current[post.id]; }}
+                    src={post.mediaUrl}
+                    controls
+                    muted
+                    playsInline
+                    onPlay={(e) => {
+                      // একটাই ভিডিও চলবে — এটা প্লে হওয়ার সাথে সাথে বাকি সব থেমে যাবে
+                      Object.values(videoRefs.current).forEach((v) => {
+                        if (v && v !== e.target && !v.paused) v.pause();
+                      });
+                    }}
+                    onError={(e) => handleMediaError(e, post)}
+                    style={{ maxWidth: '100%', maxHeight: '400px', width: '100%' }}
+                  />
                 ) : (
-                  <img src={post.mediaUrl} alt="Post Content" style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }} />
+                  <img
+                    src={post.mediaUrl}
+                    alt="Post Content"
+                    onClick={() => setExpandedImage(post.mediaUrl)}
+                    onError={(e) => handleMediaError(e, post)}
+                    style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain', cursor: 'zoom-in' }}
+                  />
                 )}
               </div>
             )}
@@ -655,6 +716,27 @@ export default function Home({ isAdmin }) {
       {posts.length === 0 && (
         <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic' }}>
           No posts available on the feed.
+        </div>
+      )}
+
+      {/* নতুন: ছবিতে ক্লিক করলে Facebook-স্টাইল বড় করে (lightbox) দেখানো হয় */}
+      {expandedImage && (
+        <div
+          onClick={() => setExpandedImage(null)}
+          style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.9)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'zoom-out' }}
+        >
+          <img
+            src={expandedImage}
+            alt=""
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '95%', maxHeight: '95%', objectFit: 'contain', cursor: 'default' }}
+          />
+          <button
+            onClick={() => setExpandedImage(null)}
+            style={{ position: 'absolute', top: '20px', right: '20px', background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', fontSize: '20px', width: '40px', height: '40px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            ✕
+          </button>
         </div>
       )}
     </div>
