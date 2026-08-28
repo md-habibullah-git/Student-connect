@@ -93,6 +93,16 @@ export default function Home({ isAdmin }) {
   // নতুন: ফিডে একসাথে একটাই ভিডিও চলবে, আর স্ক্রল করে viewport-এ আসা ভিডিও
   // অটো-প্লে হবে (আগেরটা থেমে যাবে) — এই দুটো ref সেটাই ব্যবস্থাপনা করে
   const videoRefs = useRef({}); // postId -> <video> DOM element
+
+  // নতুন: সব ভিডিওর মিউট/আনমিউট একসাথে — যেকোনো একটা ভিডিওতে মিউট/আনমিউট
+  // বাটন চাপলে সেটা সব ভিডিওতে প্রতিফলিত হবে (এমনকি স্ক্রল করে নতুন যেসব
+  // ভিডিও viewport-এ আসবে সেগুলোতেও)
+  const globalMutedRef = useRef(true); // প্রথমবার সবসময় মিউট অবস্থায় শুরু হয়
+  const applyGlobalMute = (muted) => {
+    if (globalMutedRef.current === muted) return;
+    globalMutedRef.current = muted;
+    Object.values(videoRefs.current).forEach((v) => { if (v) v.muted = muted; });
+  };
   const [editingComment, setEditingComment] = useState(null);
   const [usersCache, setUsersCache] = useState({});
   const [visibleComments, setVisibleComments] = useState({});
@@ -311,6 +321,7 @@ export default function Home({ isAdmin }) {
       setMediaUrl('');
       setSelectedFile(null);
       setShowPostModal(false);
+      applyGlobalMute(false); // নতুন: পোস্ট করার পর সাউন্ড আনমিউট অবস্থায় আসবে
     } catch (error) {
       console.error("Posting Error:", error);
       alert("Posting failed: " + error.message);
@@ -555,14 +566,21 @@ export default function Home({ isAdmin }) {
               <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px' }}>
                 {post.mediaUrl.startsWith('data:video/') || post.mediaStoragePath || post.mediaResourceType === 'video' || post.mediaUrl.includes('/video/') || post.mediaUrl.endsWith('.mp4') ? (
                   // নতুন: ref দিয়ে videoRefs-এ রেজিস্টার করা হচ্ছে (একসাথে একটাই
-                  // ভিডিও চলার জন্য), muted+playsInline (স্ক্রল-অটোপ্লের জন্য
-                  // জরুরি — নাহলে ব্রাউজার ব্লক করে দেয়), আর onError দিয়ে
-                  // Cloudinary থেকে সরাসরি মুছে ফেলা হলে পোস্টটাও এখান থেকে সরানো হয়
+                  // ভিডিও চলার জন্য), শুরুতে global mute preference বসানো হয়
+                  // (playsInline স্ক্রল-অটোপ্লের জন্য জরুরি — নাহলে ব্রাউজার
+                  // ব্লক করে দেয়), আর onError দিয়ে Cloudinary থেকে সরাসরি
+                  // মুছে ফেলা হলে পোস্টটাও এখান থেকে সরানো হয়
                   <video
-                    ref={(el) => { if (el) videoRefs.current[post.id] = el; else delete videoRefs.current[post.id]; }}
+                    ref={(el) => {
+                      if (el) {
+                        videoRefs.current[post.id] = el;
+                        el.muted = globalMutedRef.current; // নতুন: বর্তমান শেয়ার্ড মিউট প্রেফারেন্স অনুযায়ী শুরু হবে
+                      } else {
+                        delete videoRefs.current[post.id];
+                      }
+                    }}
                     src={post.mediaUrl}
                     controls
-                    muted
                     playsInline
                     onPlay={(e) => {
                       // একটাই ভিডিও চলবে — এটা প্লে হওয়ার সাথে সাথে বাকি সব থেমে যাবে
@@ -570,6 +588,7 @@ export default function Home({ isAdmin }) {
                         if (v && v !== e.target && !v.paused) v.pause();
                       });
                     }}
+                    onVolumeChange={(e) => applyGlobalMute(e.target.muted)} // নতুন: এই ভিডিওতে মিউট/আনমিউট চাপলে সেটা সব ভিডিওতেই প্রতিফলিত হবে
                     onError={(e) => handleMediaError(e, post)}
                     style={{ maxWidth: '100%', maxHeight: '400px', width: '100%' }}
                   />
