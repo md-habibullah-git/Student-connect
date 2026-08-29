@@ -29,7 +29,7 @@ function RemoteVideoTile({ stream, label }) {
   
   useEffect(() => {
     if (videoRef.current && stream) {
-      console.log('🎥 Setting up video for', label, 'tracks:', stream.getTracks().map(t => `${t.kind}:${t.enabled}`));
+      console.log('🎥 Setting up video for', label, 'tracks:', stream.getTracks().map(t => t.kind));
       videoRef.current.srcObject = stream;
       videoRef.current.muted = false;
       videoRef.current.volume = 1.0;
@@ -85,7 +85,6 @@ function VoiceMessageBubble({ src, isMe }) {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
     analyser.getByteFrequencyData(dataArray);
-
     ctx.clearRect(0, 0, w, h);
     const barCount = 24;
     const step = Math.max(1, Math.floor(bufferLength / barCount));
@@ -166,16 +165,7 @@ function VoiceMessageBubble({ src, isMe }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', minWidth: '210px' }}>
       <audio ref={audioRef} src={src} preload="metadata" style={{ display: 'none' }} />
-      <button
-        type="button"
-        onClick={togglePlay}
-        style={{
-          width: '30px', height: '30px', borderRadius: '50%', border: 'none', cursor: 'pointer',
-          background: isMe ? 'rgba(255,255,255,0.25)' : 'rgba(0,86,179,0.12)',
-          color: isMe ? '#fff' : '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, fontSize: '13px'
-        }}
-      >
+      <button type="button" onClick={togglePlay} style={{ width: '30px', height: '30px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: isMe ? 'rgba(255,255,255,0.25)' : 'rgba(0,86,179,0.12)', color: isMe ? '#fff' : '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '13px' }}>
         {isPlaying ? '⏸️' : '▶️'}
       </button>
       <canvas ref={canvasRef} width={120} height={28} style={{ flex: 1 }} />
@@ -199,7 +189,6 @@ export default function GlobalChat() {
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [avatarMenuFor, setAvatarMenuFor] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
-
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const mediaRecorderRef = useRef(null);
@@ -207,21 +196,17 @@ export default function GlobalChat() {
   const discardRecordingRef = useRef(false);
   const capturedReplyRef = useRef(null);
   const maxDurationTimeoutRef = useRef(null);
-
   const recordingCanvasRef = useRef(null);
   const recordingAnalyserRef = useRef(null);
   const recordingAudioCtxRef = useRef(null);
   const recordingRafRef = useRef(null);
-
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
     const saved = localStorage.getItem(`global_deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
     return saved ? JSON.parse(saved) : [];
   });
-
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null); 
   const inCallRef = useRef(false);
-
   const localVideoRef = useRef(null);
   const sessionRef = useRef(null);
   const [remoteStreams, setRemoteStreams] = useState({});
@@ -301,12 +286,12 @@ export default function GlobalChat() {
     });
 
     const unsubscribeCall = onSnapshot(doc(db, "global-calls", globalRoomId), (snapshot) => {
-      console.log('📞 Call document changed:', snapshot.exists() ? snapshot.data() : 'deleted');
+      console.log('📞 Call doc changed:', snapshot.exists() ? JSON.stringify(snapshot.data()) : 'deleted');
       if (snapshot.exists()) {
         const callData = snapshot.data();
         if (callData.status === "ringing") {
           const participants = callData.participants || [];
-          console.log('👥 All participants:', participants);
+          console.log('👥 Participants:', participants);
           console.log('👤 My UID:', currentUid);
           if (participants.length === 0) {
             deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
@@ -315,8 +300,10 @@ export default function GlobalChat() {
             return;
           }
           if (participants.includes(currentUid)) {
+            console.log('✅ I am in call, setting inCall=true');
             setInCall(true);
           } else {
+            console.log('📞 Ringing, showing Rejoin button');
             setShowRejoinBtn(true);
           }
         }
@@ -340,12 +327,7 @@ export default function GlobalChat() {
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() && selectedFiles.length === 0) return;
-    const replyData = replyToMessage ? {
-      text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""), 
-      fileUrl: replyToMessage.fileUrl || "", fileType: replyToMessage.fileType || "",
-      senderName: replyToMessage.senderName, msgId: replyToMessage.id
-    } : null;
-
+    const replyData = replyToMessage ? { text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""), fileUrl: replyToMessage.fileUrl || "", fileType: replyToMessage.fileType || "", senderName: replyToMessage.senderName, msgId: replyToMessage.id } : null;
     if (newMessage.trim()) {
       try {
         await addDoc(collection(db, "global-room-messages"), {
@@ -426,11 +408,7 @@ export default function GlobalChat() {
   const sendVoiceMessage = async (audioUrl) => {
     try {
       const reply = capturedReplyRef.current;
-      const replyData = reply ? {
-        text: reply.fileUrl ? "" : (reply.text || ""),
-        fileUrl: reply.fileUrl || "", fileType: reply.fileType || "",
-        senderName: reply.senderName, msgId: reply.id
-      } : null;
+      const replyData = reply ? { text: reply.fileUrl ? "" : (reply.text || ""), fileUrl: reply.fileUrl || "", fileType: reply.fileType || "", senderName: reply.senderName, msgId: reply.id } : null;
       await addDoc(collection(db, "global-room-messages"), {
         text: "", fileUrl: audioUrl, fileType: 'audio', fileName: 'voice-message.webm',
         senderUid: currentUid, senderName: currentUserName,
@@ -547,14 +525,13 @@ export default function GlobalChat() {
   const getLocalStream = async (callType = 'video') => {
     const s = ensureSession();
     if (s.localStream) return s.localStream;
-    console.log('📹 Getting local stream:', callType);
+    console.log('📹 Getting local stream');
     const stream = await navigator.mediaDevices.getUserMedia({ 
       video: callType === 'video' ? { width: 640, height: 480 } : false, 
       audio: true 
     });
     s.localStream = stream;
     s.callType = callType;
-    console.log('📹 Local tracks:', stream.getTracks().map(t => t.kind));
     return stream;
   };
 
@@ -588,14 +565,18 @@ export default function GlobalChat() {
     }
   }, [inCall]);
 
+  // ✅✅✅ FIXED: নতুন signaling system - global-call-signals collection
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
-    console.log('🚀 connectToPeer called for:', peerUid, 'My UID:', currentUid);
+    
+    console.log('🚀🚀🚀 connectToPeer CALLED:', peerUid);
+    console.log('🚀 My UID:', currentUid);
     
     if (!peerUid || peerUid === currentUid) {
-      console.log('❌ Invalid peerUid');
+      console.log('❌ Invalid peer');
       return;
     }
+    
     if (s.peerConnections[peerUid]) {
       console.log('⚠️ Already connected to:', peerUid);
       return;
@@ -603,18 +584,20 @@ export default function GlobalChat() {
 
     const isInitiator = currentUid < peerUid;
     const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
-    const connRef = doc(db, "global-calls", globalRoomId, "connections", pairKey);
-    const myCandidatesRef = collection(connRef, isInitiator ? "candidatesA" : "candidatesB");
-    const theirCandidatesRef = collection(connRef, isInitiator ? "candidatesB" : "candidatesA");
+    
+    // ✅ নতুন: আলাদা collection ব্যবহার করুন
+    const signalRef = doc(db, "global-call-signals", pairKey);
+    const myCandidatesRef = collection(signalRef, isInitiator ? "candidatesA" : "candidatesB");
+    const theirCandidatesRef = collection(signalRef, isInitiator ? "candidatesB" : "candidatesA");
 
     try {
-      console.log('✅ Creating RTCPeerConnection for:', peerUid);
+      console.log('✅ Creating RTCPeerConnection');
       const pc = new RTCPeerConnection(rtcConfiguration);
       s.peerConnections[peerUid] = pc;
 
       const stream = await getLocalStream(s.callType);
       stream.getTracks().forEach(track => {
-        console.log('📤 Adding track:', track.kind);
+        console.log('📤 Adding local track:', track.kind);
         pc.addTrack(track, stream);
       });
 
@@ -623,7 +606,7 @@ export default function GlobalChat() {
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
 
       pc.ontrack = (event) => {
-        console.log('📥 Track received from', peerUid, ':', event.track.kind);
+        console.log('📥📥📥 TRACK RECEIVED:', event.track.kind);
         if (event.streams && event.streams[0]) {
           event.streams[0].getTracks().forEach(track => {
             if (!remoteStream.getTracks().includes(track)) {
@@ -633,70 +616,75 @@ export default function GlobalChat() {
         } else {
           remoteStream.addTrack(event.track);
         }
-        console.log('✅ Remote tracks for', peerUid, ':', remoteStream.getTracks().map(t => t.kind));
+        console.log('✅ Remote tracks:', remoteStream.getTracks().map(t => t.kind));
         setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       };
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          console.log('🧊 Sending ICE candidate');
-          addDoc(myCandidatesRef, event.candidate.toJSON()).catch(e => console.error('ICE add error:', e));
+          console.log('🧊 ICE candidate generated, saving...');
+          addDoc(myCandidatesRef, event.candidate.toJSON())
+            .then(() => console.log('✅ ICE saved to Firestore'))
+            .catch(err => console.error('❌ ICE save error:', err));
         }
       };
 
       pc.onconnectionstatechange = () => {
-        console.log('🔗 Connection state for', peerUid, ':', pc.connectionState);
-        if (pc.connectionState === 'failed') removeStalePeerFromRoom(peerUid);
+        console.log('🔗 Connection state:', pc.connectionState);
+        if (pc.connectionState === 'connected') {
+          console.log('✅✅✅ CONNECTED!');
+        }
+        if (pc.connectionState === 'failed') {
+          console.error('❌❌❌ CONNECTION FAILED');
+        }
       };
 
-      const unsubscribers = [
-        onSnapshot(theirCandidatesRef, (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            if (change.type === 'added') {
-              pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
-            }
-          });
-        })
-      ];
-
-      if (isInitiator) {
-        console.log('📤 I am initiator, creating offer');
-        const [staleA, staleB] = await Promise.all([
-          getDocs(collection(connRef, "candidatesA")),
-          getDocs(collection(connRef, "candidatesB"))
-        ]);
-        await Promise.all([...staleA.docs, ...staleB.docs].map(d => deleteDoc(d.ref).catch(() => {})));
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } });
-        console.log('📤 Offer saved to Firestore');
-
-        unsubscribers.push(onSnapshot(connRef, async (snap) => {
-          const data = snap.data();
-          if (data?.answer && !pc.currentRemoteDescription) {
-            console.log('📥 Answer received');
-            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      // ICE candidates listen
+      const unsubCandidates = onSnapshot(theirCandidatesRef, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(e => {
+              console.error('❌ Add ICE error:', e);
+            });
           }
-        }));
-      } else {
-        console.log('📥 I am not initiator, waiting for offer');
-        unsubscribers.push(onSnapshot(connRef, async (snap) => {
-          const data = snap.data();
-          if (data?.offer && !pc.currentRemoteDescription) {
-            console.log('📥 Offer received, creating answer');
+        });
+      });
+
+      // Signal listen
+      const unsubSignal = onSnapshot(signalRef, async (snap) => {
+        const data = snap.data();
+        if (!data) return;
+        
+        if (isInitiator) {
+          if (data.answer && !pc.currentRemoteDescription) {
+            console.log('📥 Answer received from:', peerUid);
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            console.log('✅ Remote description set');
+          }
+        } else {
+          if (data.offer && !pc.currentRemoteDescription) {
+            console.log('📥 Offer received from:', peerUid);
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
-            console.log('📤 Answer saved to Firestore');
+            await setDoc(signalRef, { answer: { type: answer.type, sdp: answer.sdp } }, { merge: true });
+            console.log('📤 Answer sent');
           }
-        }));
-      }
+        }
+      });
 
-      s.peerUnsubscribers[peerUid] = unsubscribers;
+      s.peerUnsubscribers[peerUid] = [unsubCandidates, unsubSignal];
+
+      if (isInitiator) {
+        console.log('📤 Creating offer...');
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await setDoc(signalRef, { offer: { type: offer.type, sdp: offer.sdp } });
+        console.log('✅✅✅ Offer saved to Firestore');
+      }
+      
     } catch (err) {
-      console.error('❌ Error connecting to peer:', peerUid, err);
+      console.error('❌❌❌ Connection error:', err);
     }
   };
 
@@ -731,60 +719,55 @@ export default function GlobalChat() {
     } catch (err) {}
   };
 
-  // ✅ FIXED: participants sync - সবথেকে গুরুত্বপূর্ণ অংশ
+  // ✅✅✅ FIXED: participants sync - সরাসরি peerConnections check
   useEffect(() => {
     if (!inCall) {
-      console.log('❌ Not in call, skipping peer sync');
+      console.log('❌ Not in call');
       return;
     }
     
-    console.log('✅ In call, starting peer sync');
+    console.log('✅ In call, starting participant sync');
     const s = ensureSession();
     const callRef = doc(db, "global-calls", globalRoomId);
     
     const unsubscribe = onSnapshot(callRef, (snap) => {
       if (!snap.exists()) {
-        console.log('❌ Call document deleted');
+        console.log('❌ No call doc');
         return;
       }
       
       const participants = snap.data().participants || [];
-      console.log('👥 All participants:', participants);
+      console.log('👥 ALL participants:', participants);
       console.log('👤 My UID:', currentUid);
       
       const otherParticipants = participants.filter(uid => uid !== currentUid);
-      console.log('👥 Other participants to connect:', otherParticipants);
-      console.log('🔗 Already known peers:', Array.from(s.knownPeers));
+      console.log('👥 Other participants:', otherParticipants);
       
-      // নতুন participant-দের সাথে connect করুন
+      // ✅ প্রতিটা peer-এর জন্য connect করুন
       otherParticipants.forEach(uid => {
-        if (!s.knownPeers.has(uid)) {
-          console.log('🔗 NEW PEER FOUND, connecting to:', uid);
+        if (!s.peerConnections[uid]) {
+          console.log('🔗 Connecting to:', uid);
           connectToPeer(uid);
+        } else {
+          console.log('✅ Already connected:', uid);
         }
       });
       
-      // চলে যাওয়া participant-দের disconnect করুন
-      s.knownPeers.forEach(uid => {
+      // Cleanup
+      Object.keys(s.peerConnections).forEach(uid => {
         if (!otherParticipants.includes(uid)) {
-          console.log('🔌 Peer left, disconnecting:', uid);
+          console.log('🔌 Disconnecting:', uid);
           disconnectFromPeer(uid);
         }
       });
-      
-      // knownPeers update করুন
-      s.knownPeers = new Set(otherParticipants);
     });
     
-    return () => {
-      console.log('🧹 Cleaning up peer sync');
-      unsubscribe();
-    };
+    return () => unsubscribe();
   }, [inCall, currentUid]);
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
-      console.log('🚀 Starting global call:', callType);
+      console.log('🚀 Starting global call...');
       await getLocalStream(callType);
       await setDoc(doc(db, "global-calls", globalRoomId), { 
         status: "ringing", callType, hostName: currentUserName, 
@@ -795,8 +778,8 @@ export default function GlobalChat() {
       setInCall(true);
       setActiveGlobalCallSession(sessionRef.current);
     } catch (err) {
-      console.error('❌ Error starting call:', err);
-      alert("🎤 Could not start the conference");
+      console.error('❌ Error:', err);
+      alert("🎤 Could not start");
     }
   };
 
@@ -820,8 +803,8 @@ export default function GlobalChat() {
         setActiveGlobalCallSession(sessionRef.current);
       }
     } catch (err) {
-      console.error('❌ Error rejoining:', err);
-      alert("🎤 Could not join the conference");
+      console.error('❌ Rejoin error:', err);
+      alert("🎤 Could not join");
     }
   };
 
@@ -988,12 +971,6 @@ export default function GlobalChat() {
                   <div style={{ position: 'relative', flexShrink: 0 }}>
                     <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onClick={(e) => { e.stopPropagation(); if (isMe) { navigate(`/profile/${currentUid}`); return; } setAvatarMenuFor(avatarMenuFor === getMsg.id ? null : getMsg.id); }} onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block', cursor: 'pointer' }} />
                     {senderOnline && <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />}
-                    {avatarMenuFor === getMsg.id && !isMe && (
-                      <div className="threedot-dropdown-menu" onClick={(e) => e.stopPropagation()} style={{ top: 'auto', bottom: 'calc(100% + 6px)', left: 0, right: 'auto', zIndex: 999 }}>
-                        <button type="button" className="threedot-menu-item" style={{ color: '#0056b3' }} onClick={() => { setAvatarMenuFor(null); navigate(`/profile/${getMsg.senderUid}`); }}>👤 View Profile</button>
-                        <button type="button" className="threedot-menu-item reply-btn" onClick={() => { setAvatarMenuFor(null); navigate(`/chat/${getMsg.senderUid}/${encodeURIComponent(getMsg.senderName || 'Student')}`); }}>💬 Message</button>
-                      </div>
-                    )}
                   </div>
                   <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
                     <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px' }}>{getMsg.senderName}</small>
@@ -1001,12 +978,6 @@ export default function GlobalChat() {
                       <div style={{ background: getMsg.isDeleted ? '#ebebeb' : (isMe ? '#0056b3' : 'var(--card-bg, #fff)'), color: getMsg.isDeleted ? '#888' : (isMe ? 'white' : 'var(--text-color, #333)'), padding: (getMsg.fileUrl || getMsg.fileType === 'audio') ? '4px' : '10px 14px', borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px', fontSize: '14px', boxShadow: '0 2px 5px rgba(0,0,0,0.04)', border: isMe ? 'none' : '1px solid rgba(0, 86, 179, 0.15)', wordBreak: 'break-word', display: 'flex', flexDirection: 'column', gap: '5px', overflow: 'hidden' }}>
                         {getMsg.isDeleted ? <p style={{ margin: 0, fontStyle: 'italic', fontSize: '13px', padding: '10px 14px' }}>🚫 This message was deleted</p> : (
                           <>
-                            {getMsg.replyTo && (
-                              <div style={{ background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,86,179,0.07)', padding: '6px 10px', borderRadius: '8px', borderLeft: '3px solid #0056b3', fontSize: '11px', color: isMe ? '#ffeb3b' : '#444', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '240px' }}>
-                                {getMsg.replyTo.fileUrl && getMsg.replyTo.fileType !== 'audio' && <img src={getMsg.replyTo.fileUrl} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
-                                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><strong style={{ color: isMe ? '#fff' : '#0056b3', display: 'block', fontSize: '10px', fontStyle: 'normal' }}>↩️ {getMsg.replyTo.senderName}:</strong>{getMsg.replyTo.text || (getMsg.replyTo.fileType === 'audio' ? "🎤 Voice message" : (getMsg.replyTo.fileUrl ? "📷 Photo" : ""))}</div>
-                              </div>
-                            )}
                             {getMsg.fileUrl && getMsg.fileType === 'image' && <img src={getMsg.fileUrl} alt="" style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '350px', objectFit: 'cover', display: 'block' }} />}
                             {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
                             {getMsg.fileUrl && getMsg.fileType === 'audio' && <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />}
@@ -1036,18 +1007,6 @@ export default function GlobalChat() {
           </div>
           
           <form onSubmit={handleSendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {replyToMessage && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
-                <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {replyToMessage.fileUrl && replyToMessage.fileType !== 'audio' && <img src={replyToMessage.fileUrl} alt="" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
-                  <div>
-                    <span style={{ fontWeight: 'bold', color: '#0056b3' }}>↩️ Reply to {replyToMessage.senderName}: </span>
-                    <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileType === 'audio' ? "🎤 Voice message" : (replyToMessage.fileUrl ? "📸 Photo" : ""))}</span>
-                  </div>
-                </div>
-                <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
-              </div>
-            )}
             {selectedFiles.length > 0 && (
               <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
                 {selectedFiles.map((file) => (
@@ -1059,24 +1018,12 @@ export default function GlobalChat() {
               </div>
             )}
             <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" multiple style={{ display: 'none' }} />
-            {isRecording ? (
-              <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #dc3545 10%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(220, 53, 69, 0.4)' }}>
-                <button type="button" onClick={cancelRecording} title="Cancel recording" style={{ background: 'rgba(220, 53, 69, 0.12)', color: '#dc3545', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>🗑️</button>
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0' }}>
-                  <span className="recording-dot" />
-                  <canvas ref={recordingCanvasRef} width={120} height={26} style={{ flex: 1 }} />
-                  <span className="recording-label">{formatRecordingTime(recordingSeconds)}</span>
-                </div>
-                <button type="button" onClick={stopAndSendRecording} title="Send voice message" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
-                <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
-                <button type="button" onClick={startRecording} title="Record a voice message" style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}><MicIcon /></button>
-                <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
-                <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
-              </div>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
+              <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
+              <button type="button" onClick={startRecording} title="Record a voice message" style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}><MicIcon /></button>
+              <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
+              <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
+            </div>
           </form>
         </>
       )}
