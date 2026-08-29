@@ -575,7 +575,7 @@ export default function GlobalChat() {
       s.remoteStreams[peerUid] = remoteStream;
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
 
-      // ✅ PersonalChat-এর মতোই track receive
+      // ✅ PersonalChat-এর মতোই
       pc.addEventListener('track', (event) => {
         event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
         setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
@@ -684,9 +684,14 @@ export default function GlobalChat() {
     try {
       await getLocalStream(callType);
       await setDoc(doc(db, "global-calls", globalRoomId), { 
-        status: "ringing", callType, hostName: currentUserName, 
-        hostId: currentUid, roomId: globalRoomId, participants: [currentUid] 
-      });
+        status: "ringing", 
+        callType, 
+        hostName: currentUserName, 
+        hostId: currentUid, 
+        roomId: globalRoomId, 
+        participants: [currentUid],
+        createdAt: new Date().getTime()
+      }, { merge: true });
       setActiveCallType(callType);
       setInCall(true);
       setActiveGlobalCallSession(sessionRef.current);
@@ -878,12 +883,6 @@ export default function GlobalChat() {
                   <div style={{ position: 'relative', flexShrink: 0 }}>
                     <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onClick={(e) => { e.stopPropagation(); if (isMe) { navigate(`/profile/${currentUid}`); return; } setAvatarMenuFor(avatarMenuFor === getMsg.id ? null : getMsg.id); }} onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block', cursor: 'pointer' }} />
                     {senderOnline && <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />}
-                    {avatarMenuFor === getMsg.id && !isMe && (
-                      <div className="threedot-dropdown-menu" onClick={(e) => e.stopPropagation()} style={{ top: 'auto', bottom: 'calc(100% + 6px)', left: 0, right: 'auto', zIndex: 999 }}>
-                        <button type="button" className="threedot-menu-item" style={{ color: '#0056b3' }} onClick={() => { setAvatarMenuFor(null); navigate(`/profile/${getMsg.senderUid}`); }}>👤 View Profile</button>
-                        <button type="button" className="threedot-menu-item reply-btn" onClick={() => { setAvatarMenuFor(null); navigate(`/chat/${getMsg.senderUid}/${encodeURIComponent(getMsg.senderName || 'Student')}`); }}>💬 Message</button>
-                      </div>
-                    )}
                   </div>
                   <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
                     <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px' }}>{getMsg.senderName}</small>
