@@ -24,6 +24,7 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
+// RemoteVideoTile - remote participant-এর video দেখানোর জন্য
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
   
@@ -45,6 +46,7 @@ function RemoteVideoTile({ stream, label }) {
   );
 }
 
+// VoiceMessageBubble - voice message player
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -287,12 +289,6 @@ export default function GlobalChat() {
         const callData = snapshot.data();
         if (callData.status === "ringing") {
           const participants = callData.participants || [];
-          if (participants.length === 0) {
-            deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
-            setShowRejoinBtn(false);
-            setInCall(false);
-            return;
-          }
           if (participants.includes(currentUid)) {
             setInCall(true);
           } else {
@@ -553,7 +549,7 @@ export default function GlobalChat() {
     }
   }, [inCall]);
 
-  // ✅ PersonalChat-এর মতোই connectToPeer
+  // ✅ PersonalChat-এর মতোই - সরাসরি connection তৈরি
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
     if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
@@ -575,7 +571,6 @@ export default function GlobalChat() {
       s.remoteStreams[peerUid] = remoteStream;
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
 
-      // ✅ PersonalChat-এর মতোই
       pc.addEventListener('track', (event) => {
         event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
         setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
