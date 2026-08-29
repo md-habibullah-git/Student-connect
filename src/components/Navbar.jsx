@@ -1,3 +1,4 @@
+// File Name: src/components/Navbar.jsx
 import React, { useState, useEffect } from 'react'; 
 import { Link, useNavigate, useLocation } from 'react-router-dom'; 
 import { signOut } from 'firebase/auth'; 
@@ -39,10 +40,6 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
     } 
   };
 
-  // 🔧 FIX: The post button now works from ANY page.
-  // - If we're already on Home ("/"), just fire the event like before (Home is mounted and listening).
-  // - If we're on any other page, navigate to Home first and pass a flag via router state.
-  //   Home.jsx checks that flag on mount/update and opens the modal automatically.
   const triggerPostModal = () => { 
     if (location.pathname === '/') {
       const event = new CustomEvent('openPostModal'); 
@@ -87,7 +84,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
       <div style={{ display: 'flex', gap: isMobile ? '10px' : '20px', alignItems: 'center', justifyContent: 'center' }}> 
         <Link to="/" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Home" > 
           <div style={{ background: location.pathname === '/' ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
-            <svg xmlns="http://w3.org" width="16" height="18" viewBox="0 0 24 24" fill="none"> 
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="18" viewBox="0 0 24 24" fill="none"> 
               <circle cx="12" cy="12" r="10" fill="#FFD700" /> 
               <path d="M12 7.2l4.5 4v5.3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-5.3l4.5-4z" fill="#7016ff" /> 
               <path d="M11 13.5h2v3h-2z" fill="#FFD700" /> 
@@ -100,7 +97,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
 
         <Link to="/messenger" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Chat" > 
           <div style={{ background: (location.pathname.startsWith('/messenger') || location.pathname.startsWith('/chat')) ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
-            <svg xmlns="http://w3.org" width="18" height="18" viewBox="0 0 24 24" fill="none"> 
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"> 
               <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z" fill="#7016ff" /> 
               <path d="M6 6h12v2H6zm0 3.5h12v2H6zm0 3.5h8v2H6z" fill="#ffffff" /> 
             </svg> 
@@ -112,7 +109,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
 
         <Link to="/profile" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="ID Profile" > 
           <div style={{ background: (location.pathname === '/profile' || location.pathname.startsWith('/profile/') && !location.pathname.includes('/edit')) ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
-            <svg xmlns="http://w3.org" width="18" height="18" viewBox="0 0 24 24" fill="none"> 
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"> 
               <circle cx="12" cy="12" r="10" fill="#9370DB" /> 
               <circle cx="12" cy="9" r="3" fill="#ffffff" /> 
               <path d="M12 14c-2.7 0-5 1.5-6 3.5 1.2 2.1 3.5 3.5 6 3.5s4.8-1.4 6-3.5c-1-2-3.3-3.5-6-3.5z" fill="#ffffff" /> 
@@ -126,7 +123,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
         {isAdmin && ( 
           <Link to="/admin" style={{ color: '#ffeb3b', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Admin" > 
             <div style={{ background: location.pathname.startsWith('/admin') ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
-              <svg xmlns="http://w3.org" width="18" height="18" viewBox="0 0 24 24" fill="none"> 
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"> 
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 12z" fill="#7016ff" /> 
                 <circle cx="12" cy="9.5" r="2.5" fill="#FFFF00" /> 
                 <path d="M8 15.5c0-1.5 2-2.5 4-2.5s4 1 4 2.5v1H8v-1.5z" fill="#FFFF00" /> 
@@ -138,10 +135,17 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
           </Link> 
         )} 
       </div>
-      {/* 📥 Right Section: Standardized Download Button & Menu Trigger */}
+      {/* 📥 Right Section: Web Button & Menu Trigger */}
       <div style={{ display: 'flex', gap: isMobile ? '6px' : '12px', alignItems: 'center' }}> 
-        <a href="https://github.com/md-habibullah-git/Student-connect/releases/download/v1.0.0/app-debug.apk" style={{ backgroundColor: '#2e7d32', color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)', padding: isMobile ? '4px 8px' : '6px 14px', borderRadius: '15px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'all 0.2s ease', cursor: 'pointer' }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1b5e20'; e.currentTarget.style.transform = 'scale(1.03)'; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#2e7d32'; e.currentTarget.style.transform = 'scale(1)'; }} > 
-          📥 {isMobile ? 'APK' : 'Download App'}
+        <a 
+          href="https://student-connect-sand.vercel.app/" 
+          target="_blank" 
+          rel="noreferrer"
+          style={{ backgroundColor: '#2e7d32', color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)', padding: isMobile ? '4px 8px' : '6px 14px', borderRadius: '15px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'all 0.2s ease', cursor: 'pointer' }} 
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1b5e20'; e.currentTarget.style.transform = 'scale(1.03)'; }} 
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#2e7d32'; e.currentTarget.style.transform = 'scale(1)'; }}
+        > 
+          🌐 {isMobile ? 'Web' : 'Web'}
         </a> 
 
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}> 
