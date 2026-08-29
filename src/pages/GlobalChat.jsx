@@ -24,43 +24,24 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// ✅ ফিক্সড: RemoteVideoTile - সবসময় ভিডিও element render হবে
+// ✅ ফিক্সড: RemoteVideoTile - ভিডিও দেখানোর জন্য
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
-  const [videoReady, setVideoReady] = useState(false);
   
   useEffect(() => {
-    if (!videoRef.current || !stream) return;
-    
-    console.log(`🎥 Setting up video for ${label}, tracks:`, stream.getTracks().map(t => t.kind));
-    
-    videoRef.current.srcObject = stream;
-    videoRef.current.muted = false;
-    videoRef.current.volume = 1.0;
-    
-    const handleTrackAdded = () => {
-      console.log(`📹 Track added for ${label}:`, stream.getTracks().map(t => t.kind));
-      setVideoReady(stream.getVideoTracks().length > 0);
-    };
-    
-    const handleTrackRemoved = () => {
-      console.log(`📹 Track removed for ${label}`);
-      setVideoReady(stream.getVideoTracks().length > 0);
-    };
-    
-    // Initial check
-    setVideoReady(stream.getVideoTracks().length > 0);
-    
-    stream.addEventListener('addtrack', handleTrackAdded);
-    stream.addEventListener('removetrack', handleTrackRemoved);
-    
-    videoRef.current.play().catch(err => {
-      console.error("Error playing remote video:", err);
-    });
+    if (videoRef.current && stream) {
+      console.log(`🎥 RemoteVideoTile setup for ${label}, tracks:`, stream.getTracks().map(t => `${t.kind}:${t.enabled}`));
+      
+      videoRef.current.srcObject = stream;
+      videoRef.current.muted = false;
+      videoRef.current.volume = 1.0;
+      
+      videoRef.current.play().catch(err => {
+        console.error("Error playing remote video:", err);
+      });
+    }
     
     return () => {
-      stream.removeEventListener('addtrack', handleTrackAdded);
-      stream.removeEventListener('removetrack', handleTrackRemoved);
       if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
@@ -77,39 +58,12 @@ function RemoteVideoTile({ stream, label }) {
       height: '100%',
       minHeight: '150px'
     }}>
-      {/* ভিডিও element সবসময় render হবে */}
       <video 
         ref={videoRef} 
         autoPlay 
         playsInline 
-        style={{ 
-          width: '100%', 
-          height: '100%', 
-          objectFit: 'cover',
-          display: videoReady ? 'block' : 'none'
-        }} 
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} 
       />
-      
-      {/* ভিডিও ট্র্যাক না থাকলে placeholder */}
-      {!videoReady && (
-        <div style={{ 
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%', 
-          height: '100%', 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center',
-          flexDirection: 'column',
-          gap: '8px',
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-        }}>
-          <div style={{ fontSize: '48px' }}>👤</div>
-          <div style={{ fontSize: '14px', color: '#fff' }}>{label}</div>
-        </div>
-      )}
-      
       <span style={{ 
         position: 'absolute', 
         bottom: '6px', 
@@ -695,10 +649,18 @@ export default function GlobalChat() {
 
   const getLocalStream = async (callType = 'video') => {
     const s = ensureSession();
-    if (s.localStream) return s.localStream;
-    const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
+    if (s.localStream) {
+      console.log('📹 Reusing existing local stream');
+      return s.localStream;
+    }
+    console.log('📹 Getting new local stream, callType:', callType);
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: callType === 'video' ? { width: 640, height: 480 } : false, 
+      audio: true 
+    });
     s.localStream = stream;
     s.callType = callType;
+    console.log('📹 Local stream tracks:', stream.getTracks().map(t => t.kind));
     return stream;
   };
 
@@ -732,9 +694,15 @@ export default function GlobalChat() {
     }
   }, [inCall]);
 
+  // ✅ ফিক্সড: connectToPeer - সঠিকভাবে track receive করা
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
-    if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
+    if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) {
+      console.log(`⚠️ Skipping connection to ${peerUid} - already connected or invalid`);
+      return;
+    }
+
+    console.log(`🔗 Connecting to peer: ${peerUid}`);
 
     const isInitiator = currentUid < peerUid;
     const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
@@ -747,7 +715,10 @@ export default function GlobalChat() {
       s.peerConnections[peerUid] = pc;
 
       const stream = await getLocalStream(s.callType);
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      stream.getTracks().forEach(track => {
+        console.log(`📤 Adding local track to peer connection: ${track.kind}`);
+        pc.addTrack(track, stream);
+      });
 
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
@@ -757,41 +728,47 @@ export default function GlobalChat() {
         return next;
       });
 
-      // ✅ ফিক্সড: ontrack ইভেন্ট - track add করুন এবং state update করুন
+      // ✅ ফিক্সড: ontrack ইভেন্ট - সঠিকভাবে track যোগ করুন
       pc.ontrack = (event) => {
-        console.log(`📹 Track received from peer ${peerUid}:`, event.track.kind, 'streams:', event.streams.length);
+        console.log(`📥 Track received from ${peerUid}:`, event.track.kind, 'readyState:', event.track.readyState);
         
-        if (event.streams && event.streams[0]) {
-          event.streams[0].getTracks().forEach(track => {
+        const [trackStream] = event.streams;
+        if (trackStream) {
+          trackStream.getTracks().forEach(track => {
+            console.log(`📥 Adding track to remote stream: ${track.kind}`);
             if (!remoteStream.getTracks().includes(track)) {
               remoteStream.addTrack(track);
             }
           });
         } else {
+          console.log(`📥 Adding single track: ${event.track.kind}`);
           remoteStream.addTrack(event.track);
         }
         
-        // ✅ Force re-render - নতুন object তৈরি করে
+        console.log(`✅ Remote stream tracks for ${peerUid}:`, remoteStream.getTracks().map(t => `${t.kind}:${t.enabled}`));
+        
+        // Force re-render
         setRemoteStreams(prev => {
           const next = { ...prev };
           next[peerUid] = remoteStream;
           return next;
         });
-        
-        console.log(`✅ Remote stream tracks for ${peerUid}:`, remoteStream.getTracks().map(t => t.kind));
       };
 
       pc.onicecandidate = (event) => {
-        if (event.candidate) addDoc(myCandidatesRef, event.candidate.toJSON());
+        if (event.candidate) {
+          console.log('🧊 Sending ICE candidate');
+          addDoc(myCandidatesRef, event.candidate.toJSON());
+        }
       };
 
       pc.onconnectionstatechange = () => {
         console.log(`🔗 Connection state for ${peerUid}:`, pc.connectionState);
+        if (pc.connectionState === 'connected') {
+          console.log(`✅ Connected to ${peerUid}, remote tracks:`, pc.getReceivers().map(r => r.track.kind));
+        }
         if (pc.connectionState === 'failed') {
           removeStalePeerFromRoom(peerUid);
-        }
-        if (pc.connectionState === 'connected') {
-          console.log(`✅ Connected to peer ${peerUid}`);
         }
       };
 
@@ -799,13 +776,17 @@ export default function GlobalChat() {
         onSnapshot(theirCandidatesRef, (snapshot) => {
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'added') {
-              pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
+              console.log('🧊 Receiving ICE candidate');
+              pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch((e) => {
+                console.error('Error adding ICE candidate:', e);
+              });
             }
           });
         })
       ];
 
       if (isInitiator) {
+        console.log('📤 I am initiator, creating offer');
         const [staleA, staleB] = await Promise.all([
           getDocs(collection(connRef, "candidatesA")),
           getDocs(collection(connRef, "candidatesB"))
@@ -815,21 +796,26 @@ export default function GlobalChat() {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } });
+        console.log('📤 Offer sent');
 
         unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
           if (data?.answer && !pc.currentRemoteDescription) {
+            console.log('📥 Answer received');
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
           }
         }));
       } else {
+        console.log('📥 I am not initiator, waiting for offer');
         unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
           if (data?.offer && !pc.currentRemoteDescription) {
+            console.log('📥 Offer received, creating answer');
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
+            console.log('📤 Answer sent');
           }
         }));
       }
@@ -883,16 +869,18 @@ export default function GlobalChat() {
       const otherParticipants = (snap.data().participants || []).filter(uid => uid !== currentUid);
       const currentSet = new Set(otherParticipants);
 
+      console.log('👥 Participants:', otherParticipants);
+
       otherParticipants.forEach(uid => {
         if (!s.knownPeers.has(uid)) {
-          console.log(`🔗 Connecting to new peer: ${uid}`);
+          console.log(`🔗 Need to connect to: ${uid}`);
           connectToPeer(uid);
         }
       });
       
       s.knownPeers.forEach(uid => {
         if (!currentSet.has(uid)) {
-          console.log(`🔌 Disconnecting from peer: ${uid}`);
+          console.log(`🔌 Disconnecting from: ${uid}`);
           disconnectFromPeer(uid);
         }
       });
@@ -1095,10 +1083,9 @@ export default function GlobalChat() {
                 />
                 <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>You</span>
               </div>
-              {Object.entries(remoteStreams).map(([uid, stream]) => {
-                console.log(`🎥 Rendering RemoteVideoTile for ${uid}, tracks:`, stream.getTracks().map(t => t.kind));
-                return <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />;
-              })}
+              {Object.entries(remoteStreams).map(([uid, stream]) => (
+                <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />
+              ))}
             </div>
           )}
           <button
