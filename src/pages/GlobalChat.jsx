@@ -24,41 +24,43 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// ✅ ফিক্সড: RemoteVideoTile - ভিডিও সঠিকভাবে দেখাবে
+// ✅ ফিক্সড: RemoteVideoTile - সবসময় ভিডিও element render হবে
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
-  const [hasVideo, setHasVideo] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
   
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.muted = false;
-      videoRef.current.volume = 1.0;
-      
-      // ভিডিও ট্র্যাক check
-      const checkVideoTracks = () => {
-        const videoTracks = stream.getVideoTracks();
-        const hasActiveVideo = videoTracks.length > 0 && videoTracks[0].enabled;
-        console.log(`📹 Video tracks for ${label}:`, videoTracks.length, 'enabled:', hasActiveVideo);
-        setHasVideo(hasActiveVideo);
-      };
-      
-      checkVideoTracks();
-      
-      // track add/remove হলে update
-      stream.addEventListener('addtrack', checkVideoTracks);
-      stream.addEventListener('removetrack', checkVideoTracks);
-      
-      videoRef.current.play().catch(err => {
-        console.error("Error playing remote video:", err);
-      });
-    }
+    if (!videoRef.current || !stream) return;
+    
+    console.log(`🎥 Setting up video for ${label}, tracks:`, stream.getTracks().map(t => t.kind));
+    
+    videoRef.current.srcObject = stream;
+    videoRef.current.muted = false;
+    videoRef.current.volume = 1.0;
+    
+    const handleTrackAdded = () => {
+      console.log(`📹 Track added for ${label}:`, stream.getTracks().map(t => t.kind));
+      setVideoReady(stream.getVideoTracks().length > 0);
+    };
+    
+    const handleTrackRemoved = () => {
+      console.log(`📹 Track removed for ${label}`);
+      setVideoReady(stream.getVideoTracks().length > 0);
+    };
+    
+    // Initial check
+    setVideoReady(stream.getVideoTracks().length > 0);
+    
+    stream.addEventListener('addtrack', handleTrackAdded);
+    stream.addEventListener('removetrack', handleTrackRemoved);
+    
+    videoRef.current.play().catch(err => {
+      console.error("Error playing remote video:", err);
+    });
     
     return () => {
-      if (stream) {
-        stream.removeEventListener('addtrack', () => {});
-        stream.removeEventListener('removetrack', () => {});
-      }
+      stream.removeEventListener('addtrack', handleTrackAdded);
+      stream.removeEventListener('removetrack', handleTrackRemoved);
       if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
@@ -73,12 +75,9 @@ function RemoteVideoTile({ stream, label }) {
       overflow: 'hidden', 
       width: '100%', 
       height: '100%',
-      minHeight: '150px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center'
+      minHeight: '150px'
     }}>
-      {/* সবসময় video element render হবে */}
+      {/* ভিডিও element সবসময় render হবে */}
       <video 
         ref={videoRef} 
         autoPlay 
@@ -86,13 +85,13 @@ function RemoteVideoTile({ stream, label }) {
         style={{ 
           width: '100%', 
           height: '100%', 
-          objectFit: 'cover', 
-          display: hasVideo ? 'block' : 'none' 
+          objectFit: 'cover',
+          display: videoReady ? 'block' : 'none'
         }} 
       />
       
-      {/* ভিডিও না থাকলে avatar দেখাবে */}
-      {!hasVideo && (
+      {/* ভিডিও ট্র্যাক না থাকলে placeholder */}
+      {!videoReady && (
         <div style={{ 
           position: 'absolute',
           top: 0,
@@ -752,10 +751,16 @@ export default function GlobalChat() {
 
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
-      setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
+      setRemoteStreams(prev => {
+        const next = { ...prev };
+        next[peerUid] = remoteStream;
+        return next;
+      });
 
+      // ✅ ফিক্সড: ontrack ইভেন্ট - track add করুন এবং state update করুন
       pc.ontrack = (event) => {
-        console.log(`📹 Track received from peer ${peerUid}:`, event.track.kind);
+        console.log(`📹 Track received from peer ${peerUid}:`, event.track.kind, 'streams:', event.streams.length);
+        
         if (event.streams && event.streams[0]) {
           event.streams[0].getTracks().forEach(track => {
             if (!remoteStream.getTracks().includes(track)) {
@@ -765,7 +770,15 @@ export default function GlobalChat() {
         } else {
           remoteStream.addTrack(event.track);
         }
-        setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
+        
+        // ✅ Force re-render - নতুন object তৈরি করে
+        setRemoteStreams(prev => {
+          const next = { ...prev };
+          next[peerUid] = remoteStream;
+          return next;
+        });
+        
+        console.log(`✅ Remote stream tracks for ${peerUid}:`, remoteStream.getTracks().map(t => t.kind));
       };
 
       pc.onicecandidate = (event) => {
@@ -1082,9 +1095,10 @@ export default function GlobalChat() {
                 />
                 <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>You</span>
               </div>
-              {Object.entries(remoteStreams).map(([uid, stream]) => (
-                <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />
-              ))}
+              {Object.entries(remoteStreams).map(([uid, stream]) => {
+                console.log(`🎥 Rendering RemoteVideoTile for ${uid}, tracks:`, stream.getTracks().map(t => t.kind));
+                return <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />;
+              })}
             </div>
           )}
           <button

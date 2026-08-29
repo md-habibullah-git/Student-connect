@@ -31,6 +31,8 @@ export default function GlobalAlerts() {
   const [messageBubbles, setMessageBubbles] = useState([]);
   const [incomingPersonalCall, setIncomingPersonalCall] = useState(null);
   const [incomingGlobalCall, setIncomingGlobalCall] = useState(null);
+  // ✅ ফিক্স: গ্লোবাল কল রিসিভ করলে বার বার দেখাবে না
+  const dismissedGlobalCallRef = useRef(false);
 
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
@@ -81,6 +83,13 @@ export default function GlobalAlerts() {
     return unsubscribe;
   }, []);
 
+  // ✅ ফিক্স: গ্লোবাল কল session clear হলে dismissed flag reset হবে
+  useEffect(() => {
+    if (!activeGlobalSession) {
+      dismissedGlobalCallRef.current = false;
+    }
+  }, [activeGlobalSession]);
+
   useEffect(() => {
     if (!activeGlobalSession || !currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
@@ -121,7 +130,6 @@ export default function GlobalAlerts() {
         const deletePromises = snapshot.docs.map(async (docSnapshot) => {
           try {
             await deleteDoc(doc(db, "global-room-messages", docSnapshot.id));
-            console.log(`✅ Deleted old global message: ${docSnapshot.id}`);
           } catch (deleteError) {
             console.error(`Error deleting ${docSnapshot.id}:`, deleteError);
           }
@@ -173,7 +181,6 @@ export default function GlobalAlerts() {
           const deletePromises = messagesSnapshot.docs.map(async (msgDoc) => {
             try {
               await deleteDoc(doc(db, "personal-rooms", roomId, "messages", msgDoc.id));
-              console.log(`✅ Deleted old personal message from ${roomId}: ${msgDoc.id}`);
             } catch (deleteError) {
               console.error(`Error deleting ${msgDoc.id}:`, deleteError);
             }
@@ -204,7 +211,6 @@ export default function GlobalAlerts() {
       try {
         const sevenDaysAgoMs = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
         
-        // গ্লোবাল চ্যাটে ভয়েস মেসেজ
         const globalVoiceQuery = query(
           collection(db, "global-room-messages"), 
           where("fileType", "==", "audio"),
@@ -218,7 +224,6 @@ export default function GlobalAlerts() {
           await deleteDoc(doc(db, "global-room-messages", voiceDoc.id)).catch(() => {});
         }
         
-        // পার্সোনাল চ্যাটে ভয়েস মেসেজ
         const roomsQuery = query(
           collection(db, "personal-rooms"), 
           where("participants", "array-contains", currentUid)
@@ -256,7 +261,6 @@ export default function GlobalAlerts() {
     return () => clearInterval(cleanupInterval);
   }, [currentUid]);
 
-  // ── Presence: অনলাইন/অফলাইন স্ট্যাটাস ──
   useEffect(() => {
     if (!currentUid) return;
     const selfRef = doc(db, "users", currentUid);
@@ -324,7 +328,6 @@ export default function GlobalAlerts() {
     };
   }, [currentUid]);
 
-  // ── Floating message bubbles: নতুন পার্সোনাল মেসেজ ──
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-rooms"), where("participants", "array-contains", currentUid));
@@ -368,7 +371,6 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ── Floating message bubble: নতুন গ্লোবাল মেসেজ ──
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
@@ -400,7 +402,6 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ── Floating call bar: ইনকামিং পার্সোনাল কল ──
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-calls"), where("participants", "array-contains", currentUid));
@@ -417,13 +418,13 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ── Floating call bar: ইনকামিং গ্লোবাল কল ──
+  // ✅ ফিক্স: গ্লোবাল কল - শুধু একবার দেখাবে, ডিক্লাইন করলে আর দেখাবে না
   useEffect(() => {
     if (!currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        if (data.status === "ringing" && data.hostId !== currentUid) {
+        if (data.status === "ringing" && data.hostId !== currentUid && !dismissedGlobalCallRef.current) {
           setIncomingGlobalCall({ hostName: data.hostName });
           return;
         }
@@ -433,7 +434,6 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ── নির্দিষ্ট চ্যাট পেজ খুললে বাবল পরিষ্কার ──
   useEffect(() => {
     setMessageBubbles((prev) => prev.filter((b) => {
       if (b.isGlobal) return location.pathname !== '/chat/global/Global-Chatroom';
@@ -449,7 +449,7 @@ export default function GlobalAlerts() {
     && activeSession.type === 'personal'
     && !location.pathname.startsWith(`/chat/${activeSession.otherUid}/`);
 
-  // ✅ কল রিসিভ করলে সাথে সাথে বার বন্ধ
+  // ✅ ফিক্স: কল রিসিভ করলে সাথে সাথে বার বন্ধ, dismissed flag সেট
   const handleReceive = () => {
     if (!activeCall) return;
     
@@ -459,11 +459,13 @@ export default function GlobalAlerts() {
     if (activeCall.type === 'personal') {
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
+      // ✅ গ্লোবাল কল রিসিভ করলে dismissed flag সেট হবে
+      dismissedGlobalCallRef.current = true;
       navigate('/chat/global/Global-Chatroom', { state: { autoJoinCall: true } });
     }
   };
 
-  // ✅ কল ডিক্লাইন করলে সাথে সাথে বার বন্ধ
+  // ✅ ফিক্স: কল ডিক্লাইন করলে সাথে সাথে বার বন্ধ
   const handleDecline = async () => {
     if (!activeCall) return;
     
@@ -474,6 +476,8 @@ export default function GlobalAlerts() {
       
       setIncomingPersonalCall(null);
     } else {
+      // ✅ গ্লোবাল কল ডিক্লাইন করলে dismissed flag সেট হবে
+      dismissedGlobalCallRef.current = true;
       setIncomingGlobalCall(null);
     }
   };
@@ -529,7 +533,6 @@ export default function GlobalAlerts() {
 
   return (
     <>
-      {/* ইনকামিং কল বার - উপরে কেন্দ্রে */}
       {activeCall && (
         <div style={{
           position: 'fixed', top: '8px', left: '50%', transform: 'translateX(-50%)',
@@ -564,7 +567,6 @@ export default function GlobalAlerts() {
         </div>
       )}
 
-      {/* চলমান পার্সোনাল কল বাবল */}
       {showMinimizedCallBubble && (
         <button
           onClick={handleMinimizedCallClick}
@@ -587,7 +589,6 @@ export default function GlobalAlerts() {
         </button>
       )}
 
-      {/* চলমান গ্লোবাল কল বাবল */}
       {activeGlobalSession && location.pathname !== '/chat/global/Global-Chatroom' && (
         <button
           onClick={() => navigate('/chat/global/Global-Chatroom')}
@@ -608,7 +609,6 @@ export default function GlobalAlerts() {
         </button>
       )}
 
-      {/* ফ্লোটিং মেসেজ বাবল স্ট্যাক */}
       {messageBubbles.length > 0 && (
         <div style={bubbleContainerStyle}>
           {messageBubbles.map((bubble) => (
