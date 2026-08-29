@@ -24,18 +24,15 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
+// ✅ ফিক্সড: RemoteVideoTile - stream সঠিকভাবে update হবে
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
-  const [hasVideo, setHasVideo] = useState(false);
   
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
       videoRef.current.muted = false;
       videoRef.current.volume = 1.0;
-      
-      const videoTracks = stream.getVideoTracks();
-      setHasVideo(videoTracks.length > 0 && videoTracks[0].enabled);
       
       videoRef.current.play().catch(err => {
         console.error("Error playing remote video:", err);
@@ -52,37 +49,19 @@ function RemoteVideoTile({ stream, label }) {
   return (
     <div style={{ 
       position: 'relative', 
-      background: hasVideo ? '#111' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+      background: '#111', 
       borderRadius: '8px', 
       overflow: 'hidden', 
       width: '100%', 
       height: '100%',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center'
+      minHeight: '150px'
     }}>
-      {hasVideo ? (
-        <video 
-          ref={videoRef} 
-          autoPlay 
-          playsInline 
-          muted={false}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} 
-        />
-      ) : (
-        <div style={{ 
-          width: '100%', 
-          height: '100%', 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center',
-          flexDirection: 'column',
-          gap: '8px'
-        }}>
-          <div style={{ fontSize: '48px' }}>👤</div>
-          <div style={{ fontSize: '14px', color: '#fff' }}>{label}</div>
-        </div>
-      )}
+      <video 
+        ref={videoRef} 
+        autoPlay 
+        playsInline 
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} 
+      />
       <span style={{ 
         position: 'absolute', 
         bottom: '6px', 
@@ -295,7 +274,7 @@ export default function GlobalChat() {
     return sessionRef.current;
   };
 
-  // ✅ ৭ দিনের পুরনো মেসেজ ডিলিট - number timestamp দিয়ে query
+  // ✅ ৭ দিনের পুরনো মেসেজ ডিলিট
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
@@ -314,22 +293,18 @@ export default function GlobalChat() {
           return;
         }
         
-        console.log(`🗑️ Deleting ${snapshot.size} old global messages`);
-        
         const deletePromises = snapshot.docs.map(async (docSnapshot) => {
           try {
             await deleteDoc(doc(db, "global-room-messages", docSnapshot.id));
-            console.log(`✅ Deleted: ${docSnapshot.id}`);
           } catch (deleteError) {
-            console.error(`❌ Error deleting ${docSnapshot.id}:`, deleteError);
+            console.error(`Error deleting ${docSnapshot.id}:`, deleteError);
           }
         });
         
         await Promise.all(deletePromises);
-        console.log("✅ Global chat cleanup completed");
         
       } catch (error) {
-        console.error("❌ Global Chat Cleanup Error:", error);
+        console.error("Global Chat Cleanup Error:", error);
       }
     };
     
@@ -448,7 +423,7 @@ export default function GlobalChat() {
         await addDoc(collection(db, "global-room-messages"), {
           text: newMessage, senderUid: currentUid, senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: new Date().getTime(), // ✅ number (milliseconds)
+          createdAt: new Date().getTime(),
           isEdited: false, isDeleted: false, replyTo: replyData
         });
         setNewMessage("");
@@ -461,7 +436,7 @@ export default function GlobalChat() {
           text: "", fileUrl: fileData.url, fileType: fileData.type, fileName: fileData.name,
           senderUid: currentUid, senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: new Date().getTime(), // ✅ number (milliseconds)
+          createdAt: new Date().getTime(),
           isEdited: false, isDeleted: false, replyTo: replyData
         });
       } catch (error) { console.error("Error sending file to firestore:", error); }
@@ -541,7 +516,7 @@ export default function GlobalChat() {
         text: "", fileUrl: audioUrl, fileType: 'audio', fileName: 'voice-message.webm',
         senderUid: currentUid, senderName: currentUserName,
         senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-        createdAt: new Date().getTime(), // ✅ number (milliseconds)
+        createdAt: new Date().getTime(),
         isEdited: false, isDeleted: false, replyTo: replyData
       });
 
@@ -731,10 +706,16 @@ export default function GlobalChat() {
 
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
-      setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
+      setRemoteStreams(prev => {
+        const next = { ...prev };
+        next[peerUid] = remoteStream;
+        return next;
+      });
 
+      // ✅ ফিক্সড: ontrack ইভেন্ট সঠিকভাবে handle করা
       pc.ontrack = (event) => {
         console.log(`📹 Track received from peer ${peerUid}:`, event.track.kind);
+        
         if (event.streams && event.streams[0]) {
           event.streams[0].getTracks().forEach(track => {
             if (!remoteStream.getTracks().includes(track)) {
@@ -744,7 +725,13 @@ export default function GlobalChat() {
         } else {
           remoteStream.addTrack(event.track);
         }
-        setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
+        
+        // ✅ Force re-render
+        setRemoteStreams(prev => {
+          const next = { ...prev };
+          next[peerUid] = remoteStream;
+          return next;
+        });
       };
 
       pc.onicecandidate = (event) => {
