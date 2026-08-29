@@ -24,21 +24,25 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// ✅ ফিক্সড: RemoteVideoTile - ভিডিও দেখানোর জন্য
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
   
   useEffect(() => {
     if (videoRef.current && stream) {
-      console.log(`🎥 RemoteVideoTile setup for ${label}, tracks:`, stream.getTracks().map(t => `${t.kind}:${t.enabled}`));
+      console.log('🎥 Setting up video for', label, 'tracks:', stream.getTracks().map(t => t.kind));
       
       videoRef.current.srcObject = stream;
       videoRef.current.muted = false;
       videoRef.current.volume = 1.0;
+      videoRef.current.autoplay = true;
+      videoRef.current.playsInline = true;
       
-      videoRef.current.play().catch(err => {
-        console.error("Error playing remote video:", err);
-      });
+      const playPromise = videoRef.current.play();
+      if (playPromise) {
+        playPromise.catch(err => {
+          console.error('Play error:', err);
+        });
+      }
     }
     
     return () => {
@@ -694,15 +698,9 @@ export default function GlobalChat() {
     }
   }, [inCall]);
 
-  // ✅ ফিক্সড: connectToPeer - সঠিকভাবে track receive করা
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
-    if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) {
-      console.log(`⚠️ Skipping connection to ${peerUid} - already connected or invalid`);
-      return;
-    }
-
-    console.log(`🔗 Connecting to peer: ${peerUid}`);
+    if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
 
     const isInitiator = currentUid < peerUid;
     const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
@@ -715,58 +713,38 @@ export default function GlobalChat() {
       s.peerConnections[peerUid] = pc;
 
       const stream = await getLocalStream(s.callType);
-      stream.getTracks().forEach(track => {
-        console.log(`📤 Adding local track to peer connection: ${track.kind}`);
-        pc.addTrack(track, stream);
-      });
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
-      setRemoteStreams(prev => {
-        const next = { ...prev };
-        next[peerUid] = remoteStream;
-        return next;
-      });
+      setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
 
-      // ✅ ফিক্সড: ontrack ইভেন্ট - সঠিকভাবে track যোগ করুন
+      // ✅ ফিক্সড: ontrack ইভেন্ট
       pc.ontrack = (event) => {
-        console.log(`📥 Track received from ${peerUid}:`, event.track.kind, 'readyState:', event.track.readyState);
+        console.log('📥 Track event:', event.track.kind, 'streams:', event.streams.length);
         
-        const [trackStream] = event.streams;
-        if (trackStream) {
-          trackStream.getTracks().forEach(track => {
-            console.log(`📥 Adding track to remote stream: ${track.kind}`);
-            if (!remoteStream.getTracks().includes(track)) {
-              remoteStream.addTrack(track);
-            }
+        if (event.streams && event.streams.length > 0) {
+          event.streams[0].getTracks().forEach(track => {
+            remoteStream.addTrack(track);
           });
         } else {
-          console.log(`📥 Adding single track: ${event.track.kind}`);
           remoteStream.addTrack(event.track);
         }
         
-        console.log(`✅ Remote stream tracks for ${peerUid}:`, remoteStream.getTracks().map(t => `${t.kind}:${t.enabled}`));
-        
         // Force re-render
         setRemoteStreams(prev => {
-          const next = { ...prev };
-          next[peerUid] = remoteStream;
-          return next;
+          const updated = { ...prev };
+          updated[peerUid] = remoteStream;
+          return updated;
         });
       };
 
       pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('🧊 Sending ICE candidate');
-          addDoc(myCandidatesRef, event.candidate.toJSON());
-        }
+        if (event.candidate) addDoc(myCandidatesRef, event.candidate.toJSON());
       };
 
       pc.onconnectionstatechange = () => {
-        console.log(`🔗 Connection state for ${peerUid}:`, pc.connectionState);
-        if (pc.connectionState === 'connected') {
-          console.log(`✅ Connected to ${peerUid}, remote tracks:`, pc.getReceivers().map(r => r.track.kind));
-        }
+        console.log('🔗 State:', peerUid, pc.connectionState);
         if (pc.connectionState === 'failed') {
           removeStalePeerFromRoom(peerUid);
         }
@@ -776,17 +754,13 @@ export default function GlobalChat() {
         onSnapshot(theirCandidatesRef, (snapshot) => {
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'added') {
-              console.log('🧊 Receiving ICE candidate');
-              pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch((e) => {
-                console.error('Error adding ICE candidate:', e);
-              });
+              pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
             }
           });
         })
       ];
 
       if (isInitiator) {
-        console.log('📤 I am initiator, creating offer');
         const [staleA, staleB] = await Promise.all([
           getDocs(collection(connRef, "candidatesA")),
           getDocs(collection(connRef, "candidatesB"))
@@ -796,26 +770,21 @@ export default function GlobalChat() {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } });
-        console.log('📤 Offer sent');
 
         unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
           if (data?.answer && !pc.currentRemoteDescription) {
-            console.log('📥 Answer received');
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
           }
         }));
       } else {
-        console.log('📥 I am not initiator, waiting for offer');
         unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
           if (data?.offer && !pc.currentRemoteDescription) {
-            console.log('📥 Offer received, creating answer');
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
-            console.log('📤 Answer sent');
           }
         }));
       }
