@@ -1,11 +1,11 @@
-// GlobalChat.jsx - সম্পূর্ণ ফিক্সড ভার্সন
+// File Name: src/components/GlobalChat.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { isUserOnline } from '../presence';
 import { 
   collection, addDoc, onSnapshot, query, orderBy, limit, 
-  serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where 
+  doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where 
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 
@@ -26,12 +26,17 @@ const MAX_RECORDING_SECONDS = 30;
 
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
+  const [hasVideo, setHasVideo] = useState(false);
   
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
       videoRef.current.muted = false;
       videoRef.current.volume = 1.0;
+      
+      const videoTracks = stream.getVideoTracks();
+      setHasVideo(videoTracks.length > 0 && videoTracks[0].enabled);
+      
       videoRef.current.play().catch(err => {
         console.error("Error playing remote video:", err);
       });
@@ -45,15 +50,52 @@ function RemoteVideoTile({ stream, label }) {
   }, [stream]);
   
   return (
-    <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden', width: '100%', height: '100%' }}>
-      <video 
-        ref={videoRef} 
-        autoPlay 
-        playsInline 
-        muted={false}
-        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} 
-      />
-      <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
+    <div style={{ 
+      position: 'relative', 
+      background: hasVideo ? '#111' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+      borderRadius: '8px', 
+      overflow: 'hidden', 
+      width: '100%', 
+      height: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center'
+    }}>
+      {hasVideo ? (
+        <video 
+          ref={videoRef} 
+          autoPlay 
+          playsInline 
+          muted={false}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} 
+        />
+      ) : (
+        <div style={{ 
+          width: '100%', 
+          height: '100%', 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'center',
+          flexDirection: 'column',
+          gap: '8px'
+        }}>
+          <div style={{ fontSize: '48px' }}>👤</div>
+          <div style={{ fontSize: '14px', color: '#fff' }}>{label}</div>
+        </div>
+      )}
+      <span style={{ 
+        position: 'absolute', 
+        bottom: '6px', 
+        left: '8px', 
+        color: '#fff', 
+        fontSize: '12px', 
+        background: 'rgba(0,0,0,0.5)', 
+        padding: '2px 8px', 
+        borderRadius: '10px',
+        zIndex: 10
+      }}>
+        {label}
+      </span>
     </div>
   );
 }
@@ -253,56 +295,49 @@ export default function GlobalChat() {
     return sessionRef.current;
   };
 
-  // ✅ ফিক্সড: ৭ দিনের পুরনো মেসেজ ডিলিট - এখন সঠিকভাবে কাজ করবে
+  // ✅ ৭ দিনের পুরনো মেসেজ ডিলিট - number timestamp দিয়ে query
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        const sevenDaysAgoMs = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
         
-        console.log("🧹 Cleaning messages older than:", sevenDaysAgo);
-        
-        // 🔥 createdAt এখন Date object হিসেবে save হবে, তাই query সঠিকভাবে কাজ করবে
         const oldMessagesQuery = query(
           collection(db, "global-room-messages"), 
-          where("createdAt", "<", sevenDaysAgo),
-          limit(100) // Batch delete - একবারে ১০০টি
+          where("createdAt", "<", sevenDaysAgoMs),
+          limit(100)
         );
         
         const snapshot = await getDocs(oldMessagesQuery);
         
         if (snapshot.empty) {
-          console.log("✅ No old messages to delete");
+          console.log("✅ No old global messages to delete");
           return;
         }
         
-        console.log(`🗑️ Found ${snapshot.size} old messages to delete`);
+        console.log(`🗑️ Deleting ${snapshot.size} old global messages`);
         
-        // এক এক করে ডিলিট করুন
         const deletePromises = snapshot.docs.map(async (docSnapshot) => {
           try {
             await deleteDoc(doc(db, "global-room-messages", docSnapshot.id));
-            console.log(`✅ Deleted message: ${docSnapshot.id}`);
+            console.log(`✅ Deleted: ${docSnapshot.id}`);
           } catch (deleteError) {
-            console.error(`❌ Error deleting message ${docSnapshot.id}:`, deleteError);
+            console.error(`❌ Error deleting ${docSnapshot.id}:`, deleteError);
           }
         });
         
         await Promise.all(deletePromises);
-        console.log("✅ Cleanup completed");
+        console.log("✅ Global chat cleanup completed");
         
       } catch (error) {
-        console.error("❌ Global Chat Storage Auto Cleanup Error:", error);
+        console.error("❌ Global Chat Cleanup Error:", error);
       }
     };
     
-    // এখনই চালান
     autoCleanOldGlobalMessages();
     
-    // প্রতি ২৪ ঘন্টা পর পর চালান (যদি ইউজার পেজে থাকে)
     const cleanupInterval = setInterval(() => {
       autoCleanOldGlobalMessages();
-    }, 24 * 60 * 60 * 1000); // 24 hours
+    }, 24 * 60 * 60 * 1000);
     
     return () => clearInterval(cleanupInterval);
   }, []);
@@ -371,11 +406,17 @@ export default function GlobalChat() {
             setInCall(false);
             return;
           }
-          setShowRejoinBtn(true);
+          if (participants.includes(currentUid)) {
+            setInCall(true);
+          } else {
+            setShowRejoinBtn(true);
+          }
         }
       } else {
         setShowRejoinBtn(false);
-        setInCall(false);
+        if (inCallRef.current) {
+          setInCall(false);
+        }
       }
     });
 
@@ -385,7 +426,7 @@ export default function GlobalChat() {
       unsubscribeMessages(); unsubscribeUsers(); unsubscribeCall();
       window.removeEventListener('click', handleOutsideClick);
     };
-  }, [currentUid, inCall]);
+  }, [currentUid]);
 
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
@@ -404,11 +445,10 @@ export default function GlobalChat() {
 
     if (newMessage.trim()) {
       try {
-        // ✅ ফিক্সড: serverTimestamp() এর বদলে new Date() ব্যবহার করা হয়েছে
         await addDoc(collection(db, "global-room-messages"), {
           text: newMessage, senderUid: currentUid, senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: new Date(), // Date object হিসেবে save হবে
+          createdAt: new Date().getTime(), // ✅ number (milliseconds)
           isEdited: false, isDeleted: false, replyTo: replyData
         });
         setNewMessage("");
@@ -417,12 +457,11 @@ export default function GlobalChat() {
 
     await Promise.all(selectedFiles.map(async (fileData) => {
       try {
-        // ✅ ফিক্সড: serverTimestamp() এর বদলে new Date() ব্যবহার করা হয়েছে
         await addDoc(collection(db, "global-room-messages"), {
           text: "", fileUrl: fileData.url, fileType: fileData.type, fileName: fileData.name,
           senderUid: currentUid, senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: new Date(), // Date object হিসেবে save হবে
+          createdAt: new Date().getTime(), // ✅ number (milliseconds)
           isEdited: false, isDeleted: false, replyTo: replyData
         });
       } catch (error) { console.error("Error sending file to firestore:", error); }
@@ -498,12 +537,11 @@ export default function GlobalChat() {
         msgId: reply.id
       } : null;
 
-      // ✅ ফিক্সড: serverTimestamp() এর বদলে new Date() ব্যবহার করা হয়েছে
       await addDoc(collection(db, "global-room-messages"), {
         text: "", fileUrl: audioUrl, fileType: 'audio', fileName: 'voice-message.webm',
         senderUid: currentUid, senderName: currentUserName,
         senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-        createdAt: new Date(), // Date object হিসেবে save হবে
+        createdAt: new Date().getTime(), // ✅ number (milliseconds)
         isEdited: false, isDeleted: false, replyTo: replyData
       });
 
@@ -696,10 +734,16 @@ export default function GlobalChat() {
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
 
       pc.ontrack = (event) => {
-        console.log(`Track received from peer ${peerUid}:`, event.track.kind);
-        event.streams[0].getTracks().forEach(track => {
-          remoteStream.addTrack(track);
-        });
+        console.log(`📹 Track received from peer ${peerUid}:`, event.track.kind);
+        if (event.streams && event.streams[0]) {
+          event.streams[0].getTracks().forEach(track => {
+            if (!remoteStream.getTracks().includes(track)) {
+              remoteStream.addTrack(track);
+            }
+          });
+        } else {
+          remoteStream.addTrack(event.track);
+        }
         setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       };
 
@@ -708,9 +752,12 @@ export default function GlobalChat() {
       };
 
       pc.onconnectionstatechange = () => {
-        console.log(`Connection state for ${peerUid}:`, pc.connectionState);
+        console.log(`🔗 Connection state for ${peerUid}:`, pc.connectionState);
         if (pc.connectionState === 'failed') {
           removeStalePeerFromRoom(peerUid);
+        }
+        if (pc.connectionState === 'connected') {
+          console.log(`✅ Connected to peer ${peerUid}`);
         }
       };
 
@@ -803,16 +850,24 @@ export default function GlobalChat() {
       const currentSet = new Set(otherParticipants);
 
       otherParticipants.forEach(uid => {
-        if (!s.knownPeers.has(uid)) connectToPeer(uid);
+        if (!s.knownPeers.has(uid)) {
+          console.log(`🔗 Connecting to new peer: ${uid}`);
+          connectToPeer(uid);
+        }
       });
+      
       s.knownPeers.forEach(uid => {
-        if (!currentSet.has(uid)) disconnectFromPeer(uid);
+        if (!currentSet.has(uid)) {
+          console.log(`🔌 Disconnecting from peer: ${uid}`);
+          disconnectFromPeer(uid);
+        }
       });
+      
       s.knownPeers = currentSet;
     });
 
     return () => unsubscribe();
-  }, [inCall]);
+  }, [inCall, currentUid]);
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
@@ -925,14 +980,14 @@ export default function GlobalChat() {
 
   const formatRecordingTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 
-  // ✅ ফিক্সড: মেসেজ ডিসপ্লেতে createdAt Date object handle করা হয়েছে
   const formatMessageTime = (createdAt) => {
     if (!createdAt) return "";
     try {
-      if (createdAt instanceof Date) {
+      if (typeof createdAt === 'number') {
+        return new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } else if (createdAt instanceof Date) {
         return createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       } else if (createdAt.seconds) {
-        // পুরনো Firestore timestamp format
         return new Date(createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       } else {
         return new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -966,7 +1021,7 @@ export default function GlobalChat() {
         .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
       `}</style>
       
-      {inCall && (
+      {inCall ? (
         <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column' }}>
           {activeCallType === 'audio' ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '18px', color: '#fff' }}>
@@ -1019,27 +1074,26 @@ export default function GlobalChat() {
             <HangUpIcon />
           </button>
         </div>
-      )}
-
-      <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
-        <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
-        <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px', textAlign: 'center', flex: 1 }}>Campus Global Room 👥</h3>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {!inCall && !showRejoinBtn && (
-            <>
-              <button onClick={() => initiateGlobalCall('video')} title="Start video conference" style={{ background: '#28a745', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <VideoCallIcon />
-              </button>
-              <button onClick={() => initiateGlobalCall('audio')} title="Start audio conference" style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <AudioCallIcon />
-              </button>
-            </>
-          )}
-          {!inCall && showRejoinBtn && <button onClick={handleRejoinCall} className="rejoin-pulse-btn">🟢 Rejoin Call</button>}
-        </div>
-      </div>
-      {!inCall && (
+      ) : (
         <>
+          <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
+            <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
+            <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px', textAlign: 'center', flex: 1 }}>Campus Global Room 👥</h3>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {!showRejoinBtn && (
+                <>
+                  <button onClick={() => initiateGlobalCall('video')} title="Start video conference" style={{ background: '#28a745', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <VideoCallIcon />
+                  </button>
+                  <button onClick={() => initiateGlobalCall('audio')} title="Start audio conference" style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <AudioCallIcon />
+                  </button>
+                </>
+              )}
+              {showRejoinBtn && <button onClick={handleRejoinCall} className="rejoin-pulse-btn">🟢 Rejoin Call</button>}
+            </div>
+          </div>
+          
           <div style={{ flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', display: 'flex', flexDirection: 'column', gap: '15px' }}>
             {messages.map((getMsg) => {
               if (localDeletedIds.includes(getMsg.id)) return null;
@@ -1128,6 +1182,7 @@ export default function GlobalChat() {
             })}
             <div ref={messagesEndRef} />
           </div>
+          
           <form onSubmit={handleSendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {replyToMessage && (
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>

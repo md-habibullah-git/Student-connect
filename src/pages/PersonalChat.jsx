@@ -1,3 +1,4 @@
+// File Name: src/components/PersonalChat.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
@@ -8,12 +9,6 @@ import {
 } from 'firebase/firestore';
 import { getActiveCallSession, setActiveCallSession, clearActiveCallSession, subscribeActiveCallSession } from '../callSession';
 
-// WebRTC ICE configuration: Google's free STUN servers + a free public TURN
-// relay (OpenRelay/Metered.ca — shared, no signup, but rate-limited). This
-// replaces ZegoCloud's managed infrastructure, so calls between people on
-// "difficult" networks (mobile data, strict campus wifi/NAT) now depend on
-// this TURN relay working. For real production reliability, swap these
-// credentials for your own dedicated TURN server (e.g. metered.ca, Twilio).
 const rtcConfiguration = {
   iceServers: [
     { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
@@ -25,13 +20,10 @@ const rtcConfiguration = {
 };
 
 const MAX_VOICE_BASE64_LENGTH = 1100000;
-const MAX_VIDEO_BASE64_LENGTH = 1100000; // Firestore-এর প্রতি-ডকুমেন্ট ১MB হার্ড লিমিটের নিচে রাখতে
-const MAX_VIDEO_RAW_BYTES = 750000; // ~750KB raw ≈ base64 এনকোডিংয়ের পর ~1MB-এর নিচে থাকবে
+const MAX_VIDEO_BASE64_LENGTH = 1100000;
+const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// Self-contained voice message player — circular play/pause button next to a
-// small canvas that draws the audio's REAL frequency data (Web Audio API)
-// while it plays, and a resting "idle" bar pattern otherwise.
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -87,14 +79,11 @@ function VoiceMessageBubble({ src, isMe }) {
     drawIdleBars();
     return () => {
       cancelAnimationFrame(rafRef.current);
-      // ফিক্স: AudioContext বন্ধ না করলে প্রতিটা ভয়েস মেসেজ বাবল আনমাউন্ট হওয়ার
-      // পরও ব্রাউজারে খোলা থেকে যায় (মেমরি/রিসোর্স লিক)
       if (audioCtxRef.current) {
         audioCtxRef.current.close().catch(() => {});
         audioCtxRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setupAnalyser = () => {
@@ -110,7 +99,7 @@ function VoiceMessageBubble({ src, isMe }) {
       audioCtxRef.current = audioCtx;
       analyserRef.current = analyser;
     } catch (err) {
-      // Web Audio API unavailable/blocked — playback still works, just without live bars.
+      // Web Audio API unavailable
     }
   };
 
@@ -145,7 +134,6 @@ function VoiceMessageBubble({ src, isMe }) {
       audioEl.removeEventListener('loadedmetadata', onLoaded);
       audioEl.removeEventListener('timeupdate', onTimeUpdate);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const formatTime = (secs) => {
@@ -186,7 +174,7 @@ export default function PersonalChat() {
   
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
-  const [activeCallType, setActiveCallType] = useState('video'); // 'video' | 'audio'
+  const [activeCallType, setActiveCallType] = useState('video');
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
 
@@ -205,7 +193,6 @@ export default function PersonalChat() {
 
   const [receiverOnline, setReceiverOnline] = useState(false);
 
-  // WebRTC (Firestore-signaled) call state
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const peerConnectionRef = useRef(null);
@@ -231,22 +218,45 @@ export default function PersonalChat() {
   const chatRoomId = currentUid < targetUid 
     ? `${currentUid}_${targetUid}` 
     : `${targetUid}_${currentUid}`;
+
+  // ✅ ফিক্সড: ৭ দিনের পুরনো মেসেজ ডিলিট - number timestamp দিয়ে query
   useEffect(() => {
     const autoCleanOldMessages = async () => {
       try {
-        const sevenDaysAgoTimestamp = new Date().getTime() - (7 * 24 * 60 * 60 * 1000); 
+        // createdAt number (milliseconds) হিসেবে save হয়
+        const sevenDaysAgoMs = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
         const msgCollectionRef = collection(db, "personal-rooms", chatRoomId, "messages");
         
-        const oldMessagesQuery = query(msgCollectionRef, where("createdAt", "<", sevenDaysAgoTimestamp));
+        // 🔥 number দিয়ে query করুন (Date object নয়)
+        const oldMessagesQuery = query(
+          msgCollectionRef, 
+          where("createdAt", "<", sevenDaysAgoMs),
+          limit(100) // Batch delete
+        );
+        
         const snapshot = await getDocs(oldMessagesQuery);
         
-        // ফিক্স: forEach(async...) ব্যবহার করলে delete গুলো await হতো না এবং
-        // কোনো এরর হলে সেটা silently হারিয়ে যেত — এখন Promise.all দিয়ে সঠিকভাবে await হচ্ছে
-        await Promise.all(
-          snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "personal-rooms", chatRoomId, "messages", docSnapshot.id)))
-        );
+        if (snapshot.empty) {
+          console.log("✅ No old personal messages to delete");
+          return;
+        }
+        
+        console.log(`🗑️ Deleting ${snapshot.size} old messages from ${chatRoomId}`);
+        
+        const deletePromises = snapshot.docs.map(async (docSnapshot) => {
+          try {
+            await deleteDoc(doc(db, "personal-rooms", chatRoomId, "messages", docSnapshot.id));
+            console.log(`✅ Deleted: ${docSnapshot.id}`);
+          } catch (deleteError) {
+            console.error(`❌ Error deleting ${docSnapshot.id}:`, deleteError);
+          }
+        });
+        
+        await Promise.all(deletePromises);
+        console.log("✅ Personal chat cleanup completed");
+        
       } catch (error) {
-        console.error("Firebase Auto Cleanup Error:", error);
+        console.error("❌ Firebase Auto Cleanup Error:", error);
       }
     };
 
@@ -271,15 +281,12 @@ export default function PersonalChat() {
     return () => unsubscribeUsers();
   }, []);
 
-  // request browser notification permission once, up front (presence itself
-  // is now owned by GlobalAlerts.jsx, mounted once in App.jsx).
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
     }
   }, []);
 
-  // watch the other person's online status for the green dot
   useEffect(() => {
     if (!targetUid) return;
     const unsubscribePresence = onSnapshot(doc(db, "users", targetUid), (snap) => {
@@ -288,7 +295,6 @@ export default function PersonalChat() {
     return () => unsubscribePresence();
   }, [targetUid]);
 
-  // elapsed-time counter shown while recording a voice message
   useEffect(() => {
     let interval;
     if (isRecording) {
@@ -298,16 +304,11 @@ export default function PersonalChat() {
     return () => clearInterval(interval);
   }, [isRecording]);
 
-  // if GlobalAlerts sent us here to auto-join an already-ringing call
-  // (its floating "Receive" button), join right away. answerIncomingCall()
-  // itself re-reads the call doc, so it's safe even if this fires before
-  // any local Firestore listener here has caught up.
   useEffect(() => {
     if (location.state?.autoJoinCall) {
       answerIncomingCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 
   useEffect(() => {
@@ -355,6 +356,7 @@ export default function PersonalChat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim() && selectedFiles.length === 0) return;
@@ -387,7 +389,7 @@ export default function PersonalChat() {
           senderId: currentUid,
           senderName: currentUserName,
           senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-          createdAt: new Date().getTime(),
+          createdAt: new Date().getTime(), // ✅ number (milliseconds)
           isEdited: false,
           isDeleted: false,
           replyTo: replyData
@@ -395,9 +397,6 @@ export default function PersonalChat() {
         setInput('');
       }
 
-      // ফিক্স: forEach(async...) ব্যবহার করলে এই ফাইলগুলো ঠিকমতো পাঠানো হয়েছে কিনা
-      // নিশ্চিত না হয়েই setSelectedFiles([]) চলে যেত এবং এরর ধরাও পড়ত না —
-      // এখন Promise.all দিয়ে সব ফাইল সত্যিই পাঠানো শেষ হওয়া পর্যন্ত অপেক্ষা করা হচ্ছে
       await Promise.all(selectedFiles.map((fileData) =>
         addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
           text: "", 
@@ -406,7 +405,7 @@ export default function PersonalChat() {
           senderId: currentUid,
           senderName: currentUserName,
           senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-          createdAt: new Date().getTime(),
+          createdAt: new Date().getTime(), // ✅ number (milliseconds)
           isEdited: false,
           isDeleted: false,
           replyTo: replyData
@@ -419,6 +418,7 @@ export default function PersonalChat() {
       console.error("Error sending message:", error);
     }
   };
+
   const handleEditMessage = async (msgId, currentText) => {
     setActiveMenuId(null); 
     const newText = prompt("Edit your private message:", currentText);
@@ -441,12 +441,6 @@ export default function PersonalChat() {
       if (isSenderMe) {
         try {
           const msgDocRef = doc(db, "personal-rooms", chatRoomId, "messages", msgId);
-          // ফিক্স: আগে এখানে text/fileUrl/fileType খালি করে দেওয়া হতো, তাই আসল
-          // মেসেজ চিরতরে হারিয়ে যেত। কিন্তু normal ইউজাররা এমনিতেই isDeleted flag
-          // দেখে "This message was deleted" দেখে (নিচের render-এ), আসল কনটেন্ট
-          // খালি থাকা লাগে না। তাই এখন শুধু isDeleted:true সেট হচ্ছে — কনটেন্ট
-          // অক্ষত থাকছে (৭ দিন পর auto-cleanup-এ পুরো মেসেজটাই মুছে যাবে যেমন আগে
-          // যেত), এই সময়ের মধ্যে অ্যাডমিন প্যানেল থেকে ডিলিট করা মেসেজও দেখা যাবে।
           await updateDoc(msgDocRef, { isDeleted: true });
         } catch (error) {
           console.error("Error deleting message globally:", error);
@@ -486,11 +480,6 @@ export default function PersonalChat() {
         };
         reader.readAsDataURL(file);
       } else if (fileType === 'video') {
-        // ফিক্স: আগে ১০MB পর্যন্ত ভিডিও নেওয়া হতো, কিন্তু Firestore-এর প্রতিটা
-        // ডকুমেন্টের হার্ড লিমিট মাত্র ১MB এবং ভিডিও এখানে আসলে কম্প্রেসও হয় না
-        // (শুধু ছবি হয়) — তাই ৮০০KB-এর বড় প্রায় সব ভিডিওই পরে ব্যর্থ হয়ে "compressed
-        // size exceeded" জাতীয় ভুল/বিভ্রান্তিকর মেসেজ দেখাত। এখন প্রথম ধাপেই বাস্তবসম্মত
-        // সীমা চেক করা হচ্ছে এবং মেসেজও সঠিক করা হয়েছে।
         if (file.size > MAX_VIDEO_RAW_BYTES) {
           alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`);
           return;
@@ -546,7 +535,7 @@ export default function PersonalChat() {
         senderId: currentUid,
         senderName: currentUserName,
         senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-        createdAt: new Date().getTime(),
+        createdAt: new Date().getTime(), // ✅ number (milliseconds)
         isEdited: false,
         isDeleted: false,
         replyTo: replyData
@@ -606,7 +595,7 @@ export default function PersonalChat() {
         recordingAnalyserRef.current = analyser;
         drawRecordingBars();
       } catch (visualizerErr) {
-        // visualization is best-effort; recording still works without it
+        // visualization is best-effort
       }
 
       let recorderOptions = { audioBitsPerSecond: 32000 };
@@ -709,10 +698,6 @@ export default function PersonalChat() {
     });
   };
 
-  // stops local camera/mic, closes the peer connection, and detaches
-  // Firestore listeners — used both for a clean hangup and for reacting to
-  // the other side ending the call. Also clears the shared call-session,
-  // so GlobalAlerts.jsx's minimized "call in progress" bubble disappears too.
   const cleanupCallLocally = () => {
     if (unsubscribeCallSignalRef.current) { unsubscribeCallSignalRef.current(); unsubscribeCallSignalRef.current = null; }
     if (unsubscribeCandidatesRef.current) { unsubscribeCandidatesRef.current(); unsubscribeCandidatesRef.current = null; }
@@ -724,9 +709,6 @@ export default function PersonalChat() {
     clearActiveCallSession();
   };
 
-  // নতুন: এই রুমে ইতিমধ্যে একটা চলমান কল থাকলে (অন্য পেজে গিয়ে "Back" চেপে
-  // ফিরে এসেছেন, বা GlobalAlerts-এর মিনিমাইজড বাবল থেকে ক্লিক করেছেন) সেটাতে
-  // আবার যুক্ত হও — নতুন করে ক্যামেরা/মাইক না চেয়ে ইতিমধ্যে চলা কানেকশনটাই ব্যবহার হয়
   useEffect(() => {
     const existing = getActiveCallSession();
     if (existing && existing.type === 'personal' && existing.chatRoomId === chatRoomId) {
@@ -736,11 +718,8 @@ export default function PersonalChat() {
       setActiveCallType(existing.callType);
       setInCall(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatRoomId]);
 
-  // নতুন: session অন্য কোথাও (GlobalAlerts, বা রিমোট সাইড কল কেটে দেওয়ায়) মুছে
-  // গেলে/বদলে গেলে এই কম্পোনেন্টের লোকাল UI-ও সেটার প্রতিফলন করবে
   useEffect(() => {
     const unsubscribe = subscribeActiveCallSession((session) => {
       if (!session || session.chatRoomId !== chatRoomId) {
@@ -754,15 +733,8 @@ export default function PersonalChat() {
       }
     });
     return unsubscribe;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatRoomId]);
 
-  // ফিক্স: <video> এলিমেন্ট দুটো শুধু inCall === true হলেই DOM-এ তৈরি হয়, কিন্তু
-  // আগের কোড stream পাওয়ার সাথে সাথেই (inCall সেট হওয়ার আগেই) localVideoRef/
-  // remoteVideoRef-এ srcObject বসানোর চেষ্টা করত — তখন ref null থাকায় স্ট্রিম
-  // কখনো ভিডিও ট্যাগে বসতই না (কালো স্ক্রিন, কোনো শব্দও না)। এই effect
-  // inCall সত্যি হওয়ার পর (অর্থাৎ <video> ট্যাগ DOM-এ আসার পর) স্ট্রিমগুলো
-  // (ইতিমধ্যে ref-এ জমা থাকা) আবার সংযুক্ত করে দেয়।
   useEffect(() => {
     if (inCall) {
       if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current;
@@ -770,9 +742,6 @@ export default function PersonalChat() {
     }
   }, [inCall]);
 
-  // CALLER side: opens camera/mic (video+audio, or audio-only), creates the
-  // SDP offer, writes it (and trickled ICE candidates) into
-  // personal-calls/{chatRoomId}, then waits for the other person's answer.
   const initiateCall = async (callType = 'video') => {
     try {
       cleanupCallLocally();
@@ -811,7 +780,6 @@ export default function PersonalChat() {
         offer: { type: offer.type, sdp: offer.sdp }
       });
 
-      // wait for the callee's answer, and react if the call gets ended remotely
       unsubscribeCallSignalRef.current = onSnapshot(callRef, async (snap) => {
         const data = snap.data();
         if (!data) return;
@@ -824,7 +792,6 @@ export default function PersonalChat() {
         }
       });
 
-      // trickle in the callee's ICE candidates as they arrive
       const calleeCandidatesRef = collection(callRef, "calleeCandidates");
       unsubscribeCandidatesRef.current = onSnapshot(calleeCandidatesRef, (snapshot) => {
         snapshot.docChanges().forEach((change) => {
@@ -836,7 +803,6 @@ export default function PersonalChat() {
 
       setActiveCallType(callType);
       setInCall(true);
-      // এই কলটাকে shared session-এ রাখা হচ্ছে — এখন অন্য পেজে গেলেও কলটা চলতেই থাকবে
       setActiveCallSession({
         type: 'personal', chatRoomId, otherUid: targetUid, otherName: receiverName,
         otherPhoto: usersCache[targetUid] || '', callType,
@@ -849,9 +815,6 @@ export default function PersonalChat() {
     }
   };
 
-  // CALLEE side: reads the offer (and requested callType) already sitting
-  // in personal-calls/{chatRoomId}, opens matching camera/mic, creates the
-  // SDP answer, and starts trickling ICE candidates + listening for the caller's.
   const answerIncomingCall = async () => {
     try {
       cleanupCallLocally();
@@ -862,7 +825,7 @@ export default function PersonalChat() {
       }
       const callData = callSnap.data();
       const offer = callData.offer;
-      const callType = callData.callType || 'video'; // পুরনো কল ডেটায় callType না থাকলে video ধরে নেওয়া হয়
+      const callType = callData.callType || 'video';
 
       const pc = new RTCPeerConnection(rtcConfiguration);
       peerConnectionRef.current = pc;
@@ -891,7 +854,6 @@ export default function PersonalChat() {
         answer: { type: answer.type, sdp: answer.sdp }
       });
 
-      // trickle in the caller's ICE candidates as they arrive
       const callerCandidatesRef = collection(callRef, "callerCandidates");
       unsubscribeCandidatesRef.current = onSnapshot(callerCandidatesRef, (snapshot) => {
         snapshot.docChanges().forEach((change) => {
@@ -901,7 +863,6 @@ export default function PersonalChat() {
         });
       });
 
-      // react if the call gets ended remotely
       unsubscribeCallSignalRef.current = onSnapshot(callRef, (snap) => {
         if (snap.data()?.status === 'ended') {
           cleanupCallLocally();
@@ -911,7 +872,6 @@ export default function PersonalChat() {
 
       setActiveCallType(callType);
       setInCall(true);
-      // এই কলটাকে shared session-এ রাখা হচ্ছে — এখন অন্য পেজে গেলেও কলটা চলতেই থাকবে
       setActiveCallSession({
         type: 'personal', chatRoomId, otherUid: targetUid, otherName: receiverName,
         otherPhoto: usersCache[targetUid] || '', callType,
@@ -924,10 +884,6 @@ export default function PersonalChat() {
     }
   };
 
-  // Hangup: whichever side clicks this marks the call "ended" in Firestore
-  // (so the other side's listener above reacts), then wipes the signaling
-  // data (offer/answer/ICE candidates) and the call document itself so
-  // nothing lingers for the next call in this room.
   const endCall = async () => {
     const callRef = doc(db, "personal-calls", chatRoomId);
     try {
@@ -949,11 +905,6 @@ export default function PersonalChat() {
     setActiveCallType('video');
   };
 
-  // নোট: আগে এখানে "component unmount হলেই কল বন্ধ করে দাও" — এমন একটা effect
-  // ছিল। এখন সেটা ইচ্ছাকৃতভাবে সরানো হয়েছে — কল চলাকালীন অন্য পেজে গেলে
-  // (যেমন Back চাপলে) কলটা shared session-এ চলতেই থাকবে, বন্ধ হবে শুধু
-  // ব্যবহারকারী সত্যিই হ্যাংআপ করলে (endCall) বা অন্য পাশ কেটে দিলে।
-
   const toggleMenu = (e, msgId) => {
     e.stopPropagation();
     setActiveMenuId(activeMenuId === msgId ? null : msgId);
@@ -968,8 +919,6 @@ export default function PersonalChat() {
     </svg>
   );
 
-  // ফিক্স: আগে হ্যাংআপ বাটনে 📴 ইমোজি ছিল, যেটা কিছু ব্রাউজার/ফন্টে ঠিকভাবে
-  // রেন্ডার না হয়ে "OFF" টেক্সট দেখাচ্ছিল — তাই আসল SVG আইকন ব্যবহার করা হলো
   const HangUpIcon = () => (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
       <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-1 1c-1.24 0-2.45-.2-3.57-.57a1 1 0 0 1-.68-.95v-3.5a1 1 0 0 1 .74-.97A17.9 17.9 0 0 1 12 7c1.99 0 3.91.31 5.71.88a1 1 0 0 1 .74.97v3.5a1 1 0 0 1-.68.95 11.9 11.9 0 0 1-3.57.57 1 1 0 0 1-1-1v-3.1A17.9 17.9 0 0 0 12 9z" />
@@ -1029,7 +978,6 @@ export default function PersonalChat() {
 
       <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
         <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
-        {/* নতুন: হেডারে এখন নামের পাশে প্রোফাইল ছবিও দেখাবে, ক্লিক করলে প্রোফাইলে যাবে */}
         <div
           onClick={() => navigate(`/profile/${targetUid}`)}
           title={`${receiverName}-এর প্রোফাইলে যান`}
@@ -1061,8 +1009,6 @@ export default function PersonalChat() {
         <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
           <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }} />
           {activeCallType === 'audio' && (
-            // অডিও কলে ভিডিও ট্র্যাক থাকে না, তাই খালি কালো স্ক্রিনের বদলে
-            // একটা স্পষ্ট "অডিও কল চলছে" ইঙ্গিত দেখানো হচ্ছে
             <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', color: '#fff', background: '#111' }}>
               <div style={{ width: '90px', height: '90px', borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' }}>🎙️</div>
               <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio call with {receiverName}</p>
