@@ -24,9 +24,10 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// ✅ ফিক্সড: RemoteVideoTile - stream সঠিকভাবে update হবে
+// ✅ ফিক্সড: RemoteVideoTile - ভিডিও সঠিকভাবে দেখাবে
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
+  const [hasVideo, setHasVideo] = useState(false);
   
   useEffect(() => {
     if (videoRef.current && stream) {
@@ -34,17 +35,35 @@ function RemoteVideoTile({ stream, label }) {
       videoRef.current.muted = false;
       videoRef.current.volume = 1.0;
       
+      // ভিডিও ট্র্যাক check
+      const checkVideoTracks = () => {
+        const videoTracks = stream.getVideoTracks();
+        const hasActiveVideo = videoTracks.length > 0 && videoTracks[0].enabled;
+        console.log(`📹 Video tracks for ${label}:`, videoTracks.length, 'enabled:', hasActiveVideo);
+        setHasVideo(hasActiveVideo);
+      };
+      
+      checkVideoTracks();
+      
+      // track add/remove হলে update
+      stream.addEventListener('addtrack', checkVideoTracks);
+      stream.addEventListener('removetrack', checkVideoTracks);
+      
       videoRef.current.play().catch(err => {
         console.error("Error playing remote video:", err);
       });
     }
     
     return () => {
+      if (stream) {
+        stream.removeEventListener('addtrack', () => {});
+        stream.removeEventListener('removetrack', () => {});
+      }
       if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
     };
-  }, [stream]);
+  }, [stream, label]);
   
   return (
     <div style={{ 
@@ -54,14 +73,44 @@ function RemoteVideoTile({ stream, label }) {
       overflow: 'hidden', 
       width: '100%', 
       height: '100%',
-      minHeight: '150px'
+      minHeight: '150px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center'
     }}>
+      {/* সবসময় video element render হবে */}
       <video 
         ref={videoRef} 
         autoPlay 
         playsInline 
-        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} 
+        style={{ 
+          width: '100%', 
+          height: '100%', 
+          objectFit: 'cover', 
+          display: hasVideo ? 'block' : 'none' 
+        }} 
       />
+      
+      {/* ভিডিও না থাকলে avatar দেখাবে */}
+      {!hasVideo && (
+        <div style={{ 
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%', 
+          height: '100%', 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'center',
+          flexDirection: 'column',
+          gap: '8px',
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+        }}>
+          <div style={{ fontSize: '48px' }}>👤</div>
+          <div style={{ fontSize: '14px', color: '#fff' }}>{label}</div>
+        </div>
+      )}
+      
       <span style={{ 
         position: 'absolute', 
         bottom: '6px', 
@@ -274,7 +323,7 @@ export default function GlobalChat() {
     return sessionRef.current;
   };
 
-  // ✅ ৭ দিনের পুরনো মেসেজ ডিলিট
+  // ৭ দিনের পুরনো মেসেজ ডিলিট
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
@@ -288,10 +337,7 @@ export default function GlobalChat() {
         
         const snapshot = await getDocs(oldMessagesQuery);
         
-        if (snapshot.empty) {
-          console.log("✅ No old global messages to delete");
-          return;
-        }
+        if (snapshot.empty) return;
         
         const deletePromises = snapshot.docs.map(async (docSnapshot) => {
           try {
@@ -706,16 +752,10 @@ export default function GlobalChat() {
 
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
-      setRemoteStreams(prev => {
-        const next = { ...prev };
-        next[peerUid] = remoteStream;
-        return next;
-      });
+      setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
 
-      // ✅ ফিক্সড: ontrack ইভেন্ট সঠিকভাবে handle করা
       pc.ontrack = (event) => {
         console.log(`📹 Track received from peer ${peerUid}:`, event.track.kind);
-        
         if (event.streams && event.streams[0]) {
           event.streams[0].getTracks().forEach(track => {
             if (!remoteStream.getTracks().includes(track)) {
@@ -725,13 +765,7 @@ export default function GlobalChat() {
         } else {
           remoteStream.addTrack(event.track);
         }
-        
-        // ✅ Force re-render
-        setRemoteStreams(prev => {
-          const next = { ...prev };
-          next[peerUid] = remoteStream;
-          return next;
-        });
+        setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       };
 
       pc.onicecandidate = (event) => {
