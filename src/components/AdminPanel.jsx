@@ -65,8 +65,6 @@ export default function AdminPanel() {
   const [showChatViewer, setShowChatViewer] = useState(false);
   const [dataLoading, setDataLoading] = useState(true); 
   const activeChatListenerRef = useRef(null);
-
-  // 🔧 নতুন: পেন্ডিং আইডির ছবি বড় করে দেখার state
   const [expandedPhoto, setExpandedPhoto] = useState(null);
 
   const [hiddenRooms, setHiddenRooms] = useState(() => { 
@@ -185,7 +183,7 @@ export default function AdminPanel() {
 
   const handleDelete = async (targetId) => { 
     if (!targetId) return; 
-    if(window.confirm("আপনি কি নিশ্চিত যে এই আইডি এবং এর সাথে যুক্ত সব চ্যাট/মেসেজ ডেটাবেস থেকে স্থায়ীভাবে মুছে ফেলতে চান? এই কাজটি ফিরিয়ে আনা যাবে না।")) { 
+    if(window.confirm("Are you sure you want to permanently delete this ID and all associated chat/message data from the database? This action cannot be undone.")) { 
       try { 
         await wipeAllChatDataForUser(targetId);
         await deleteDoc(doc(db, "users", targetId)); 
@@ -197,7 +195,7 @@ export default function AdminPanel() {
         setSelectedChatMessages([]);
         setActiveChatInfo(null);
 
-        alert("🗑️ ID এবং এর সাথে যুক্ত সব চ্যাট ডেটা স্থায়ীভাবে মুছে ফেলা হয়েছে! এটি এখন আর কখনো কোনো তথ্য/মেসেজ রাখবে না।"); 
+        alert("🗑️ ID and all associated chat data have been permanently deleted! It will no longer store any information/messages."); 
       } catch (err) { 
         console.error("Error deleting ID permanently:", err); 
         alert("❌ Error deleting user. Check Firestore permissions.");
@@ -298,7 +296,6 @@ export default function AdminPanel() {
             const userPhoto = (user.photo && user.photo.trim() !== '') ? user.photo : dicebearBackup;
             return ( 
               <li key={currentDocId} className="admin-list-row" style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', padding: '15px', borderRadius: '8px' }}> 
-                {/* 🔧 ছবিতে ক্লিক করলে বড় করে দেখা যাবে */}
                 <div 
                   onClick={() => setExpandedPhoto(userPhoto)}
                   style={{ position: 'relative', width: '42px', height: '42px', borderRadius: '50%', overflow: 'hidden', border: '2px solid #0056b3', marginRight: '15px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'zoom-in' }}
@@ -460,7 +457,7 @@ export default function AdminPanel() {
         </div> 
       </div>
 
-      {/* 🔧 নতুন: বড় করে ছবি দেখার Modal */}
+      {/* Enlarged photo modal */}
       {expandedPhoto && (
         <div
           onClick={() => setExpandedPhoto(null)}
