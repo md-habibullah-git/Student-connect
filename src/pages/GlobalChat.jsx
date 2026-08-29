@@ -1,3 +1,4 @@
+// GlobalChat.jsx - সম্পূর্ণ ফিক্সড ভার্সন
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
@@ -8,9 +9,6 @@ import {
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 
-// same ICE configuration as PersonalChat.jsx — Google STUN + a free public
-// TURN relay (OpenRelay/Metered.ca, shared/rate-limited). See the note in
-// PersonalChat.jsx for production-hardening advice.
 const rtcConfiguration = {
   iceServers: [
     { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
@@ -22,28 +20,44 @@ const rtcConfiguration = {
 };
 
 const MAX_VOICE_BASE64_LENGTH = 1100000;
-const MAX_VIDEO_BASE64_LENGTH = 1100000; // Firestore-এর প্রতি-ডকুমেন্ট ১MB হার্ড লিমিটের নিচে রাখতে
-const MAX_VIDEO_RAW_BYTES = 750000; // ~750KB raw ≈ base64 এনকোডিংয়ের পর ~1MB-এর নিচে থাকবে
+const MAX_VIDEO_BASE64_LENGTH = 1100000;
+const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// one tile in the group-call grid — MediaStream objects can't go directly
-// in JSX, so each remote peer's stream is attached to its own <video> via a ref.
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
+  
   useEffect(() => {
-    if (videoRef.current) videoRef.current.srcObject = stream;
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.muted = false;
+      videoRef.current.volume = 1.0;
+      videoRef.current.play().catch(err => {
+        console.error("Error playing remote video:", err);
+      });
+    }
+    
+    return () => {
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+    };
   }, [stream]);
+  
   return (
-    <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
-      <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+    <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden', width: '100%', height: '100%' }}>
+      <video 
+        ref={videoRef} 
+        autoPlay 
+        playsInline 
+        muted={false}
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} 
+      />
       <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
     </div>
   );
 }
 
-// identical voice message player used in PersonalChat.jsx — circular
-// play/pause button + a canvas that draws the audio's REAL frequency data
-// (Web Audio API) while it plays, themed per-bubble.
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -99,14 +113,11 @@ function VoiceMessageBubble({ src, isMe }) {
     drawIdleBars();
     return () => {
       cancelAnimationFrame(rafRef.current);
-      // ফিক্স: AudioContext বন্ধ না করলে প্রতিটা ভয়েস মেসেজ বাবল আনমাউন্ট হওয়ার
-      // পরও ব্রাউজারে খোলা থেকে যায় (মেমরি/রিসোর্স লিক)
       if (audioCtxRef.current) {
         audioCtxRef.current.close().catch(() => {});
         audioCtxRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setupAnalyser = () => {
@@ -122,7 +133,7 @@ function VoiceMessageBubble({ src, isMe }) {
       audioCtxRef.current = audioCtx;
       analyserRef.current = analyser;
     } catch (err) {
-      // Web Audio API unavailable/blocked — playback still works, just without live bars.
+      // Web Audio API unavailable
     }
   };
 
@@ -157,7 +168,6 @@ function VoiceMessageBubble({ src, isMe }) {
       audioEl.removeEventListener('loadedmetadata', onLoaded);
       audioEl.removeEventListener('timeupdate', onTimeUpdate);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const formatTime = (secs) => {
@@ -196,10 +206,10 @@ export default function GlobalChat() {
   const [usersCache, setUsersCache] = useState({}); 
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
-  const [activeCallType, setActiveCallType] = useState('video'); // 'video' | 'audio'
+  const [activeCallType, setActiveCallType] = useState('video');
   const [showRejoinBtn, setShowRejoinBtn] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState(null);
-  const [avatarMenuFor, setAvatarMenuFor] = useState(null); // নতুন: কোন মেসেজের ছবির উপর ক্লিক করে View Profile/Message মেনু খোলা হয়েছে
+  const [avatarMenuFor, setAvatarMenuFor] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
 
   const [isRecording, setIsRecording] = useState(false);
@@ -222,16 +232,15 @@ export default function GlobalChat() {
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null); 
-
   const inCallRef = useRef(false);
 
-  // WebRTC (Firestore-signaled, mesh) group call state.
-  // নতুন: localStream/peerConnections/etc আর plain local ref না — বরং
-  // callSession.js-এর একটা shared session অবজেক্টের ভেতরের ফিল্ড। এই পেজ
-  // থেকে সরে গেলেও (Back চাপলে) একই অবজেক্ট module-এ বেঁচে থাকে, তাই কল
-  // চলতেই থাকে — PersonalChat.jsx-এর মতোই।
   const localVideoRef = useRef(null);
-  const sessionRef = useRef(null); // { callType, localStream, peerConnections, peerUnsubscribers, remoteStreams, knownPeers }
+  const sessionRef = useRef(null);
+  const [remoteStreams, setRemoteStreams] = useState({});
+  
+  const currentUid = auth.currentUser?.uid || "unknown_user";
+  const currentUserName = auth.currentUser?.displayName || "Campus Student";
+  const globalRoomId = "campus_global_conference_room";
 
   const ensureSession = () => {
     if (!sessionRef.current) {
@@ -244,31 +253,60 @@ export default function GlobalChat() {
     return sessionRef.current;
   };
 
-  const [remoteStreams, setRemoteStreams] = useState({}); // triggers re-render for new video tiles
-  
-  const currentUid = auth.currentUser?.uid || "unknown_user";
-  const currentUserName = auth.currentUser?.displayName || "Campus Student";
-  const globalRoomId = "campus_global_conference_room";
+  // ✅ ফিক্সড: ৭ দিনের পুরনো মেসেজ ডিলিট - এখন সঠিকভাবে কাজ করবে
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
         const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7); 
-        const oldMessagesQuery = query(collection(db, "global-room-messages"), where("createdAt", "<", sevenDaysAgo));
-        const snapshot = await getDocs(oldMessagesQuery);
-        // ফিক্স: forEach(async...) ব্যবহার করলে delete গুলো await হতো না এবং কোনো
-        // এরর হলে সেটা silently হারিয়ে যেত — এখন Promise.all দিয়ে সঠিকভাবে await হচ্ছে
-        await Promise.all(
-          snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "global-room-messages", docSnapshot.id)))
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        
+        console.log("🧹 Cleaning messages older than:", sevenDaysAgo);
+        
+        // 🔥 createdAt এখন Date object হিসেবে save হবে, তাই query সঠিকভাবে কাজ করবে
+        const oldMessagesQuery = query(
+          collection(db, "global-room-messages"), 
+          where("createdAt", "<", sevenDaysAgo),
+          limit(100) // Batch delete - একবারে ১০০টি
         );
-      } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
+        
+        const snapshot = await getDocs(oldMessagesQuery);
+        
+        if (snapshot.empty) {
+          console.log("✅ No old messages to delete");
+          return;
+        }
+        
+        console.log(`🗑️ Found ${snapshot.size} old messages to delete`);
+        
+        // এক এক করে ডিলিট করুন
+        const deletePromises = snapshot.docs.map(async (docSnapshot) => {
+          try {
+            await deleteDoc(doc(db, "global-room-messages", docSnapshot.id));
+            console.log(`✅ Deleted message: ${docSnapshot.id}`);
+          } catch (deleteError) {
+            console.error(`❌ Error deleting message ${docSnapshot.id}:`, deleteError);
+          }
+        });
+        
+        await Promise.all(deletePromises);
+        console.log("✅ Cleanup completed");
+        
+      } catch (error) {
+        console.error("❌ Global Chat Storage Auto Cleanup Error:", error);
+      }
     };
+    
+    // এখনই চালান
     autoCleanOldGlobalMessages();
+    
+    // প্রতি ২৪ ঘন্টা পর পর চালান (যদি ইউজার পেজে থাকে)
+    const cleanupInterval = setInterval(() => {
+      autoCleanOldGlobalMessages();
+    }, 24 * 60 * 60 * 1000); // 24 hours
+    
+    return () => clearInterval(cleanupInterval);
   }, []);
 
-  // if I'm still in the conference call when I close the tab or leave this
-  // page, remove myself from participants so the call never gets stuck
-  // "ringing" for no one.
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (inCallRef.current) {
@@ -279,7 +317,7 @@ export default function GlobalChat() {
 
     return () => {
       if (inCallRef.current) {
-        leaveGlobalCall();
+        leaveGlobalCall().catch(() => {});
       }
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
@@ -289,7 +327,6 @@ export default function GlobalChat() {
     inCallRef.current = inCall;
   }, [inCall]);
 
-  // elapsed-time counter shown while recording a voice message
   useEffect(() => {
     let interval;
     if (isRecording) {
@@ -299,14 +336,11 @@ export default function GlobalChat() {
     return () => clearInterval(interval);
   }, [isRecording]);
 
-  // if GlobalAlerts sent us here to auto-join an already-ringing conference
-  // call (its floating "Receive" button), join immediately.
   useEffect(() => {
     if (location.state?.autoJoinCall && showRejoinBtn && !inCall) {
       handleRejoinCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state, showRejoinBtn]);
 
   useEffect(() => {
@@ -355,6 +389,7 @@ export default function GlobalChat() {
 
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() && selectedFiles.length === 0) return;
@@ -369,24 +404,26 @@ export default function GlobalChat() {
 
     if (newMessage.trim()) {
       try {
+        // ✅ ফিক্সড: serverTimestamp() এর বদলে new Date() ব্যবহার করা হয়েছে
         await addDoc(collection(db, "global-room-messages"), {
           text: newMessage, senderUid: currentUid, senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
+          createdAt: new Date(), // Date object হিসেবে save হবে
+          isEdited: false, isDeleted: false, replyTo: replyData
         });
         setNewMessage("");
       } catch (error) { console.error("Error sending text message:", error); }
     }
 
-    // ফিক্স: forEach(async...) ব্যবহার করলে এই ফাইলগুলো ঠিকমতো পাঠানো শেষ হওয়ার
-    // আগেই setSelectedFiles([]) চলে যেত — এখন Promise.all দিয়ে ঠিকভাবে অপেক্ষা করা হচ্ছে
     await Promise.all(selectedFiles.map(async (fileData) => {
       try {
+        // ✅ ফিক্সড: serverTimestamp() এর বদলে new Date() ব্যবহার করা হয়েছে
         await addDoc(collection(db, "global-room-messages"), {
           text: "", fileUrl: fileData.url, fileType: fileData.type, fileName: fileData.name,
           senderUid: currentUid, senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
+          createdAt: new Date(), // Date object হিসেবে save হবে
+          isEdited: false, isDeleted: false, replyTo: replyData
         });
       } catch (error) { console.error("Error sending file to firestore:", error); }
     }));
@@ -406,10 +443,6 @@ export default function GlobalChat() {
     setActiveMenuId(null); 
     if (window.confirm("Are you sure you want to delete this message?")) {
       if (isSenderMe) {
-        // ফিক্স: text/fileUrl/fileType আর খালি করা হচ্ছে না — শুধু isDeleted:true
-        // সেট হচ্ছে। normal ইউজাররা এমনিতেই isDeleted flag দেখে "deleted" দেখে
-        // (নিচের render-এ), আসল কনটেন্ট রয়ে যাওয়ায় ৭ দিনের মধ্যে অ্যাডমিন
-        // প্যানেল থেকে ডিলিট করা মেসেজও দেখা যাবে।
         try { await updateDoc(doc(db, "global-room-messages", msgId), { isDeleted: true }); } 
         catch (error) { console.error("Error deleting message globally:", error); }
       } else {
@@ -419,6 +452,7 @@ export default function GlobalChat() {
       }
     }
   };
+
   const handleFileChange = (e) => {
     if (!e.target.files || e.target.files.length === 0) return;
     Array.from(e.target.files).forEach((file) => {
@@ -439,10 +473,6 @@ export default function GlobalChat() {
         };
         reader.readAsDataURL(file);
       } else if (fileType === 'video' && file.size <= MAX_VIDEO_RAW_BYTES) {
-        // ফিক্স: আগে ১০MB পর্যন্ত ভিডিও নেওয়া হতো, কিন্তু Firestore-এর প্রতিটা
-        // ডকুমেন্টের হার্ড লিমিট মাত্র ১MB এবং ভিডিও এখানে আসলে কম্প্রেসও হয় না —
-        // তাই ৮০০KB-এর বড় প্রায় সব ভিডিওই পরে ব্যর্থ হয়ে বিভ্রান্তিকর মেসেজ দেখাত।
-        // এখন প্রথম ধাপেই বাস্তবসম্মত সীমা চেক করা হচ্ছে এবং মেসেজও সঠিক করা হয়েছে।
         const reader = new FileReader();
         reader.onload = (event) => {
           if (event.target.result.length <= MAX_VIDEO_BASE64_LENGTH) {
@@ -468,11 +498,13 @@ export default function GlobalChat() {
         msgId: reply.id
       } : null;
 
+      // ✅ ফিক্সড: serverTimestamp() এর বদলে new Date() ব্যবহার করা হয়েছে
       await addDoc(collection(db, "global-room-messages"), {
         text: "", fileUrl: audioUrl, fileType: 'audio', fileName: 'voice-message.webm',
         senderUid: currentUid, senderName: currentUserName,
         senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-        createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
+        createdAt: new Date(), // Date object হিসেবে save হবে
+        isEdited: false, isDeleted: false, replyTo: replyData
       });
 
       setReplyToMessage(null);
@@ -529,7 +561,7 @@ export default function GlobalChat() {
         recordingAnalyserRef.current = analyser;
         drawRecordingBars();
       } catch (visualizerErr) {
-        // visualization is best-effort; recording still works without it
+        // visualization is best-effort
       }
 
       let recorderOptions = { audioBitsPerSecond: 32000 };
@@ -603,8 +635,6 @@ export default function GlobalChat() {
     }
   };
 
-  // gets (or reuses) the local camera/mic stream, shared across every peer
-  // connection in the mesh
   const getLocalStream = async (callType = 'video') => {
     const s = ensureSession();
     if (s.localStream) return s.localStream;
@@ -614,8 +644,6 @@ export default function GlobalChat() {
     return stream;
   };
 
-  // নতুন: এই রুমে ইতিমধ্যে একটা চলমান গ্রুপ কল থাকলে (অন্য পেজে গিয়ে "Back"
-  // চেপে ফিরে এসেছেন) সেটাতে আবার যুক্ত হও — session module-এ যা আছে তাই ব্যবহার হয়
   useEffect(() => {
     const existing = getActiveGlobalCallSession();
     if (existing && (existing.localStream || Object.keys(existing.peerConnections).length > 0)) {
@@ -624,11 +652,8 @@ export default function GlobalChat() {
       setRemoteStreams({ ...existing.remoteStreams });
       setInCall(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // session অন্য কোথাও (GlobalAlerts কেন্দ্রীয়ভাবে "সবাই চলে গেছে" শনাক্ত করলে)
-  // পরিষ্কার হয়ে গেলে এই কম্পোনেন্টের লোকাল UI-ও রিসেট হবে
   useEffect(() => {
     const unsubscribe = subscribeActiveGlobalCallSession((s) => {
       if (!s) {
@@ -642,21 +667,13 @@ export default function GlobalChat() {
     return unsubscribe;
   }, []);
 
-  // ফিক্স: <video> এলিমেন্ট শুধু inCall === true হলেই DOM-এ তৈরি হয়, কিন্তু আগের
-  // কোড stream পাওয়ার সাথে সাথেই (inCall সেট হওয়ার আগেই) localVideoRef-এ
-  // srcObject বসানোর চেষ্টা করত — তখন ref null থাকায় নিজের প্রিভিউ কখনো দেখা যেত না।
-  // এই effect inCall সত্যি হওয়ার পর (ভিডিও ট্যাগ DOM-এ আসার পর) স্ট্রিমটা আবার বসিয়ে দেয়।
   useEffect(() => {
     if (inCall && localVideoRef.current && sessionRef.current?.localStream) {
       localVideoRef.current.srcObject = sessionRef.current.localStream;
+      localVideoRef.current.play().catch(() => {});
     }
   }, [inCall]);
 
-  // MESH connections: for every pair (me, peer), whichever UID sorts first
-  // alphabetically is always the "offerer" — this way both sides agree on
-  // who initiates without needing to coordinate who joined first.
-  // Signaling lives at global-calls/{roomId}/connections/{pairKey}, with
-  // "candidatesA"/"candidatesB" subcollections for trickled ICE candidates.
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
     if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
@@ -677,23 +694,25 @@ export default function GlobalChat() {
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
-      pc.addEventListener('track', (event) => {
-        event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
-      });
 
-      pc.addEventListener('icecandidate', (event) => {
+      pc.ontrack = (event) => {
+        console.log(`Track received from peer ${peerUid}:`, event.track.kind);
+        event.streams[0].getTracks().forEach(track => {
+          remoteStream.addTrack(track);
+        });
+        setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
+      };
+
+      pc.onicecandidate = (event) => {
         if (event.candidate) addDoc(myCandidatesRef, event.candidate.toJSON());
-      });
+      };
 
-      // নতুন: কারো ব্রাউজার ক্র্যাশ করলে/হঠাৎ নেট চলে গেলে (সঠিক hangup সিগন্যাল
-      // ছাড়াই) সেই মানুষের সাথে connection চিরতরে "failed" অবস্থায় আটকে থাকতে
-      // পারে — কালো টাইল হয়ে থেকে যায়, রুমও কখনো খালি হয় না। যে কেউ এই failure
-      // ধরতে পারলেই সেই "ghost" পার্টিসিপ্যান্টকে রুম থেকে সরিয়ে দেয়।
-      pc.addEventListener('connectionstatechange', () => {
+      pc.onconnectionstatechange = () => {
+        console.log(`Connection state for ${peerUid}:`, pc.connectionState);
         if (pc.connectionState === 'failed') {
           removeStalePeerFromRoom(peerUid);
         }
-      });
+      };
 
       const unsubscribers = [
         onSnapshot(theirCandidatesRef, (snapshot) => {
@@ -706,8 +725,6 @@ export default function GlobalChat() {
       ];
 
       if (isInitiator) {
-        // fresh start for this pair — clear any stale offer/answer/candidates
-        // left over from a previous call between these two people
         const [staleA, staleB] = await Promise.all([
           getDocs(collection(connRef, "candidatesA")),
           getDocs(collection(connRef, "candidatesB"))
@@ -775,11 +792,6 @@ export default function GlobalChat() {
     }
   };
 
-  // while in the call view, watch the room's participant list and
-  // connect/disconnect peer connections to match it in real time.
-  // নোট: আগে এখানে "inCall false হলে সব বন্ধ করে দাও" — এমন logic ছিল, যেটা
-  // navigate করে সরে গেলেও চলত। এখন সেই দায়িত্ব leaveGlobalCall (explicit hangup)
-  // আর GlobalAlerts-এর কেন্দ্রীয় cleanup-এর — এখানে শুধু participants sync হয়।
   useEffect(() => {
     if (!inCall) return;
     const s = ensureSession();
@@ -800,16 +812,22 @@ export default function GlobalChat() {
     });
 
     return () => unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inCall]);
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
       await getLocalStream(callType);
-      await setDoc(doc(db, "global-calls", globalRoomId), { status: "ringing", callType, hostName: currentUserName, hostId: currentUid, roomId: globalRoomId, participants: [currentUid] });
+      await setDoc(doc(db, "global-calls", globalRoomId), { 
+        status: "ringing", 
+        callType, 
+        hostName: currentUserName, 
+        hostId: currentUid, 
+        roomId: globalRoomId, 
+        participants: [currentUid] 
+      });
       setActiveCallType(callType);
       setInCall(true);
-      setActiveGlobalCallSession(sessionRef.current); // shared module-এ প্রকাশ করা হচ্ছে
+      setActiveGlobalCallSession(sessionRef.current);
     } catch (err) {
       console.error("Error initiating global call:", err);
       alert("🎤 Could not start the conference. Camera/microphone permission may be needed.");
@@ -822,14 +840,14 @@ export default function GlobalChat() {
       const snapshot = await getDoc(callDocRef);
       if (snapshot.exists()) {
         const data = snapshot.data();
-        const callType = data.callType || 'video'; // পুরনো কল ডেটায় callType না থাকলে video ধরে নেওয়া হয়
+        const callType = data.callType || 'video';
         await getLocalStream(callType);
         const updatedParts = data.participants || [];
         if (!updatedParts.includes(currentUid)) updatedParts.push(currentUid);
         await updateDoc(callDocRef, { participants: updatedParts });
         setActiveCallType(callType);
         setInCall(true);
-        setActiveGlobalCallSession(sessionRef.current); // শেয়ার্ড module-এ প্রকাশ করা হচ্ছে
+        setActiveGlobalCallSession(sessionRef.current);
       }
     } catch (err) {
       console.error("Error rejoining call:", err);
@@ -850,8 +868,6 @@ export default function GlobalChat() {
     } catch (err) { /* best effort only */ }
   };
 
-  // এখানেই একমাত্র জায়গা যেখানে গ্রুপ কল সত্যিই বন্ধ হয় — participants থেকে
-  // নিজেকে সরানো, তারপর সব peer connection বন্ধ করে shared session মুছে দেওয়া।
   const leaveGlobalCall = async () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
@@ -888,8 +904,6 @@ export default function GlobalChat() {
     </svg>
   );
 
-  // ফিক্স: আগে হ্যাংআপ বাটনে 📴 ইমোজি ছিল, যেটা কিছু ব্রাউজার/ফন্টে ঠিকভাবে
-  // রেন্ডার না হয়ে "OFF" টেক্সট দেখাচ্ছিল — তাই আসল SVG আইকন ব্যবহার করা হলো
   const HangUpIcon = () => (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
       <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-1 1c-1.24 0-2.45-.2-3.57-.57a1 1 0 0 1-.68-.95v-3.5a1 1 0 0 1 .74-.97A17.9 17.9 0 0 1 12 7c1.99 0 3.91.31 5.71.88a1 1 0 0 1 .74.97v3.5a1 1 0 0 1-.68.95 11.9 11.9 0 0 1-3.57.57 1 1 0 0 1-1-1v-3.1A17.9 17.9 0 0 0 12 9z" />
@@ -910,6 +924,23 @@ export default function GlobalChat() {
   );
 
   const formatRecordingTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+
+  // ✅ ফিক্সড: মেসেজ ডিসপ্লেতে createdAt Date object handle করা হয়েছে
+  const formatMessageTime = (createdAt) => {
+    if (!createdAt) return "";
+    try {
+      if (createdAt instanceof Date) {
+        return createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } else if (createdAt.seconds) {
+        // পুরনো Firestore timestamp format
+        return new Date(createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } else {
+        return new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+    } catch (err) {
+      return "";
+    }
+  };
 
   return (
     <div style={{ maxWidth: '700px', margin: '15px auto', fontFamily: 'Arial', height: '85vh', display: 'flex', flexDirection: 'column', background: 'var(--card-bg, #f4f7fc)', border: '1px solid rgba(0, 86, 179, 0.2)', borderRadius: '15px', boxShadow: '0 8px 24px rgba(0, 86, 179, 0.08)', overflow: 'hidden', position: 'relative' }}>
@@ -938,8 +969,6 @@ export default function GlobalChat() {
       {inCall && (
         <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column' }}>
           {activeCallType === 'audio' ? (
-            // অডিও কনফারেন্সে ভিডিও ট্র্যাক থাকে না, তাই খালি গ্রিডের বদলে
-            // অংশগ্রহণকারীদের নামসহ একটা সাধারণ "অডিও কল চলছে" ভিউ দেখানো হচ্ছে
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '18px', color: '#fff' }}>
               <div style={{ width: '90px', height: '90px', borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' }}>🎙️</div>
               <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio conference — {Object.keys(remoteStreams).length + 1} in the call</p>
@@ -949,18 +978,32 @@ export default function GlobalChat() {
                   <span key={uid} style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>{usersCache[uid]?.name || 'Student'}</span>
                 ))}
               </div>
-              {/* audio still needs to actually play — kept off-screen since there's nothing to show visually */}
               <video ref={localVideoRef} autoPlay playsInline muted style={{ display: 'none' }} />
               {Object.entries(remoteStreams).map(([uid, stream]) => (
-                <div key={uid} style={{ display: 'none' }}>
-                  <RemoteVideoTile stream={stream} label={usersCache[uid]?.name || 'Student'} />
-                </div>
+                <audio 
+                  key={uid}
+                  ref={el => { 
+                    if (el) {
+                      el.srcObject = stream;
+                      el.play().catch(() => {});
+                    }
+                  }}
+                  autoPlay 
+                  playsInline
+                  style={{ display: 'none' }}
+                />
               ))}
             </div>
           ) : (
             <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, Math.min(Math.ceil(Math.sqrt(Object.keys(remoteStreams).length + 1)), 3))}, 1fr)`, gap: '4px', padding: '4px', overflow: 'auto' }}>
               <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
-                <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <video 
+                  ref={localVideoRef} 
+                  autoPlay 
+                  playsInline 
+                  muted 
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                />
                 <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>You</span>
               </div>
               {Object.entries(remoteStreams).map(([uid, stream]) => (
@@ -1013,7 +1056,7 @@ export default function GlobalChat() {
                       alt=""
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (isMe) { navigate(`/profile/${currentUid}`); return; } // নিজের ছবিতে ক্লিক করলে সরাসরি নিজের প্রোফাইলে — কোনো মেনু ছাড়াই
+                        if (isMe) { navigate(`/profile/${currentUid}`); return; }
                         setAvatarMenuFor(avatarMenuFor === getMsg.id ? null : getMsg.id);
                       }}
                       onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }}
@@ -1022,7 +1065,6 @@ export default function GlobalChat() {
                     {senderOnline && (
                       <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />
                     )}
-                    {/* নতুন: অন্য কারো ছবিতে ক্লিক করলে এই মেনু খোলে */}
                     {avatarMenuFor === getMsg.id && !isMe && (
                       <div
                         className="threedot-dropdown-menu"
@@ -1063,7 +1105,7 @@ export default function GlobalChat() {
                             {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
                             {getMsg.fileUrl && getMsg.fileType === 'audio' && <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />}
                             {getMsg.text && <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{getMsg.text}{getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}</p>}
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{getMsg.createdAt ? new Date(getMsg.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</div>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{formatMessageTime(getMsg.createdAt)}</div>
                           </>
                         )}
                       </div>
