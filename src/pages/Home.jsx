@@ -103,13 +103,12 @@ export default function Home({ isAdmin }) {
   const lightboxHistoryPushed = useRef(false);
   const fileInputRef = useRef(null);
 
-  const videoRefs = useRef({});
+  // Updated video refs and management
+  const videoElementsRef = useRef({});
+  const activeVideoIdRef = useRef(null);
   const globalMutedRef = useRef(true);
-  const applyGlobalMute = (muted) => {
-    if (globalMutedRef.current === muted) return;
-    globalMutedRef.current = muted;
-    Object.values(videoRefs.current).forEach((v) => { if (v) v.muted = muted; });
-  };
+  const internalActionRef = useRef(false);
+
   const [editingComment, setEditingComment] = useState(null);
   const [usersCache, setUsersCache] = useState({});
   const [visibleComments, setVisibleComments] = useState({});
@@ -121,6 +120,60 @@ export default function Home({ isAdmin }) {
   const resetFileInput = () => {
     setSelectedFile(null);
     setFileInputKey(Date.now());
+  };
+
+  // Helper: apply mute state to all videos
+  const applyMuteToAll = (muted) => {
+    Object.values(videoElementsRef.current).forEach(v => {
+      if (v) v.muted = muted;
+    });
+  };
+
+  // Helper: pause all videos except the given id
+  const pauseAllExcept = (exceptId) => {
+    Object.entries(videoElementsRef.current).forEach(([id, video]) => {
+      if (id !== exceptId && video && !video.paused) {
+        internalActionRef.current = true;
+        video.pause();
+        internalActionRef.current = false;
+      }
+    });
+  };
+
+  // Play a specific video as the active one
+  const playVideo = (postId) => {
+    const video = videoElementsRef.current[postId];
+    if (!video) return;
+
+    if (activeVideoIdRef.current === postId) {
+      if (video.paused) {
+        internalActionRef.current = true;
+        video.play().catch(() => {});
+        internalActionRef.current = false;
+      }
+      return;
+    }
+
+    pauseAllExcept(postId);
+    applyMuteToAll(globalMutedRef.current);
+    activeVideoIdRef.current = postId;
+
+    internalActionRef.current = true;
+    video.play().catch(() => {});
+    internalActionRef.current = false;
+  };
+
+  // Pause a specific video
+  const pauseVideo = (postId) => {
+    const video = videoElementsRef.current[postId];
+    if (video && !video.paused) {
+      internalActionRef.current = true;
+      video.pause();
+      internalActionRef.current = false;
+    }
+    if (activeVideoIdRef.current === postId) {
+      activeVideoIdRef.current = null;
+    }
   };
 
   // Lightbox
@@ -185,21 +238,56 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
+  // IntersectionObserver for video playback
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
+      entries.forEach(entry => {
         const videoEl = entry.target;
+        const postId = videoEl.dataset.postId;
+        if (!postId) return;
+
         if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-          videoEl.play().catch(() => {});
-        } else if (!videoEl.paused) {
-          videoEl.pause();
+          if (!activeVideoIdRef.current) {
+            playVideo(postId);
+          } else if (activeVideoIdRef.current === postId) {
+            if (videoEl.paused) playVideo(postId);
+          }
+        } else {
+          if (activeVideoIdRef.current === postId) {
+            pauseVideo(postId);
+          }
         }
       });
     }, { threshold: [0, 0.6, 1] });
 
-    Object.values(videoRefs.current).forEach((v) => { if (v) observer.observe(v); });
+    Object.values(videoElementsRef.current).forEach(v => {
+      if (v) observer.observe(v);
+    });
+
     return () => observer.disconnect();
   }, [posts]);
+
+  // Fullscreen handling
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const fsElement = document.fullscreenElement;
+      if (fsElement && fsElement.tagName === 'VIDEO') {
+        const postId = fsElement.dataset.postId;
+        if (postId) {
+          playVideo(postId);
+          const video = videoElementsRef.current[postId];
+          if (video && video.paused) {
+            internalActionRef.current = true;
+            video.play().catch(() => {});
+            internalActionRef.current = false;
+          }
+        }
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   useEffect(() => {
     // ৭ দিন পর অটো ডিলিট
@@ -212,12 +300,10 @@ export default function Home({ isAdmin }) {
         for (const postDoc of oldPostsSnapshot.docs) {
           const data = postDoc.data();
           
-          // Cloudinary থেকে ডিলিট
           if (data.mediaPublicId) {
             await deleteMediaFromCloudinary(data.mediaPublicId, data.mediaResourceType);
           }
           
-          // Firestore থেকে ডিলিট
           await deleteDoc(doc(db, "posts", postDoc.id));
         }
       } catch (error) {
@@ -358,7 +444,7 @@ export default function Home({ isAdmin }) {
       setUploadProgress(0);
       setShowPostModal(false);
       
-      applyGlobalMute(false);
+      applyMuteToAll(false);
       
       setTimeout(() => {
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -449,15 +535,12 @@ export default function Home({ isAdmin }) {
     setEditingComment(null);
   };
 
-  // Delete post - Cloudinary থেকেও ডিলিট হবে
   const handleDeletePost = async (postId, mediaPublicId, mediaResourceType) => {
     if (window.confirm("Are you sure you want to delete this post?")) {
-      // 1. Cloudinary থেকে ডিলিট
       if (mediaPublicId) {
         await deleteMediaFromCloudinary(mediaPublicId, mediaResourceType);
       }
       
-      // 2. Firestore থেকে ডিলিট
       try {
         await deleteDoc(doc(db, "posts", postId));
         console.log('✅ Post deleted');
@@ -467,7 +550,6 @@ export default function Home({ isAdmin }) {
     }
   };
 
-  // Cloudinary থেকে ডিলিট হলে Firestore থেকেও ডিলিট
   const handleMediaError = async (e, post) => {
     const el = e.target;
     if (el.dataset.retried) {
@@ -613,21 +695,34 @@ export default function Home({ isAdmin }) {
                   <video
                     ref={(el) => {
                       if (el) {
-                        videoRefs.current[post.id] = el;
+                        videoElementsRef.current[post.id] = el;
                         el.muted = globalMutedRef.current;
+                        el.dataset.postId = post.id;
                       } else {
-                        delete videoRefs.current[post.id];
+                        delete videoElementsRef.current[post.id];
                       }
                     }}
                     src={post.mediaUrl}
                     controls
                     playsInline
                     onPlay={(e) => {
-                      Object.values(videoRefs.current).forEach((v) => {
-                        if (v && v !== e.target && !v.paused) v.pause();
-                      });
+                      if (internalActionRef.current) return;
+                      const postId = e.target.dataset.postId;
+                      if (postId && activeVideoIdRef.current !== postId) {
+                        playVideo(postId);
+                      }
                     }}
-                    onVolumeChange={(e) => applyGlobalMute(e.target.muted)}
+                    onPause={(e) => {
+                      if (internalActionRef.current) return;
+                      const postId = e.target.dataset.postId;
+                      if (postId && activeVideoIdRef.current === postId) {
+                        activeVideoIdRef.current = null;
+                      }
+                    }}
+                    onVolumeChange={(e) => {
+                      globalMutedRef.current = e.target.muted;
+                      applyMuteToAll(globalMutedRef.current);
+                    }}
                     onError={(e) => handleMediaError(e, post)}
                     style={{ maxWidth: '100%', maxHeight: '400px', width: '100%' }}
                   />
