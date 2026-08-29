@@ -1,3 +1,4 @@
+// File Name: src/pages/Profile.jsx
 import React, { useState, useEffect } from 'react';
 import { db, auth } from '../firebase';
 import { collection, onSnapshot } from 'firebase/firestore';
@@ -27,7 +28,14 @@ export default function Profile() {
       const activeProfiles = allData.filter(user => {
         const isDeletedStatus = user.approved === "deleted";
         const isRemovedName = user.name === "Removed User";
-        return !isDeletedStatus && !isRemovedName;
+        // ✅ শুধু approved বা admin-ই প্রোফাইলে দেখাবে
+        const isApprovedUser =
+          user.approved === true ||
+          String(user.approved).toLowerCase().trim() === "true" ||
+          user.role === "admin" ||
+          String(user.role).toLowerCase().trim() === "admin";
+
+        return !isDeletedStatus && !isRemovedName && isApprovedUser;
       });
       
       if (userId) {
@@ -56,6 +64,7 @@ export default function Profile() {
 
     return () => unsubscribe();
   }, [userId]);
+
   const handleCopyProfileLink = (targetId) => {
     const shareUrl = `${window.location.origin}/profile/${targetId}`;
     navigator.clipboard.writeText(shareUrl)
@@ -85,11 +94,13 @@ export default function Profile() {
           </clipPath>
         </defs>
       </svg>
+      
       {profiles.map(user => {
         const isCurrentUser = auth.currentUser?.uid === user.id || auth.currentUser?.uid === user.uid;
         const profileUniqueId = user.uid || user.id || '';
 
-        const fallbackAvatar = `https://dicebear.com{encodeURIComponent(user.name || 'Student')}`;
+        // 🔧 FIXED: fallback avatar URL correctly generated
+        const fallbackAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name || 'Student')}`;
         
         let userPhotoUrl = fallbackAvatar;
         if (user.photo) {
@@ -125,12 +136,13 @@ export default function Profile() {
                   <img 
                     src={userPhotoUrl} 
                     alt={user.name || "Student"} 
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    onError={(e) => { e.target.onerror = null; e.target.src = fallbackAvatar; }}
                   />
                 </div>
                 
                 <div style={{ position: 'absolute', bottom: '-4px', left: '50%', transform: 'translateX(-50%)', width: '28px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, filter: 'drop-shadow(0px 3px 6px rgba(0,255,255,0.45))' }}>
-                  <svg width="28" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://w3.org">
+                  <svg width="28" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M12 2L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5 L12 2Z" fill="#00ffff" stroke="#053c69" strokeWidth="2" strokeLinejoin="round"/>
                     <path d="M9 12L11 14L15 10" stroke="#011627" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
@@ -167,6 +179,7 @@ export default function Profile() {
                 </button>
               </div>
             </div>
+
             {/* 👉 Right Details Box Customized to auto-fit mobile screens perfectly */}
             <div style={{ flex: 1.3, minWidth: isMobile ? '100%' : '280px', padding: isMobile ? '15px 12px 12px 12px' : '15px 25px 12px 25px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '6px', backgroundColor: 'var(--code-bg)', color: 'var(--text)', overflow: 'hidden', boxSizing: 'border-box' }}>
               {[
@@ -193,7 +206,7 @@ export default function Profile() {
                   href={(() => {
                     const fbData = (user.fbLink || '').trim();
                     if (!fbData) return "https://facebook.com";
-                    return fbData.includes('facebook.com') ? fbData : `https://facebook.com{fbData}`;
+                    return fbData.includes('facebook.com') ? fbData : `https://facebook.com/${fbData}`;
                   })()} 
                   target="_blank" 
                   rel="noreferrer" 
@@ -209,7 +222,7 @@ export default function Profile() {
                     if (!instaData) return "https://instagram.com";
                     if (instaData.includes('instagram.com')) return instaData;
                     if (instaData.startsWith('@')) instaData = instaData.substring(1);
-                    return `https://instagram.com{instaData}`;
+                    return `https://instagram.com/${instaData}`;
                   })()} 
                   target="_blank" 
                   rel="noreferrer"

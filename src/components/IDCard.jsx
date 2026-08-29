@@ -19,6 +19,9 @@ export default function IDCard({ userData }) {
     validTo: "31/12/2026"
   };
 
+  // Fallback avatar if photo is missing or invalid
+  const fallbackPhoto = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name || 'Student')}`;
+
   return (
     <div className="profile-container">
       
@@ -29,7 +32,6 @@ export default function IDCard({ userData }) {
           {/* 💳 Front Side of the CARD */}
           <div className="id-card-front">
             <div className="card-header" style={{ background: 'linear-gradient(135deg, #0056b3, #0088ff)', color: 'white', padding: '12px' }}>
-              {/* 🎯 1. As per your request, STUDENT-CONNECT has been permanently set at the top of the card. */}
               <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', letterSpacing: '0.5px', textTransform: 'uppercase', fontWeight: 'bold' }}>
                 STUDENT-CONNECT
               </h3>
@@ -38,7 +40,12 @@ export default function IDCard({ userData }) {
             
             <div className="card-body">
               <div className="photo-section">
-                <img src={user.photo} alt="Student" className="student-photo" />
+                <img
+                  src={(user.photo && user.photo.trim() !== '' && user.photo !== 'https://placeholder.com') ? user.photo : fallbackPhoto}
+                  alt="Student"
+                  className="student-photo"
+                  onError={(e) => { e.target.onerror = null; e.target.src = fallbackPhoto; }}
+                />
                 <div className="verified-seal">VERIFIED</div>
               </div>
               
@@ -46,7 +53,6 @@ export default function IDCard({ userData }) {
                 <h3>{user.name}</h3>
                 <p><strong>ID No / Roll No:</strong> {user.idNo}</p>
                 <p><strong>Department / Class:</strong> {user.dept}</p>
-                {/* 🎯 2. As per your request, the institution's name has been added directly below the Department / Class. */}
                 <p><strong>Institute:</strong> {user.institute || "Not Set"}</p>
                 <p><strong>Batch / Year:</strong> {user.batch || "Not Set"}</p>
                 <p><strong>Blood Group:</strong> <span className="blood">{user.blood || "O+"}</span></p>
@@ -54,7 +60,12 @@ export default function IDCard({ userData }) {
             </div>
             
             <div className="card-footer">
-              <img src={`https://qrserver.com{user.uid}`} alt="QR Code" className="qr-code" />
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(user.uid || 'student-connect')}`}
+                alt="QR Code"
+                className="qr-code"
+                onError={(e) => { e.target.onerror = null; e.target.style.display = 'none'; }}
+              />
               <div className="signature">
                 <p className="sig-line">Admin</p>
                 <span>Authorized Sign</span>

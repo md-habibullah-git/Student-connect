@@ -1,12 +1,9 @@
+// File Name: src/components/AdminPanel.jsx
 import React, { useState, useEffect, useRef } from 'react'; 
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase'; 
 import { collection, doc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where, getDoc } from 'firebase/firestore'; 
 
-// ফিক্স: নেটিভ <audio controls> ব্যবহার করলে কিছু ব্রাউজারে (Chrome-এর একটা
-// পরিচিত রেন্ডারিং কুইর্ক) স্লাইডার/ভলিউমের টুলটিপ "1.00" আকারে পুরো পেজের
-// এদিক-ওদিক ভেসে থাকত — স্ক্রল করার সাথে সাথে নিচেও দেখা যেত। তাই নেটিভ
-// কন্ট্রোল একদমই ব্যবহার না করে এই ছোট নিজস্ব প্লে/পজ প্লেয়ার বানানো হলো।
 function AdminAudioPlayer({ src }) {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -49,11 +46,7 @@ function AdminAudioPlayer({ src }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '150px' }}>
       <audio ref={audioRef} src={src} preload="metadata" style={{ display: 'none' }} />
-      <button
-        type="button"
-        onClick={toggle}
-        style={{ width: '26px', height: '26px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: 'rgba(0,86,179,0.15)', color: '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '11px' }}
-      >
+      <button type="button" onClick={toggle} style={{ width: '26px', height: '26px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: 'rgba(0,86,179,0.15)', color: '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '11px' }}>
         {isPlaying ? '⏸️' : '▶️'}
       </button>
       <span style={{ fontSize: '11px', opacity: 0.8 }}>{formatTime(isPlaying || currentTime > 0 ? currentTime : duration)}</span>
@@ -68,13 +61,13 @@ export default function AdminPanel() {
   const [rawDbUsers, setRawDbUsers] = useState([]); 
   const [allPrivateChats, setAllPrivateChats] = useState([]); 
   const [selectedChatMessages, setSelectedChatMessages] = useState([]); 
-  // ফিক্স: আগে শুধু একটা কম্বাইন্ড নাম-স্ট্রিং রাখা হতো (activeChatName) —
-  // এখন দুই পক্ষের uid/নাম/ছবি আলাদা করে রাখা হচ্ছে, যাতে মেসেঞ্জারের মতো
-  // ছবি-সহ বাবল রেন্ডার করা যায়
-  const [activeChatInfo, setActiveChatInfo] = useState(null); // { roomId, user1:{uid,name,photo}, user2:{uid,name,photo} }
+  const [activeChatInfo, setActiveChatInfo] = useState(null);
   const [showChatViewer, setShowChatViewer] = useState(false);
   const [dataLoading, setDataLoading] = useState(true); 
   const activeChatListenerRef = useRef(null);
+
+  // 🔧 নতুন: পেন্ডিং আইডির ছবি বড় করে দেখার state
+  const [expandedPhoto, setExpandedPhoto] = useState(null);
 
   const [hiddenRooms, setHiddenRooms] = useState(() => { 
     const saved = localStorage.getItem('admin_hidden_rooms'); 
@@ -107,6 +100,7 @@ export default function AdminPanel() {
       console.error("User Fetching Error:", error); 
       setDataLoading(false); 
     });
+
     const fetchRoomsDirectly = async () => { 
       try { 
         const querySnapshot = await getDocs(collection(db, "personal-rooms")); 
@@ -124,15 +118,11 @@ export default function AdminPanel() {
     return () => {
       clearInterval(interval);
       unsubscribeUsers();
-      // ফিক্স: কম্পোনেন্ট আনমাউন্ট হওয়ার সময় active chat viewer-এর listener-ও বন্ধ করা হচ্ছে
       if (activeChatListenerRef.current) {
         activeChatListenerRef.current();
         activeChatListenerRef.current = null;
       }
     }; 
-    // নোট: আগে এখানে "Sync Data" বাটনের জন্য refreshTrigger dependency ছিল।
-    // users onSnapshot এমনিতেই realtime, আর rooms প্রতি ৫ সেকেন্ডে নিজে থেকেই
-    // রিফ্রেশ হয় — তাই ম্যানুয়াল সিঙ্ক বাটনের কোনো দরকার ছিল না, তাই বাদ দেওয়া হলো
   }, []);
 
   const handleAccept = async (targetId) => { 
@@ -145,31 +135,22 @@ export default function AdminPanel() {
     } 
   }; 
 
-  // নতুন: এই ইউজারের সাথে সম্পর্কিত সব চ্যাট/কল ডেটা (প্রাইভেট রুম, গ্লোবাল চ্যাট
-  // মেসেজ, প্রাইভেট কল, গ্লোবাল কনফারেন্স কল উপস্থিতি) স্থায়ীভাবে মুছে দেয়,
-  // যাতে reject/remove করার পর মনে হয় এই ইউজার কখনো এই মেসেঞ্জারে কিছুই করেনি
   const wipeAllChatDataForUser = async (uid) => {
     try {
-      // ১) প্রাইভেট চ্যাট রুম ও তার সব মেসেজ
       const roomsSnap = await getDocs(collection(db, "personal-rooms"));
       const relatedRooms = roomsSnap.docs.filter(roomDoc => roomDoc.id.split("_").includes(uid));
       for (const roomDoc of relatedRooms) {
         const messagesSnap = await getDocs(collection(db, "personal-rooms", roomDoc.id, "messages"));
-        await Promise.all(
-          messagesSnap.docs.map(msgDoc => deleteDoc(doc(db, "personal-rooms", roomDoc.id, "messages", msgDoc.id)))
-        );
+        await Promise.all(messagesSnap.docs.map(msgDoc => deleteDoc(doc(db, "personal-rooms", roomDoc.id, "messages", msgDoc.id))));
         await deleteDoc(doc(db, "personal-rooms", roomDoc.id));
       }
 
-      // ২) এই ইউজারের পাঠানো সব গ্লোবাল (পাবলিক) চ্যাট মেসেজ
       const globalMsgsSnap = await getDocs(query(collection(db, "global-room-messages"), where("senderUid", "==", uid)));
       await Promise.all(globalMsgsSnap.docs.map(m => deleteDoc(doc(db, "global-room-messages", m.id))));
 
-      // ৩) এই ইউজার জড়িত এমন সব প্রাইভেট কল সেশন
       const personalCallsSnap = await getDocs(query(collection(db, "personal-calls"), where("participants", "array-contains", uid)));
       await Promise.all(personalCallsSnap.docs.map(c => deleteDoc(doc(db, "personal-calls", c.id))));
 
-      // ৪) গ্লোবাল কনফারেন্স কল-এ এই ইউজার host/participant থাকলে সেখান থেকে সরানো
       const globalCallRef = doc(db, "global-calls", "campus_global_conference_room");
       const globalCallSnap = await getDoc(globalCallRef);
       if (globalCallSnap.exists()) {
@@ -186,8 +167,6 @@ export default function AdminPanel() {
         }
       }
 
-      // ৫) নতুন: গ্লোবাল কল-এর WebRTC signaling ডেটা (connections সাব-কালেকশন) থেকেও
-      // এই ইউজার জড়িত এমন সব জোড়া (pair) এবং তাদের ICE candidates মুছে ফেলা
       const connectionsSnap = await getDocs(collection(db, "global-calls", "campus_global_conference_room", "connections"));
       const relatedConnections = connectionsSnap.docs.filter(c => c.id.split("_").includes(uid));
       for (const connDoc of relatedConnections) {
@@ -208,12 +187,9 @@ export default function AdminPanel() {
     if (!targetId) return; 
     if(window.confirm("আপনি কি নিশ্চিত যে এই আইডি এবং এর সাথে যুক্ত সব চ্যাট/মেসেজ ডেটাবেস থেকে স্থায়ীভাবে মুছে ফেলতে চান? এই কাজটি ফিরিয়ে আনা যাবে না।")) { 
       try { 
-        // আগে এই ইউজারের সব চ্যাট রুম ও মেসেজ মুছে ফেলা হচ্ছে
         await wipeAllChatDataForUser(targetId);
-        // তারপর ইউজারের আইডি ডকুমেন্ট মুছে ফেলা হচ্ছে
         await deleteDoc(doc(db, "users", targetId)); 
 
-        // যদি এই ইউজারের কোনো চ্যাট রুম এই মুহূর্তে Live Chat Viewer-এ খোলা থাকে, সেটাও বন্ধ করে দেওয়া হচ্ছে
         if (activeChatListenerRef.current) {
           activeChatListenerRef.current();
           activeChatListenerRef.current = null;
@@ -228,6 +204,7 @@ export default function AdminPanel() {
       } 
     } 
   };
+
   const handleAdminDeleteRoom = (e, roomId, lastActiveTime) => { 
     e.stopPropagation(); 
     if(window.confirm("Are you sure you want to temporarily remove this chat from list?")) { 
@@ -260,7 +237,7 @@ export default function AdminPanel() {
       user1: { uid: firstUid, name: foundUser1 ? foundUser1.name : `Student (${firstUid.substring(0, 4)})`, photo: foundUser1?.photo || '' },
       user2: { uid: secondUid, name: foundUser2 ? foundUser2.name : `Student (${secondUid.substring(0, 4)})`, photo: foundUser2?.photo || '' },
     });
-    setShowChatViewer(true); // রুম বাছাই করলেই viewer প্যানেল খুলে যাবে
+    setShowChatViewer(true);
 
     const qMsg = collection(db, "personal-rooms", roomId, "messages"); 
     activeChatListenerRef.current = onSnapshot(qMsg, (snapshot) => { 
@@ -300,7 +277,6 @@ export default function AdminPanel() {
         :root[data-theme='dark'] .admin-msg-bubble.left { background: #22242f; color: #fff; }
         .admin-msg-bubble.right { background: #0056b3; color: #fff; border-bottom-right-radius: 3px; }
 
-        /* মোবাইলের জন্য: দুই কলাম পাশাপাশির বদলে একটার নিচে একটা, ছোট প্যাডিং */
         @media (max-width: 640px) {
           .admin-panel-wrapper { padding: 10px; gap: 16px; }
           .admin-section-box { padding: 14px !important; }
@@ -319,10 +295,16 @@ export default function AdminPanel() {
           {pendingUsers.map(user => { 
             const currentDocId = user.id || user.uid; 
             const dicebearBackup = fallbackAvatar(user.name); 
+            const userPhoto = (user.photo && user.photo.trim() !== '') ? user.photo : dicebearBackup;
             return ( 
               <li key={currentDocId} className="admin-list-row" style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', padding: '15px', borderRadius: '8px' }}> 
-                <div style={{ position: 'relative', width: '42px', height: '42px', borderRadius: '50%', overflow: 'hidden', border: '2px solid #0056b3', marginRight: '15px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}> 
-                  <img src={(user.photo && user.photo.trim() !== "") ? user.photo : dicebearBackup} alt="Student" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} onError={(e) => { e.target.onerror = null; e.target.src = dicebearBackup; }} /> 
+                {/* 🔧 ছবিতে ক্লিক করলে বড় করে দেখা যাবে */}
+                <div 
+                  onClick={() => setExpandedPhoto(userPhoto)}
+                  style={{ position: 'relative', width: '42px', height: '42px', borderRadius: '50%', overflow: 'hidden', border: '2px solid #0056b3', marginRight: '15px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'zoom-in' }}
+                  title="Click to enlarge photo"
+                > 
+                  <img src={userPhoto} alt="Student" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} onError={(e) => { e.target.onerror = null; e.target.src = dicebearBackup; }} /> 
                 </div> 
                 <div style={{ flex: 1 }}> 
                   <strong style={{ fontSize: '16px', color: 'inherit' }}>{user.name || 'Anonymous User'}</strong> 
@@ -351,7 +333,6 @@ export default function AdminPanel() {
             return ( 
               <li key={activeDocId} className="admin-list-row-active" style={{ marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px', borderRadius: '8px' }}> 
                 <span style={{ fontSize: '15px', display: 'flex', alignItems: 'center', gap: '12px', position: 'relative' }}> 
-                  {/* নতুন: ছবিতে ক্লিক করলে সেই ইউজারের প্রোফাইল/আইডি পেজে চলে যাবে */}
                   <div
                     className="admin-avatar-clickable"
                     onClick={() => navigate(`/profile/${activeDocId}`)}
@@ -400,7 +381,6 @@ export default function AdminPanel() {
               return ( 
                 <div key={chat.id} className="admin-chat-room-btn" onClick={() => viewPrivateConversation(chat.id)} style={{ padding: '12px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}> 
                   <span style={{ flex: 1, textAlign: 'left', color: 'inherit', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                    {/* নতুন: ছবিতে ক্লিক করলে সেই ইউজারের প্রোফাইলে চলে যাবে (রুম না খুলে) */}
                     <img
                       src={p1} alt="" className="admin-avatar-clickable"
                       onClick={(e) => { e.stopPropagation(); navigate(`/profile/${firstUid}`); }}
@@ -425,8 +405,6 @@ export default function AdminPanel() {
 
         {/* Live Chat Viewer Box */}
         <div className="admin-section-box" style={{ padding: '20px', borderRadius: '12px', flex: '1.5', minWidth: '320px' }}> 
-          {/* ফিক্স: চোখের ইমোজি বাদ; এখন মাঝখানে একটা টগল বাটন — চাপলে নিচের
-              viewer প্যানেলটা খোলে/বন্ধ হয় */}
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: showChatViewer ? '12px' : '0' }}>
             <button
               onClick={() => setShowChatViewer(v => !v)}
@@ -438,7 +416,6 @@ export default function AdminPanel() {
 
           {showChatViewer && (
             <>
-              {/* নতুন: শুধু নাম না, দুই পক্ষের প্রোফাইল ছবিও দেখানো হচ্ছে */}
               {activeChatInfo && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
                   <img src={(activeChatInfo.user1.photo && activeChatInfo.user1.photo.trim() !== '') ? activeChatInfo.user1.photo : fallbackAvatar(activeChatInfo.user1.name)} alt="" style={{ width: '26px', height: '26px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3' }} />
@@ -459,9 +436,6 @@ export default function AdminPanel() {
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: isUser1 ? 'flex-start' : 'flex-end', maxWidth: '80%' }}>
                         <small style={{ opacity: 0.6, fontSize: '10px', marginBottom: '2px' }}>{msg.senderName || senderInfo.name} · {msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : 'Live'}</small>
                         <div className={`admin-msg-bubble ${isUser1 ? 'left' : 'right'}`}>
-                          {/* নতুন: মেসেজ ডিলিট করা হলেও এখন আসল কনটেন্ট (টেক্সট/ছবি) দেখা যাবে,
-                              শুধু একটা ছোট "(deleted)" ট্যাগ যোগ হবে — normal ইউজাররা এটা
-                              দেখে না, শুধু অ্যাডমিন প্যানেল থেকেই দেখা যায় */}
                           {msg.isDeleted && <span style={{ fontSize: '10px', fontStyle: 'italic', opacity: 0.8, display: 'block', marginBottom: '3px' }}>🚫 deleted by user</span>}
                           {msg.fileUrl && msg.fileType === 'image' && (
                             <img src={msg.fileUrl} alt="" style={{ maxWidth: '180px', borderRadius: '8px', display: 'block', marginBottom: msg.text ? '4px' : 0 }} />
@@ -484,7 +458,39 @@ export default function AdminPanel() {
             </>
           )}
         </div> 
-      </div> 
+      </div>
+
+      {/* 🔧 নতুন: বড় করে ছবি দেখার Modal */}
+      {expandedPhoto && (
+        <div
+          onClick={() => setExpandedPhoto(null)}
+          style={{
+            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+            backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 3000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'zoom-out'
+          }}
+        >
+          <img
+            src={expandedPhoto}
+            alt="Enlarged"
+            style={{ maxWidth: '90%', maxHeight: '90%', objectFit: 'contain', borderRadius: '8px' }}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setExpandedPhoto(null)}
+            style={{
+              position: 'absolute', top: '20px', right: '20px',
+              background: 'rgba(255,255,255,0.15)', border: 'none',
+              color: '#fff', fontSize: '20px', width: '40px', height: '40px',
+              borderRadius: '50%', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div> 
   ); 
 }

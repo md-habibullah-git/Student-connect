@@ -1,3 +1,4 @@
+// File Name: src/pages/Login.jsx
 import React, { useState } from 'react';
 import { auth, db } from '../firebase'; 
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
@@ -12,6 +13,7 @@ export default function Login() {
   const [studentClass, setStudentClass] = useState('');
   const [dept, setDept] = useState('');
   const [tempPhoto, setTempPhoto] = useState('');
+  
   const handleImageChange = (e) => {
     const file = e.target.files[0]; 
     if (file) {
@@ -21,7 +23,8 @@ export default function Login() {
         img.src = event.target.result;
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 120;
+          // 🔧 ছবির মান ভালো রাখতে রেজোলিউশন বাড়ানো হলো (আগে 120px ছিল, এখন 400px)
+          const MAX_WIDTH = 400;
           let width = img.width;
           let height = img.height;
 
@@ -35,7 +38,8 @@ export default function Login() {
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
           
-          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.5);
+          // 🔧 কমপ্রেশন কোয়ালিটি বাড়ানো হলো (আগে 0.5 ছিল, এখন 0.85)
+          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.85);
           setTempPhoto(compressedBase64);
         };
       };
@@ -43,11 +47,7 @@ export default function Login() {
     }
   };
 
-  // নতুন ফাংশন: কোনো ভেরিফিকেশন কোড না পাঠিয়ে, শুধু ইমেইলের ডোমেইনে সত্যিই
-  // মেইল সার্ভার (MX record) আছে কিনা তা Google-এর ফ্রি পাবলিক DNS API দিয়ে চেক করে।
-  // এতে টাইপো করা বা ভুয়া ডোমেইনের ইমেইল ধরা পড়বে।
-  // নোট: এটা ১০০% নিশ্চিত করে না যে ইমেইল অ্যাড্রেসটা আসলেই বাস্তবে ব্যবহৃত হচ্ছে —
-  // সেটা নিশ্চিত করতে ভেরিফিকেশন কোড ছাড়া কোনো ফ্রি উপায় নেই।
+  // নতুন ফাংশন: ইমেইল ডোমেইনের MX record চেক করা
   const checkEmailDomainIsReal = async (emailAddress) => {
     const domain = emailAddress.split('@')[1];
     if (!domain) return false;
@@ -57,7 +57,6 @@ export default function Login() {
       return data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
     } catch (err) {
       console.error("Email domain check failed:", err);
-      // নেটওয়ার্ক/API সমস্যা হলে বৈধ ইউজারকে আটকানো হচ্ছে না
       return true;
     }
   };
@@ -89,8 +88,6 @@ export default function Login() {
         }
 
         if (!isApprovedTrue) {
-          // ফিক্স: আগে এখানে "removed" মেসেজ দেখাত, যদিও ইউজারটা আসলে শুধু
-          // pending (এখনো admin অনুমোদন দেয়নি) — এখন সঠিক আলাদা মেসেজ দেখাচ্ছে
           alert("⏳ Your ID application is still pending admin approval. Please wait until an admin approves your request.");
           await auth.signOut(); 
           setTimeout(() => { window.location.reload(); }, 300);
@@ -108,6 +105,7 @@ export default function Login() {
       alert("❌ Wrong email or password, or your account has not been approved yet!");
     }
   };
+
   const handleRegister = async (e) => {
     e.preventDefault();
     
@@ -122,7 +120,6 @@ export default function Login() {
       return;
     }
 
-    // নতুন: ইমেইল ডোমেইন অনলাইনে যাচাই — কোনো কোড পাঠানো হচ্ছে না
     const isEmailDomainReal = await checkEmailDomainIsReal(email);
     if (!isEmailDomainReal) {
       alert("🚨 এই ইমেইল ঠিকানাটি সঠিক বলে মনে হচ্ছে না (এই ডোমেইনে কোনো মেইল সার্ভার পাওয়া যায়নি)। সঠিক ইমেইল দিয়ে আবার চেষ্টা করুন।");
@@ -140,7 +137,6 @@ export default function Login() {
 
       await updateProfile(user, { displayName: name });
 
-      // The request is being sent directly to the "users" collection to match your admin panel.
       await setDoc(doc(db, "users", user.uid), {
         uid: user.uid,
         name: name,
@@ -149,7 +145,7 @@ export default function Login() {
         studentClass: studentClass,
         email: email,
         photo: tempPhoto,
-        approved: false, // Since this is false, it will show up under "New ID Requests" in the admin panel.
+        approved: false,
         role: "student",
         createdAt: new Date().getTime()
       });
@@ -164,10 +160,6 @@ export default function Login() {
           const loginCredential = await signInWithEmailAndPassword(auth, email, password);
           const existingUser = loginCredential.user;
 
-          // ফিক্স: re-application-এর আগে চেক করা হচ্ছে যে এই ইমেইলটা কোনো Admin
-          // অ্যাকাউন্টের কিনা। আগে এই চেক না থাকায়, কেউ যদি কোনোভাবে admin-এর
-          // পাসওয়ার্ড মিলিয়ে ফেলত, তাহলে re-application ফ্লো admin-এর role এবং
-          // approved স্ট্যাটাস "student"/false দিয়ে ওভাররাইট করে দিত (demote bug)।
           const existingDocSnap = await getDoc(doc(db, "users", existingUser.uid));
           const existingData = existingDocSnap.exists() ? existingDocSnap.data() : null;
           const isExistingAdmin = existingData && (existingData.role === "admin" || existingData.role === "Admin");
@@ -216,6 +208,7 @@ export default function Login() {
     setStudentClass('');
     setTempPhoto('');
   };
+
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '85vh', flexDirection: 'column', gap: '15px', backgroundColor: '#f0f2f5', padding: '15px' }}>
       <div style={{ maxWidth: '380px', width: '100%', margin: 'auto', padding: '30px 25px', border: '1px solid #e1e8ed', borderRadius: '15px', fontFamily: 'Arial', background: '#fff', boxShadow: '0 10px 25px rgba(0,0,0,0.08)', boxSizing: 'border-box' }}>
