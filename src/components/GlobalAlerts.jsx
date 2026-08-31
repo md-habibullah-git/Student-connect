@@ -413,7 +413,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ✅ FIXED: Incoming global call listener (localStorage flag ব্যবহার)
+  // Incoming global call listener (localStorage flag ব্যবহার)
   useEffect(() => {
     if (!currentUid) return;
     
@@ -457,20 +457,30 @@ export default function GlobalAlerts() {
     && activeSession.type === 'personal'
     && !location.pathname.startsWith(`/chat/${activeSession.otherUid}/`);
 
-  const handleReceive = () => {
+  // ========== FIXED: Receive handler ==========
+  const handleReceive = async () => {
     if (!activeCall) return;
     
     setIncomingPersonalCall(null);
     setIncomingGlobalCall(null);
-    localStorage.removeItem('global_call_dismissed'); // flag clear
+    localStorage.removeItem('global_call_dismissed');
     
     if (activeCall.type === 'personal') {
+      // Update call status to 'active' so the listener won't show it again
+      try {
+        await updateDoc(doc(db, "personal-calls", activeCall.roomId), { status: "active" });
+      } catch (err) { /* best effort */ }
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
+      // Update global call status to 'active'
+      try {
+        await updateDoc(doc(db, "global-calls", GLOBAL_ROOM_ID), { status: "active" });
+      } catch (err) { /* best effort */ }
       navigate('/chat/global/Global-Chatroom', { state: { autoJoinCall: true } });
     }
   };
 
+  // ========== FIXED: Decline handler ==========
   const handleDecline = async () => {
     if (!activeCall) return;
     
@@ -478,9 +488,12 @@ export default function GlobalAlerts() {
       try { 
         await updateDoc(doc(db, "personal-calls", activeCall.roomId), { status: "ended" }); 
       } catch (err) { /* best effort */ }
-      
       setIncomingPersonalCall(null);
     } else {
+      // Update global call status to 'ended' so it won't show again
+      try {
+        await updateDoc(doc(db, "global-calls", GLOBAL_ROOM_ID), { status: "ended" });
+      } catch (err) { /* best effort */ }
       setIncomingGlobalCall(null);
     }
   };
