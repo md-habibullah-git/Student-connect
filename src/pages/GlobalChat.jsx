@@ -43,6 +43,31 @@ function RemoteVideoTile({ stream, label }) {
   );
 }
 
+// নতুন: Remote audio element — audio call-এ remote stream play করার জন্য
+function RemoteAudioTile({ stream }) {
+  const audioRef = useRef(null);
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.srcObject = stream;
+      audioRef.current.play().catch(() => {});
+    }
+  }, [stream]);
+  return <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />;
+}
+
+// Local audio element — নিজের mic muted করে play করার জন্য
+function LocalAudioTile({ stream }) {
+  const audioRef = useRef(null);
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.srcObject = stream;
+      audioRef.current.muted = true;
+      audioRef.current.play().catch(() => {});
+    }
+  }, [stream]);
+  return <audio ref={audioRef} autoPlay playsInline muted style={{ display: 'none' }} />;
+}
+
 // identical voice message player used in PersonalChat.jsx — circular
 // play/pause button + a canvas that draws the audio's REAL frequency data
 // (Web Audio API) while it plays, themed per-bubble.
@@ -920,11 +945,15 @@ export default function GlobalChat() {
                   <span key={uid} style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>{usersCache[uid]?.name || 'Student'}</span>
                 ))}
               </div>
-              <video ref={localVideoRef} autoPlay playsInline muted style={{ display: 'none' }} />
+              
+              {/* Local audio — নিজের mic (muted) */}
+              {sessionRef.current?.localStream && (
+                <LocalAudioTile stream={sessionRef.current.localStream} />
+              )}
+              
+              {/* Remote audio — অন্যদের voice শোনার জন্য */}
               {Object.entries(remoteStreams).map(([uid, stream]) => (
-                <div key={uid} style={{ display: 'none' }}>
-                  <RemoteVideoTile stream={stream} label={usersCache[uid]?.name || 'Student'} />
-                </div>
+                <RemoteAudioTile key={uid} stream={stream} />
               ))}
             </div>
           ) : (
@@ -936,6 +965,7 @@ export default function GlobalChat() {
               {Object.entries(remoteStreams).map(([uid, stream]) => (
                 <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />
               ))}
+              {/* Video call-এও remote audio play হবে — video element-এ audio track আছে */}
             </div>
           )}
           <button
