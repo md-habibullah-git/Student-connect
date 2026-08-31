@@ -232,6 +232,7 @@ export default function GlobalChat() {
   const inCallRef = useRef(false);
   const localVideoRef = useRef(null);
   const sessionRef = useRef(null);
+  const callStartTimeRef = useRef(null);
 
   const ensureSession = () => {
     if (!sessionRef.current) {
@@ -726,7 +727,6 @@ export default function GlobalChat() {
 
   const removeStalePeerFromRoom = async (peerUid) => {
     disconnectFromPeer(peerUid);
-    // Peer-এর connection data Firestore থেকে delete করুন
     try {
       const callRef = doc(db, "global-calls", globalRoomId);
       const snap = await getDoc(callRef);
@@ -746,14 +746,12 @@ export default function GlobalChat() {
       const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
       const connRef = doc(callRef, "connections", pairKey);
       
-      // Candidates delete
       const [subA, subB] = await Promise.all([
         getDocs(collection(connRef, "candidatesA")),
         getDocs(collection(connRef, "candidatesB"))
       ]);
       await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
       
-      // Connection document delete
       await deleteDoc(connRef).catch(() => {});
     } catch (err) {}
   };
@@ -772,7 +770,6 @@ export default function GlobalChat() {
       s.knownPeers.forEach(uid => {
         if (!currentSet.has(uid)) {
           disconnectFromPeer(uid);
-          // Peer leave করেছে — তার connection data Firestore থেকে delete করুন
           deletePeerConnectionData(uid);
         }
       });
@@ -784,7 +781,6 @@ export default function GlobalChat() {
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
-      // Complete cleanup — সব পুরনো data মুছুন
       const callRef = doc(db, "global-calls", globalRoomId);
       const oldConnections = await getDocs(collection(callRef, "connections"));
       await Promise.all(oldConnections.docs.map(async (d) => {
@@ -797,12 +793,10 @@ export default function GlobalChat() {
       }));
       await deleteDoc(callRef).catch(() => {});
       
-      // Session reset
       sessionRef.current = null;
       clearActiveGlobalCallSession();
       setRemoteStreams({});
       
-      // নতুন call শুরু
       await getLocalStream(callType);
       await setDoc(callRef, { 
         status: "ringing", 
@@ -810,8 +804,11 @@ export default function GlobalChat() {
         hostName: currentUserName, 
         hostId: currentUid, 
         roomId: globalRoomId, 
-        participants: [currentUid] 
+        participants: [currentUid],
+        callStartedAt: new Date().getTime(),
+        callHistory: {}
       });
+      callStartTimeRef.current = new Date().getTime();
       setActiveCallType(callType);
       setInCall(true);
       setActiveGlobalCallSession(sessionRef.current);
@@ -831,7 +828,16 @@ export default function GlobalChat() {
         await getLocalStream(callType);
         const updatedParts = data.participants || [];
         if (!updatedParts.includes(currentUid)) updatedParts.push(currentUid);
-        await updateDoc(callDocRef, { participants: updatedParts });
+        const callHistory = data.callHistory || {};
+        callHistory[currentUid] = {
+          name: currentUserName,
+          joinedAt: new Date().getTime()
+        };
+        await updateDoc(callDocRef, { 
+          participants: updatedParts,
+          callHistory: callHistory
+        });
+        callStartTimeRef.current = new Date().getTime();
         setActiveCallType(callType);
         setInCall(true);
         setActiveGlobalCallSession(sessionRef.current);
@@ -845,11 +851,27 @@ export default function GlobalChat() {
   const leaveGlobalCallBeacon = () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
-      getDoc(callDocRef).then((snapshot) => {
+      getDoc(callDocRef).then(async (snapshot) => {
         if (snapshot.exists()) {
-          const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
-          if (updatedParts.length === 0) deleteDoc(callDocRef).catch(() => {});
-          else updateDoc(callDocRef, { participants: updatedParts }).catch(() => {});
+          const data = snapshot.data();
+          const updatedParts = (data.participants || []).filter(id => id !== currentUid);
+          const callHistory = data.callHistory || {};
+          if (callHistory[currentUid]) {
+            callHistory[currentUid].leftAt = new Date().getTime();
+            callHistory[currentUid].duration = callHistory[currentUid].leftAt - callHistory[currentUid].joinedAt;
+          }
+          if (updatedParts.length === 0) {
+            callHistory.endedAt = new Date().getTime();
+            if (data.callStartedAt) {
+              callHistory.totalDuration = callHistory.endedAt - data.callStartedAt;
+            }
+            await setDoc(callDocRef, { callHistory: callHistory }, { merge: true });
+          } else {
+            await updateDoc(callDocRef, { 
+              participants: updatedParts,
+              callHistory: callHistory
+            }).catch(() => {});
+          }
         }
       }).catch(() => {});
     } catch (err) {}
@@ -860,9 +882,19 @@ export default function GlobalChat() {
       const callDocRef = doc(db, "global-calls", globalRoomId);
       const snapshot = await getDoc(callDocRef);
       if (snapshot.exists()) {
-        const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
+        const data = snapshot.data();
+        const updatedParts = (data.participants || []).filter(id => id !== currentUid);
+        const callHistory = data.callHistory || {};
+        if (callHistory[currentUid]) {
+          callHistory[currentUid].leftAt = new Date().getTime();
+          callHistory[currentUid].duration = callHistory[currentUid].leftAt - callHistory[currentUid].joinedAt;
+        }
         if (updatedParts.length === 0) {
-          // সবাই চলে গেলে সব data মুছুন
+          callHistory.endedAt = new Date().getTime();
+          if (data.callStartedAt) {
+            callHistory.totalDuration = callHistory.endedAt - data.callStartedAt;
+          }
+          await setDoc(callDocRef, { callHistory: callHistory }, { merge: true });
           const oldConnections = await getDocs(collection(callDocRef, "connections"));
           await Promise.all(oldConnections.docs.map(async (d) => {
             const [subA, subB] = await Promise.all([
@@ -874,7 +906,10 @@ export default function GlobalChat() {
           }));
           await deleteDoc(callDocRef).catch(() => {});
         } else {
-          await updateDoc(callDocRef, { participants: updatedParts });
+          await updateDoc(callDocRef, { 
+            participants: updatedParts,
+            callHistory: callHistory
+          });
         }
       }
     } catch (err) {}
