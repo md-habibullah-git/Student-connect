@@ -319,7 +319,6 @@ export default function GlobalChat() {
             deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
             setShowRejoinBtn(false);
             setInCall(false);
-            // Refresh — সবাই বের হয়ে গেলে page reload হবে
             window.location.reload();
             return;
           }
@@ -727,6 +726,7 @@ export default function GlobalChat() {
 
   const removeStalePeerFromRoom = async (peerUid) => {
     disconnectFromPeer(peerUid);
+    // Peer-এর connection data Firestore থেকে delete করুন
     try {
       const callRef = doc(db, "global-calls", globalRoomId);
       const snap = await getDoc(callRef);
@@ -735,6 +735,26 @@ export default function GlobalChat() {
         if (updated.length === 0) await deleteDoc(callRef);
         else await updateDoc(callRef, { participants: updated });
       }
+    } catch (err) {}
+  };
+
+  // NEW: Peer leave করলে তার connection data delete করুন
+  const deletePeerConnectionData = async (peerUid) => {
+    try {
+      const callRef = doc(db, "global-calls", globalRoomId);
+      const isInitiator = currentUid < peerUid;
+      const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
+      const connRef = doc(callRef, "connections", pairKey);
+      
+      // Candidates delete
+      const [subA, subB] = await Promise.all([
+        getDocs(collection(connRef, "candidatesA")),
+        getDocs(collection(connRef, "candidatesB"))
+      ]);
+      await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
+      
+      // Connection document delete
+      await deleteDoc(connRef).catch(() => {});
     } catch (err) {}
   };
 
@@ -750,7 +770,11 @@ export default function GlobalChat() {
         if (!s.knownPeers.has(uid)) connectToPeer(uid);
       });
       s.knownPeers.forEach(uid => {
-        if (!currentSet.has(uid)) disconnectFromPeer(uid);
+        if (!currentSet.has(uid)) {
+          disconnectFromPeer(uid);
+          // Peer leave করেছে — তার connection data Firestore থেকে delete করুন
+          deletePeerConnectionData(uid);
+        }
       });
       s.knownPeers = currentSet;
     });
@@ -865,7 +889,6 @@ export default function GlobalChat() {
     setActiveCallType('video');
     setRemoteStreams({});
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
-    // Refresh — call শেষে page reload হবে
     window.location.reload();
   };
 
