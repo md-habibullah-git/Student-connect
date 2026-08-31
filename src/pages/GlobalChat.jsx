@@ -1,14 +1,16 @@
-// File Name: src/pages/GlobalChat.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { isUserOnline } from '../presence';
 import { 
   collection, addDoc, onSnapshot, query, orderBy, limit, 
-  doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where 
+  serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where 
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 
+// same ICE configuration as PersonalChat.jsx — Google STUN + a free public
+// TURN relay (OpenRelay/Metered.ca, shared/rate-limited). See the note in
+// PersonalChat.jsx for production-hardening advice.
 const rtcConfiguration = {
   iceServers: [
     { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
@@ -20,55 +22,28 @@ const rtcConfiguration = {
 };
 
 const MAX_VOICE_BASE64_LENGTH = 1100000;
-const MAX_VIDEO_BASE64_LENGTH = 1100000;
-const MAX_VIDEO_RAW_BYTES = 750000;
+const MAX_VIDEO_BASE64_LENGTH = 1100000; // Firestore-এর প্রতি-ডকুমেন্ট ১MB হার্ড লিমিটের নিচে রাখতে
+const MAX_VIDEO_RAW_BYTES = 750000; // ~750KB raw ≈ base64 এনকোডিংয়ের পর ~1MB-এর নিচে থাকবে
 const MAX_RECORDING_SECONDS = 30;
 
+// one tile in the group-call grid — MediaStream objects can't go directly
+// in JSX, so each remote peer's stream is attached to its own <video> via a ref.
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
-  const [hasVideo, setHasVideo] = useState(false);
-  
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(() => {});
-      
-      const checkVideo = () => {
-        const videoTracks = stream.getVideoTracks();
-        setHasVideo(videoTracks.length > 0 && videoTracks[0].enabled);
-      };
-      
-      checkVideo();
-      stream.addEventListener('addtrack', checkVideo);
-      stream.addEventListener('removetrack', checkVideo);
-      
-      return () => {
-        stream.removeEventListener('addtrack', checkVideo);
-        stream.removeEventListener('removetrack', checkVideo);
-        if (videoRef.current) videoRef.current.srcObject = null;
-      };
-    }
+    if (videoRef.current) videoRef.current.srcObject = stream;
   }, [stream]);
-  
   return (
-    <div style={{ position: 'relative', background: hasVideo ? '#111' : 'linear-gradient(135deg, #667eea, #764ba2)', borderRadius: '8px', overflow: 'hidden', width: '100%', height: '100%', minHeight: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <video 
-        ref={videoRef} 
-        autoPlay 
-        playsInline 
-        style={{ width: '100%', height: '100%', objectFit: 'cover', display: hasVideo ? 'block' : 'none' }} 
-      />
-      {!hasVideo && (
-        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '8px' }}>
-          <span style={{ fontSize: '48px' }}>👤</span>
-          <span style={{ color: '#fff', fontSize: '14px' }}>{label}</span>
-        </div>
-      )}
-      <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px', zIndex: 10 }}>{label}</span>
+    <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
+      <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
     </div>
   );
 }
 
+// identical voice message player used in PersonalChat.jsx — circular
+// play/pause button + a canvas that draws the audio's REAL frequency data
+// (Web Audio API) while it plays, themed per-bubble.
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -106,6 +81,7 @@ function VoiceMessageBubble({ src, isMe }) {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
     analyser.getByteFrequencyData(dataArray);
+
     ctx.clearRect(0, 0, w, h);
     const barCount = 24;
     const step = Math.max(1, Math.floor(bufferLength / barCount));
@@ -123,11 +99,14 @@ function VoiceMessageBubble({ src, isMe }) {
     drawIdleBars();
     return () => {
       cancelAnimationFrame(rafRef.current);
+      // ফিক্স: AudioContext বন্ধ না করলে প্রতিটা ভয়েস মেসেজ বাবল আনমাউন্ট হওয়ার
+      // পরও ব্রাউজারে খোলা থেকে যায় (মেমরি/রিসোর্স লিক)
       if (audioCtxRef.current) {
         audioCtxRef.current.close().catch(() => {});
         audioCtxRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setupAnalyser = () => {
@@ -142,7 +121,9 @@ function VoiceMessageBubble({ src, isMe }) {
       analyser.connect(audioCtx.destination);
       audioCtxRef.current = audioCtx;
       analyserRef.current = analyser;
-    } catch (err) {}
+    } catch (err) {
+      // Web Audio API unavailable/blocked — playback still works, just without live bars.
+    }
   };
 
   const togglePlay = () => {
@@ -176,6 +157,7 @@ function VoiceMessageBubble({ src, isMe }) {
       audioEl.removeEventListener('loadedmetadata', onLoaded);
       audioEl.removeEventListener('timeupdate', onTimeUpdate);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const formatTime = (secs) => {
@@ -186,7 +168,16 @@ function VoiceMessageBubble({ src, isMe }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', minWidth: '210px' }}>
       <audio ref={audioRef} src={src} preload="metadata" style={{ display: 'none' }} />
-      <button type="button" onClick={togglePlay} style={{ width: '30px', height: '30px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: isMe ? 'rgba(255,255,255,0.25)' : 'rgba(0,86,179,0.12)', color: isMe ? '#fff' : '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '13px' }}>
+      <button
+        type="button"
+        onClick={togglePlay}
+        style={{
+          width: '30px', height: '30px', borderRadius: '50%', border: 'none', cursor: 'pointer',
+          background: isMe ? 'rgba(255,255,255,0.25)' : 'rgba(0,86,179,0.12)',
+          color: isMe ? '#fff' : '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0, fontSize: '13px'
+        }}
+      >
         {isPlaying ? '⏸️' : '▶️'}
       </button>
       <canvas ref={canvasRef} width={120} height={28} style={{ flex: 1 }} />
@@ -205,11 +196,12 @@ export default function GlobalChat() {
   const [usersCache, setUsersCache] = useState({}); 
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
-  const [activeCallType, setActiveCallType] = useState('video');
+  const [activeCallType, setActiveCallType] = useState('video'); // 'video' | 'audio'
   const [showRejoinBtn, setShowRejoinBtn] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState(null);
-  const [avatarMenuFor, setAvatarMenuFor] = useState(null);
+  const [avatarMenuFor, setAvatarMenuFor] = useState(null); // নতুন: কোন মেসেজের ছবির উপর ক্লিক করে View Profile/Message মেনু খোলা হয়েছে
   const [replyToMessage, setReplyToMessage] = useState(null);
+
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const mediaRecorderRef = useRef(null);
@@ -217,24 +209,29 @@ export default function GlobalChat() {
   const discardRecordingRef = useRef(false);
   const capturedReplyRef = useRef(null);
   const maxDurationTimeoutRef = useRef(null);
+
   const recordingCanvasRef = useRef(null);
   const recordingAnalyserRef = useRef(null);
   const recordingAudioCtxRef = useRef(null);
   const recordingRafRef = useRef(null);
+
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
     const saved = localStorage.getItem(`global_deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
     return saved ? JSON.parse(saved) : [];
   });
+
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null); 
-  const inCallRef = useRef(false);
-  const localVideoRef = useRef(null);
-  const sessionRef = useRef(null);
-  const [remoteStreams, setRemoteStreams] = useState({});
 
-  const currentUid = auth.currentUser?.uid || "unknown_user";
-  const currentUserName = auth.currentUser?.displayName || "Campus Student";
-  const globalRoomId = "campus_global_conference_room";
+  const inCallRef = useRef(false);
+
+  // WebRTC (Firestore-signaled, mesh) group call state.
+  // নতুন: localStream/peerConnections/etc আর plain local ref না — বরং
+  // callSession.js-এর একটা shared session অবজেক্টের ভেতরের ফিল্ড। এই পেজ
+  // থেকে সরে গেলেও (Back চাপলে) একই অবজেক্ট module-এ বেঁচে থাকে, তাই কল
+  // চলতেই থাকে — PersonalChat.jsx-এর মতোই।
+  const localVideoRef = useRef(null);
+  const sessionRef = useRef(null); // { callType, localStream, peerConnections, peerUnsubscribers, remoteStreams, knownPeers }
 
   const ensureSession = () => {
     if (!sessionRef.current) {
@@ -247,33 +244,52 @@ export default function GlobalChat() {
     return sessionRef.current;
   };
 
-  // ৭ দিনের পুরনো মেসেজ ডিলিট
+  const [remoteStreams, setRemoteStreams] = useState({}); // triggers re-render for new video tiles
+  
+  const currentUid = auth.currentUser?.uid || "unknown_user";
+  const currentUserName = auth.currentUser?.displayName || "Campus Student";
+  const globalRoomId = "campus_global_conference_room";
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
-        const sevenDaysAgoMs = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
-        const oldMessagesQuery = query(collection(db, "global-room-messages"), where("createdAt", "<", sevenDaysAgoMs), limit(100));
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7); 
+        const oldMessagesQuery = query(collection(db, "global-room-messages"), where("createdAt", "<", sevenDaysAgo));
         const snapshot = await getDocs(oldMessagesQuery);
-        if (snapshot.empty) return;
-        await Promise.all(snapshot.docs.map(docSnapshot => deleteDoc(doc(db, "global-room-messages", docSnapshot.id)).catch(() => {})));
-      } catch (error) {}
+        // ফিক্স: forEach(async...) ব্যবহার করলে delete গুলো await হতো না এবং কোনো
+        // এরর হলে সেটা silently হারিয়ে যেত — এখন Promise.all দিয়ে সঠিকভাবে await হচ্ছে
+        await Promise.all(
+          snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "global-room-messages", docSnapshot.id)))
+        );
+      } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
     };
     autoCleanOldGlobalMessages();
-    const interval = setInterval(autoCleanOldGlobalMessages, 24 * 60 * 60 * 1000);
-    return () => clearInterval(interval);
   }, []);
 
+  // if I'm still in the conference call when I close the tab or leave this
+  // page, remove myself from participants so the call never gets stuck
+  // "ringing" for no one.
   useEffect(() => {
-    const handleBeforeUnload = () => { if (inCallRef.current) leaveGlobalCallBeacon(); };
+    const handleBeforeUnload = () => {
+      if (inCallRef.current) {
+        leaveGlobalCallBeacon();
+      }
+    };
     window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
-      if (inCallRef.current) leaveGlobalCall().catch(() => {});
+      if (inCallRef.current) {
+        leaveGlobalCall();
+      }
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [currentUid]);
 
-  useEffect(() => { inCallRef.current = inCall; }, [inCall]);
+  useEffect(() => {
+    inCallRef.current = inCall;
+  }, [inCall]);
 
+  // elapsed-time counter shown while recording a voice message
   useEffect(() => {
     let interval;
     if (isRecording) {
@@ -283,18 +299,22 @@ export default function GlobalChat() {
     return () => clearInterval(interval);
   }, [isRecording]);
 
+  // if GlobalAlerts sent us here to auto-join an already-ringing conference
+  // call (its floating "Receive" button), join immediately.
   useEffect(() => {
     if (location.state?.autoJoinCall && showRejoinBtn && !inCall) {
       handleRejoinCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state, showRejoinBtn]);
 
   useEffect(() => {
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "asc"), limit(100));
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
       setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+      localStorage.setItem('lastRead_global', String(Date.now()));
+    }, (error) => console.error("Global Chat Stream Error:", error));
 
     const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
       const cache = {};
@@ -311,15 +331,17 @@ export default function GlobalChat() {
         const callData = snapshot.data();
         if (callData.status === "ringing") {
           const participants = callData.participants || [];
-          if (participants.includes(currentUid)) {
-            setInCall(true);
-          } else {
-            setShowRejoinBtn(true);
+          if (participants.length === 0) {
+            deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
+            setShowRejoinBtn(false);
+            setInCall(false);
+            return;
           }
+          setShowRejoinBtn(true);
         }
       } else {
         setShowRejoinBtn(false);
-        if (inCallRef.current) setInCall(false);
+        setInCall(false);
       }
     });
 
@@ -329,59 +351,74 @@ export default function GlobalChat() {
       unsubscribeMessages(); unsubscribeUsers(); unsubscribeCall();
       window.removeEventListener('click', handleOutsideClick);
     };
-  }, [currentUid]);
+  }, [currentUid, inCall]);
 
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
-
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() && selectedFiles.length === 0) return;
-    const replyData = replyToMessage ? { text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""), fileUrl: replyToMessage.fileUrl || "", fileType: replyToMessage.fileType || "", senderName: replyToMessage.senderName, msgId: replyToMessage.id } : null;
+
+    const replyData = replyToMessage ? {
+      text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""), 
+      fileUrl: replyToMessage.fileUrl || "", 
+      fileType: replyToMessage.fileType || "",
+      senderName: replyToMessage.senderName,
+      msgId: replyToMessage.id
+    } : null;
+
     if (newMessage.trim()) {
       try {
         await addDoc(collection(db, "global-room-messages"), {
           text: newMessage, senderUid: currentUid, senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: new Date().getTime(), isEdited: false, isDeleted: false, replyTo: replyData
+          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
         });
         setNewMessage("");
-      } catch (error) { console.error("Message send error:", error); }
+      } catch (error) { console.error("Error sending text message:", error); }
     }
+
+    // ফিক্স: forEach(async...) ব্যবহার করলে এই ফাইলগুলো ঠিকমতো পাঠানো শেষ হওয়ার
+    // আগেই setSelectedFiles([]) চলে যেত — এখন Promise.all দিয়ে ঠিকভাবে অপেক্ষা করা হচ্ছে
     await Promise.all(selectedFiles.map(async (fileData) => {
       try {
         await addDoc(collection(db, "global-room-messages"), {
           text: "", fileUrl: fileData.url, fileType: fileData.type, fileName: fileData.name,
           senderUid: currentUid, senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: new Date().getTime(), isEdited: false, isDeleted: false, replyTo: replyData
+          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
         });
-      } catch (error) {}
+      } catch (error) { console.error("Error sending file to firestore:", error); }
     }));
     setSelectedFiles([]); setReplyToMessage(null); 
   };
 
   const handleEditMessage = async (msgId, currentText) => {
     setActiveMenuId(null); 
-    const newText = prompt("Edit your message:", currentText);
+    const newText = prompt("Edit your public campus message:", currentText);
     if (newText !== null && newText.trim() !== "") {
-      try { await updateDoc(doc(db, "global-room-messages", msgId), { text: newText, isEdited: true }); } catch (error) {}
+      try { await updateDoc(doc(db, "global-room-messages", msgId), { text: newText, isEdited: true }); } 
+      catch (error) { console.error("Error editing message:", error); }
     }
   };
 
   const handleDeleteMessage = async (msgId, isSenderMe) => {
     setActiveMenuId(null); 
-    if (window.confirm("Delete this message?")) {
+    if (window.confirm("Are you sure you want to delete this message?")) {
       if (isSenderMe) {
-        try { await updateDoc(doc(db, "global-room-messages", msgId), { isDeleted: true }); } catch (error) {}
+        // ফিক্স: text/fileUrl/fileType আর খালি করা হচ্ছে না — শুধু isDeleted:true
+        // সেট হচ্ছে। normal ইউজাররা এমনিতেই isDeleted flag দেখে "deleted" দেখে
+        // (নিচের render-এ), আসল কনটেন্ট রয়ে যাওয়ায় ৭ দিনের মধ্যে অ্যাডমিন
+        // প্যানেল থেকে ডিলিট করা মেসেজও দেখা যাবে।
+        try { await updateDoc(doc(db, "global-room-messages", msgId), { isDeleted: true }); } 
+        catch (error) { console.error("Error deleting message globally:", error); }
       } else {
-        const updated = [...localDeletedIds, msgId];
-        setLocalDeletedIds(updated);
-        localStorage.setItem(`global_deleted_msgs_${currentUid}`, JSON.stringify(updated));
+        const updatedDeletedIds = [...localDeletedIds, msgId];
+        setLocalDeletedIds(updatedDeletedIds);
+        localStorage.setItem(`global_deleted_msgs_${currentUid}`, JSON.stringify(updatedDeletedIds));
       }
     }
   };
-
   const handleFileChange = (e) => {
     if (!e.target.files || e.target.files.length === 0) return;
     Array.from(e.target.files).forEach((file) => {
@@ -393,7 +430,8 @@ export default function GlobalChat() {
           const img = new Image();
           img.onload = () => {
             const canvas = document.createElement('canvas');
-            canvas.width = 800; canvas.height = img.height * (800 / img.width);
+            const max_width = 800; 
+            canvas.width = max_width; canvas.height = img.height * (max_width / img.width);
             canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
             setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: canvas.toDataURL('image/jpeg', 0.7), type: 'image' }]);
           };
@@ -401,14 +439,18 @@ export default function GlobalChat() {
         };
         reader.readAsDataURL(file);
       } else if (fileType === 'video' && file.size <= MAX_VIDEO_RAW_BYTES) {
+        // ফিক্স: আগে ১০MB পর্যন্ত ভিডিও নেওয়া হতো, কিন্তু Firestore-এর প্রতিটা
+        // ডকুমেন্টের হার্ড লিমিট মাত্র ১MB এবং ভিডিও এখানে আসলে কম্প্রেসও হয় না —
+        // তাই ৮০০KB-এর বড় প্রায় সব ভিডিওই পরে ব্যর্থ হয়ে বিভ্রান্তিকর মেসেজ দেখাত।
+        // এখন প্রথম ধাপেই বাস্তবসম্মত সীমা চেক করা হচ্ছে এবং মেসেজও সঠিক করা হয়েছে।
         const reader = new FileReader();
         reader.onload = (event) => {
           if (event.target.result.length <= MAX_VIDEO_BASE64_LENGTH) {
             setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: event.target.result, type: 'video' }]);
-          }
+          } else { alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`); }
         };
         reader.readAsDataURL(file);
-      }
+      } else if (fileType === 'video') { alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`); }
     });
     e.target.value = null; 
   };
@@ -418,16 +460,26 @@ export default function GlobalChat() {
   const sendVoiceMessage = async (audioUrl) => {
     try {
       const reply = capturedReplyRef.current;
-      const replyData = reply ? { text: reply.fileUrl ? "" : (reply.text || ""), fileUrl: reply.fileUrl || "", fileType: reply.fileType || "", senderName: reply.senderName, msgId: reply.id } : null;
+      const replyData = reply ? {
+        text: reply.fileUrl ? "" : (reply.text || ""),
+        fileUrl: reply.fileUrl || "",
+        fileType: reply.fileType || "",
+        senderName: reply.senderName,
+        msgId: reply.id
+      } : null;
+
       await addDoc(collection(db, "global-room-messages"), {
         text: "", fileUrl: audioUrl, fileType: 'audio', fileName: 'voice-message.webm',
         senderUid: currentUid, senderName: currentUserName,
         senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-        createdAt: new Date().getTime(), isEdited: false, isDeleted: false, replyTo: replyData
+        createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
       });
+
       setReplyToMessage(null);
       capturedReplyRef.current = null;
-    } catch (error) { console.error("Voice send error:", error); }
+    } catch (error) {
+      console.error("Error sending voice message:", error);
+    }
   };
 
   const drawRecordingBars = () => {
@@ -439,6 +491,7 @@ export default function GlobalChat() {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
     analyser.getByteFrequencyData(dataArray);
+
     ctx.clearRect(0, 0, w, h);
     const barCount = 28;
     const step = Math.max(1, Math.floor(bufferLength / barCount));
@@ -464,6 +517,7 @@ export default function GlobalChat() {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContextClass();
@@ -474,7 +528,10 @@ export default function GlobalChat() {
         recordingAudioCtxRef.current = audioCtx;
         recordingAnalyserRef.current = analyser;
         drawRecordingBars();
-      } catch (e) {}
+      } catch (visualizerErr) {
+        // visualization is best-effort; recording still works without it
+      }
+
       let recorderOptions = { audioBitsPerSecond: 32000 };
       if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
         recorderOptions.mimeType = 'audio/webm;codecs=opus';
@@ -483,34 +540,48 @@ export default function GlobalChat() {
       audioChunksRef.current = [];
       discardRecordingRef.current = false;
       capturedReplyRef.current = replyToMessage;
-      recorder.ondataavailable = (event) => { if (event.data.size > 0) audioChunksRef.current.push(event.data); };
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
       recorder.onstop = () => {
         stream.getTracks().forEach(track => track.stop());
         stopRecordingVisualizer();
         clearTimeout(maxDurationTimeoutRef.current);
-        if (discardRecordingRef.current) { audioChunksRef.current = []; return; }
+
+        if (discardRecordingRef.current) {
+          audioChunksRef.current = [];
+          return;
+        }
         const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         const reader = new FileReader();
         reader.onload = (event) => {
           const audioUrl = event.target.result;
-          if (audioUrl.length > MAX_VOICE_BASE64_LENGTH) { alert("Voice message too large"); return; }
+          if (audioUrl.length > MAX_VOICE_BASE64_LENGTH) {
+            alert("This voice message is too large to send, even after compression. Please record a shorter message.");
+            return;
+          }
           sendVoiceMessage(audioUrl);
         };
         reader.readAsDataURL(audioBlob);
       };
+
       recorder.start();
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
+
       maxDurationTimeoutRef.current = setTimeout(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
           discardRecordingRef.current = true;
           mediaRecorderRef.current.stop();
           setIsRecording(false);
-          alert("Max 30 seconds");
+          alert("Voice messages can be up to 30 seconds long. Recording has been stopped and discarded — please try again.");
         }
       }, MAX_RECORDING_SECONDS * 1000);
     } catch (error) {
-      alert("🎤 Microphone access denied");
+      console.error("Microphone access error:", error);
+      alert("🎤 Microphone access was denied or is unavailable.");
     }
   };
 
@@ -532,18 +603,19 @@ export default function GlobalChat() {
     }
   };
 
+  // gets (or reuses) the local camera/mic stream, shared across every peer
+  // connection in the mesh
   const getLocalStream = async (callType = 'video') => {
     const s = ensureSession();
     if (s.localStream) return s.localStream;
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-      video: callType === 'video' ? { width: 640, height: 480 } : false, 
-      audio: true 
-    });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
     s.localStream = stream;
     s.callType = callType;
     return stream;
   };
 
+  // নতুন: এই রুমে ইতিমধ্যে একটা চলমান গ্রুপ কল থাকলে (অন্য পেজে গিয়ে "Back"
+  // চেপে ফিরে এসেছেন) সেটাতে আবার যুক্ত হও — session module-এ যা আছে তাই ব্যবহার হয়
   useEffect(() => {
     const existing = getActiveGlobalCallSession();
     if (existing && (existing.localStream || Object.keys(existing.peerConnections).length > 0)) {
@@ -552,8 +624,11 @@ export default function GlobalChat() {
       setRemoteStreams({ ...existing.remoteStreams });
       setInCall(true);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // session অন্য কোথাও (GlobalAlerts কেন্দ্রীয়ভাবে "সবাই চলে গেছে" শনাক্ত করলে)
+  // পরিষ্কার হয়ে গেলে এই কম্পোনেন্টের লোকাল UI-ও রিসেট হবে
   useEffect(() => {
     const unsubscribe = subscribeActiveGlobalCallSession((s) => {
       if (!s) {
@@ -567,22 +642,30 @@ export default function GlobalChat() {
     return unsubscribe;
   }, []);
 
+  // ফিক্স: <video> এলিমেন্ট শুধু inCall === true হলেই DOM-এ তৈরি হয়, কিন্তু আগের
+  // কোড stream পাওয়ার সাথে সাথেই (inCall সেট হওয়ার আগেই) localVideoRef-এ
+  // srcObject বসানোর চেষ্টা করত — তখন ref null থাকায় নিজের প্রিভিউ কখনো দেখা যেত না।
+  // এই effect inCall সত্যি হওয়ার পর (ভিডিও ট্যাগ DOM-এ আসার পর) স্ট্রিমটা আবার বসিয়ে দেয়।
   useEffect(() => {
     if (inCall && localVideoRef.current && sessionRef.current?.localStream) {
       localVideoRef.current.srcObject = sessionRef.current.localStream;
-      localVideoRef.current.play().catch(() => {});
     }
   }, [inCall]);
 
+  // MESH connections: for every pair (me, peer), whichever UID sorts first
+  // alphabetically is always the "offerer" — this way both sides agree on
+  // who initiates without needing to coordinate who joined first.
+  // Signaling lives at global-calls/{roomId}/connections/{pairKey}, with
+  // "candidatesA"/"candidatesB" subcollections for trickled ICE candidates.
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
     if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
 
     const isInitiator = currentUid < peerUid;
     const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
-    const signalRef = doc(db, "global-call-signals", pairKey);
-    const myCandidatesRef = collection(signalRef, isInitiator ? "candidatesA" : "candidatesB");
-    const theirCandidatesRef = collection(signalRef, isInitiator ? "candidatesB" : "candidatesA");
+    const connRef = doc(db, "global-calls", globalRoomId, "connections", pairKey);
+    const myCandidatesRef = collection(connRef, isInitiator ? "candidatesA" : "candidatesB");
+    const theirCandidatesRef = collection(connRef, isInitiator ? "candidatesB" : "candidatesA");
 
     try {
       const pc = new RTCPeerConnection(rtcConfiguration);
@@ -594,18 +677,22 @@ export default function GlobalChat() {
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
-
       pc.addEventListener('track', (event) => {
-        event.streams[0].getTracks().forEach(track => {
-          if (!remoteStream.getTracks().includes(track)) {
-            remoteStream.addTrack(track);
-          }
-        });
-        setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
+        event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
       });
 
       pc.addEventListener('icecandidate', (event) => {
         if (event.candidate) addDoc(myCandidatesRef, event.candidate.toJSON());
+      });
+
+      // নতুন: কারো ব্রাউজার ক্র্যাশ করলে/হঠাৎ নেট চলে গেলে (সঠিক hangup সিগন্যাল
+      // ছাড়াই) সেই মানুষের সাথে connection চিরতরে "failed" অবস্থায় আটকে থাকতে
+      // পারে — কালো টাইল হয়ে থেকে যায়, রুমও কখনো খালি হয় না। যে কেউ এই failure
+      // ধরতে পারলেই সেই "ghost" পার্টিসিপ্যান্টকে রুম থেকে সরিয়ে দেয়।
+      pc.addEventListener('connectionstatechange', () => {
+        if (pc.connectionState === 'failed') {
+          removeStalePeerFromRoom(peerUid);
+        }
       });
 
       const unsubscribers = [
@@ -619,30 +706,32 @@ export default function GlobalChat() {
       ];
 
       if (isInitiator) {
+        // fresh start for this pair — clear any stale offer/answer/candidates
+        // left over from a previous call between these two people
         const [staleA, staleB] = await Promise.all([
-          getDocs(collection(signalRef, "candidatesA")),
-          getDocs(collection(signalRef, "candidatesB"))
+          getDocs(collection(connRef, "candidatesA")),
+          getDocs(collection(connRef, "candidatesB"))
         ]);
         await Promise.all([...staleA.docs, ...staleB.docs].map(d => deleteDoc(d.ref)));
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await setDoc(signalRef, { offer: { type: offer.type, sdp: offer.sdp } });
+        await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } });
 
-        unsubscribers.push(onSnapshot(signalRef, async (snap) => {
+        unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
           if (data?.answer && !pc.currentRemoteDescription) {
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
           }
         }));
       } else {
-        unsubscribers.push(onSnapshot(signalRef, async (snap) => {
+        unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
           if (data?.offer && !pc.currentRemoteDescription) {
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await updateDoc(signalRef, { answer: { type: answer.type, sdp: answer.sdp } });
+            await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
           }
         }));
       }
@@ -681,45 +770,49 @@ export default function GlobalChat() {
         if (updated.length === 0) await deleteDoc(callRef);
         else await updateDoc(callRef, { participants: updated });
       }
-    } catch (err) {}
+    } catch (err) {
+      console.error("Error removing stale peer from room:", err);
+    }
   };
 
+  // while in the call view, watch the room's participant list and
+  // connect/disconnect peer connections to match it in real time.
+  // নোট: আগে এখানে "inCall false হলে সব বন্ধ করে দাও" — এমন logic ছিল, যেটা
+  // navigate করে সরে গেলেও চলত। এখন সেই দায়িত্ব leaveGlobalCall (explicit hangup)
+  // আর GlobalAlerts-এর কেন্দ্রীয় cleanup-এর — এখানে শুধু participants sync হয়।
   useEffect(() => {
     if (!inCall) return;
     const s = ensureSession();
+
     const callRef = doc(db, "global-calls", globalRoomId);
     const unsubscribe = onSnapshot(callRef, (snap) => {
       if (!snap.exists()) return;
       const otherParticipants = (snap.data().participants || []).filter(uid => uid !== currentUid);
       const currentSet = new Set(otherParticipants);
+
       otherParticipants.forEach(uid => {
-        if (!s.peerConnections[uid]) connectToPeer(uid);
+        if (!s.knownPeers.has(uid)) connectToPeer(uid);
       });
-      Object.keys(s.peerConnections).forEach(uid => {
+      s.knownPeers.forEach(uid => {
         if (!currentSet.has(uid)) disconnectFromPeer(uid);
       });
       s.knownPeers = currentSet;
     });
+
     return () => unsubscribe();
-  }, [inCall, currentUid]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inCall]);
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
       await getLocalStream(callType);
-      await setDoc(doc(db, "global-calls", globalRoomId), { 
-        status: "ringing", 
-        callType, 
-        hostName: currentUserName, 
-        hostId: currentUid, 
-        roomId: globalRoomId, 
-        participants: [currentUid],
-        createdAt: new Date().getTime()
-      });
+      await setDoc(doc(db, "global-calls", globalRoomId), { status: "ringing", callType, hostName: currentUserName, hostId: currentUid, roomId: globalRoomId, participants: [currentUid] });
       setActiveCallType(callType);
       setInCall(true);
-      setActiveGlobalCallSession(sessionRef.current);
+      setActiveGlobalCallSession(sessionRef.current); // shared module-এ প্রকাশ করা হচ্ছে
     } catch (err) {
-      alert("🎤 Could not start the conference");
+      console.error("Error initiating global call:", err);
+      alert("🎤 Could not start the conference. Camera/microphone permission may be needed.");
     }
   };
 
@@ -729,17 +822,18 @@ export default function GlobalChat() {
       const snapshot = await getDoc(callDocRef);
       if (snapshot.exists()) {
         const data = snapshot.data();
-        const callType = data.callType || 'video';
+        const callType = data.callType || 'video'; // পুরনো কল ডেটায় callType না থাকলে video ধরে নেওয়া হয়
         await getLocalStream(callType);
         const updatedParts = data.participants || [];
         if (!updatedParts.includes(currentUid)) updatedParts.push(currentUid);
         await updateDoc(callDocRef, { participants: updatedParts });
         setActiveCallType(callType);
         setInCall(true);
-        setActiveGlobalCallSession(sessionRef.current);
+        setActiveGlobalCallSession(sessionRef.current); // শেয়ার্ড module-এ প্রকাশ করা হচ্ছে
       }
     } catch (err) {
-      alert("🎤 Could not join the conference");
+      console.error("Error rejoining call:", err);
+      alert("🎤 Could not join the conference. Camera/microphone permission may be needed.");
     }
   };
 
@@ -753,9 +847,11 @@ export default function GlobalChat() {
           else updateDoc(callDocRef, { participants: updatedParts }).catch(() => {});
         }
       }).catch(() => {});
-    } catch (err) {}
+    } catch (err) { /* best effort only */ }
   };
 
+  // এখানেই একমাত্র জায়গা যেখানে গ্রুপ কল সত্যিই বন্ধ হয় — participants থেকে
+  // নিজেকে সরানো, তারপর সব peer connection বন্ধ করে shared session মুছে দেওয়া।
   const leaveGlobalCall = async () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
@@ -765,7 +861,9 @@ export default function GlobalChat() {
         if (updatedParts.length === 0) await deleteDoc(callDocRef);
         else await updateDoc(callDocRef, { participants: updatedParts });
       }
-    } catch (err) {}
+    } catch (err) {
+      console.error("Error leaving global call:", err);
+    }
     const s = sessionRef.current;
     if (s) {
       Object.keys(s.peerConnections).forEach(disconnectFromPeer);
@@ -790,6 +888,8 @@ export default function GlobalChat() {
     </svg>
   );
 
+  // ফিক্স: আগে হ্যাংআপ বাটনে 📴 ইমোজি ছিল, যেটা কিছু ব্রাউজার/ফন্টে ঠিকভাবে
+  // রেন্ডার না হয়ে "OFF" টেক্সট দেখাচ্ছিল — তাই আসল SVG আইকন ব্যবহার করা হলো
   const HangUpIcon = () => (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
       <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-1 1c-1.24 0-2.45-.2-3.57-.57a1 1 0 0 1-.68-.95v-3.5a1 1 0 0 1 .74-.97A17.9 17.9 0 0 1 12 7c1.99 0 3.91.31 5.71.88a1 1 0 0 1 .74.97v3.5a1 1 0 0 1-.68.95 11.9 11.9 0 0 1-3.57.57 1 1 0 0 1-1-1v-3.1A17.9 17.9 0 0 0 12 9z" />
@@ -811,15 +911,6 @@ export default function GlobalChat() {
 
   const formatRecordingTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 
-  const formatMessageTime = (createdAt) => {
-    if (!createdAt) return "";
-    try {
-      if (typeof createdAt === 'number') return new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      if (createdAt.seconds) return new Date(createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      return new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch (err) { return ""; }
-  };
-
   return (
     <div style={{ maxWidth: '700px', margin: '15px auto', fontFamily: 'Arial', height: '85vh', display: 'flex', flexDirection: 'column', background: 'var(--card-bg, #f4f7fc)', border: '1px solid rgba(0, 86, 179, 0.2)', borderRadius: '15px', boxShadow: '0 8px 24px rgba(0, 86, 179, 0.08)', overflow: 'hidden', position: 'relative' }}>
       <style>{`
@@ -833,17 +924,22 @@ export default function GlobalChat() {
         :root[data-theme='dark'] .threedot-dropdown-menu { background: #222; border-color: #444; boxShadow: 0 4px 12px rgba(0,0,0,0.4); }
         .threedot-menu-item { background: none; border: none; padding: 6px 12px; fontSize: 12px; cursor: pointer; text-align: left; width: 100%; font-weight: bold; }
         .threedot-menu-item.reply-btn { color: #28a745; } .threedot-menu-item.edit-btn { color: #0088ff; } .threedot-menu-item.delete-btn { color: #dc3545; } .threedot-menu-item:hover { background: rgba(0,0,0,0.05); }
-        .threedot-action-btn { background: none; border: none; cursor: pointer; fontSize: 18px; color: #444; padding: 4px 8px; opacity: 0.8; }
-        .threedot-action-btn:hover { background: rgba(0,0,0,0.08); opacity: 1; }
-        :root[data-theme='dark'] .threedot-action-btn { color: #fff !important; }
+        
+        .threedot-action-btn { background: none; border: none; cursor: pointer; fontSize: 18px; color: #444444; padding: 4px 8px; opacity: 0.8; transition: all 0.2s; borderRadius: 50%; }
+        .threedot-action-btn:hover { background: rgba(0, 0, 0, 0.08); opacity: 1; }
+        :root[data-theme='dark'] .threedot-action-btn { color: #ffffff !important; opacity: 1 !important; text-shadow: 0 0 2px rgba(255,255,255,0.5); }
+        :root[data-theme='dark'] .threedot-action-btn:hover { background: rgba(255, 255, 255, 0.15); }
+
         @keyframes recordPulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }
         .recording-dot { width: 10px; height: 10px; border-radius: 50%; background: #dc3545; animation: recordPulse 1.2s infinite; display: inline-block; flex-shrink: 0; }
         .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
       `}</style>
       
-      {inCall ? (
+      {inCall && (
         <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column' }}>
           {activeCallType === 'audio' ? (
+            // অডিও কনফারেন্সে ভিডিও ট্র্যাক থাকে না, তাই খালি গ্রিডের বদলে
+            // অংশগ্রহণকারীদের নামসহ একটা সাধারণ "অডিও কল চলছে" ভিউ দেখানো হচ্ছে
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '18px', color: '#fff' }}>
               <div style={{ width: '90px', height: '90px', borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' }}>🎙️</div>
               <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio conference — {Object.keys(remoteStreams).length + 1} in the call</p>
@@ -853,9 +949,12 @@ export default function GlobalChat() {
                   <span key={uid} style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>{usersCache[uid]?.name || 'Student'}</span>
                 ))}
               </div>
+              {/* audio still needs to actually play — kept off-screen since there's nothing to show visually */}
               <video ref={localVideoRef} autoPlay playsInline muted style={{ display: 'none' }} />
               {Object.entries(remoteStreams).map(([uid, stream]) => (
-                <audio key={uid} ref={el => { if (el) { el.srcObject = stream; el.play().catch(() => {}); } }} autoPlay playsInline style={{ display: 'none' }} />
+                <div key={uid} style={{ display: 'none' }}>
+                  <RemoteVideoTile stream={stream} label={usersCache[uid]?.name || 'Student'} />
+                </div>
               ))}
             </div>
           ) : (
@@ -869,30 +968,35 @@ export default function GlobalChat() {
               ))}
             </div>
           )}
-          <button onClick={leaveGlobalCall} title="Leave call" style={{ alignSelf: 'center', margin: '14px 0', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', flexShrink: 0 }}>
+          <button
+            onClick={leaveGlobalCall}
+            title="Leave call"
+            style={{ alignSelf: 'center', margin: '14px 0', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', flexShrink: 0 }}
+          >
             <HangUpIcon />
           </button>
         </div>
-      ) : (
+      )}
+
+      <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
+        <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
+        <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px', textAlign: 'center', flex: 1 }}>Campus Global Room 👥</h3>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {!inCall && !showRejoinBtn && (
+            <>
+              <button onClick={() => initiateGlobalCall('video')} title="Start video conference" style={{ background: '#28a745', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <VideoCallIcon />
+              </button>
+              <button onClick={() => initiateGlobalCall('audio')} title="Start audio conference" style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <AudioCallIcon />
+              </button>
+            </>
+          )}
+          {!inCall && showRejoinBtn && <button onClick={handleRejoinCall} className="rejoin-pulse-btn">🟢 Rejoin Call</button>}
+        </div>
+      </div>
+      {!inCall && (
         <>
-          <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
-            <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
-            <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px', textAlign: 'center', flex: 1 }}>Campus Global Room 👥</h3>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              {!showRejoinBtn && (
-                <>
-                  <button onClick={() => initiateGlobalCall('video')} title="Start video conference" style={{ background: '#28a745', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <VideoCallIcon />
-                  </button>
-                  <button onClick={() => initiateGlobalCall('audio')} title="Start audio conference" style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <AudioCallIcon />
-                  </button>
-                </>
-              )}
-              {showRejoinBtn && <button onClick={handleRejoinCall} className="rejoin-pulse-btn">🟢 Rejoin Call</button>}
-            </div>
-          </div>
-          
           <div style={{ flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', display: 'flex', flexDirection: 'column', gap: '15px' }}>
             {messages.map((getMsg) => {
               if (localDeletedIds.includes(getMsg.id)) return null;
@@ -904,8 +1008,44 @@ export default function GlobalChat() {
               return (
                 <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px', position: 'relative', zIndex: avatarMenuFor === getMsg.id ? 50 : 'auto' }}>
                   <div style={{ position: 'relative', flexShrink: 0 }}>
-                    <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onClick={(e) => { e.stopPropagation(); if (isMe) { navigate(`/profile/${currentUid}`); return; } setAvatarMenuFor(avatarMenuFor === getMsg.id ? null : getMsg.id); }} onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block', cursor: 'pointer' }} />
-                    {senderOnline && <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />}
+                    <img
+                      src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar}
+                      alt=""
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isMe) { navigate(`/profile/${currentUid}`); return; } // নিজের ছবিতে ক্লিক করলে সরাসরি নিজের প্রোফাইলে — কোনো মেনু ছাড়াই
+                        setAvatarMenuFor(avatarMenuFor === getMsg.id ? null : getMsg.id);
+                      }}
+                      onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }}
+                      style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block', cursor: 'pointer' }}
+                    />
+                    {senderOnline && (
+                      <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />
+                    )}
+                    {/* নতুন: অন্য কারো ছবিতে ক্লিক করলে এই মেনু খোলে */}
+                    {avatarMenuFor === getMsg.id && !isMe && (
+                      <div
+                        className="threedot-dropdown-menu"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ top: 'auto', bottom: 'calc(100% + 6px)', left: 0, right: 'auto', zIndex: 999 }}
+                      >
+                        <button
+                          type="button"
+                          className="threedot-menu-item"
+                          style={{ color: '#0056b3' }}
+                          onClick={() => { setAvatarMenuFor(null); navigate(`/profile/${getMsg.senderUid}`); }}
+                        >
+                          👤 View Profile
+                        </button>
+                        <button
+                          type="button"
+                          className="threedot-menu-item reply-btn"
+                          onClick={() => { setAvatarMenuFor(null); navigate(`/chat/${getMsg.senderUid}/${encodeURIComponent(getMsg.senderName || 'Student')}`); }}
+                        >
+                          💬 Message
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
                     <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px' }}>{getMsg.senderName}</small>
@@ -913,11 +1053,17 @@ export default function GlobalChat() {
                       <div style={{ background: getMsg.isDeleted ? '#ebebeb' : (isMe ? '#0056b3' : 'var(--card-bg, #fff)'), color: getMsg.isDeleted ? '#888' : (isMe ? 'white' : 'var(--text-color, #333)'), padding: (getMsg.fileUrl || getMsg.fileType === 'audio') ? '4px' : '10px 14px', borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px', fontSize: '14px', boxShadow: '0 2px 5px rgba(0,0,0,0.04)', border: isMe ? 'none' : '1px solid rgba(0, 86, 179, 0.15)', wordBreak: 'break-word', display: 'flex', flexDirection: 'column', gap: '5px', overflow: 'hidden' }}>
                         {getMsg.isDeleted ? <p style={{ margin: 0, fontStyle: 'italic', fontSize: '13px', padding: '10px 14px' }}>🚫 This message was deleted</p> : (
                           <>
+                            {getMsg.replyTo && (
+                              <div style={{ background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,86,179,0.07)', padding: '6px 10px', borderRadius: '8px', borderLeft: '3px solid #0056b3', fontSize: '11px', color: isMe ? '#ffeb3b' : '#444', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '240px' }}>
+                                {getMsg.replyTo.fileUrl && getMsg.replyTo.fileType !== 'audio' && <img src={getMsg.replyTo.fileUrl} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
+                                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><strong style={{ color: isMe ? '#fff' : '#0056b3', display: 'block', fontSize: '10px', fontStyle: 'normal' }}>↩️ {getMsg.replyTo.senderName}:</strong>{getMsg.replyTo.text || (getMsg.replyTo.fileType === 'audio' ? "🎤 Voice message" : (getMsg.replyTo.fileUrl ? "📷 Photo" : ""))}</div>
+                              </div>
+                            )}
                             {getMsg.fileUrl && getMsg.fileType === 'image' && <img src={getMsg.fileUrl} alt="" style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '350px', objectFit: 'cover', display: 'block' }} />}
                             {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
                             {getMsg.fileUrl && getMsg.fileType === 'audio' && <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />}
                             {getMsg.text && <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{getMsg.text}{getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}</p>}
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{formatMessageTime(getMsg.createdAt)}</div>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{getMsg.createdAt ? new Date(getMsg.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</div>
                           </>
                         )}
                       </div>
@@ -940,8 +1086,20 @@ export default function GlobalChat() {
             })}
             <div ref={messagesEndRef} />
           </div>
-          
           <form onSubmit={handleSendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {replyToMessage && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
+                <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {replyToMessage.fileUrl && replyToMessage.fileType !== 'audio' && <img src={replyToMessage.fileUrl} alt="" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
+                  <div>
+                    <span style={{ fontWeight: 'bold', color: '#0056b3' }}>↩️ Reply to {replyToMessage.senderName}: </span>
+                    <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileType === 'audio' ? "🎤 Voice message" : (replyToMessage.fileUrl ? "📸 Photo" : ""))}</span>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
+              </div>
+            )}
+            
             {selectedFiles.length > 0 && (
               <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
                 {selectedFiles.map((file) => (
@@ -952,21 +1110,46 @@ export default function GlobalChat() {
                 ))}
               </div>
             )}
+
             <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" multiple style={{ display: 'none' }} />
+
             {isRecording ? (
               <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #dc3545 10%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(220, 53, 69, 0.4)' }}>
-                <button type="button" onClick={cancelRecording} title="Cancel recording" style={{ background: 'rgba(220, 53, 69, 0.12)', color: '#dc3545', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>🗑️</button>
+                <button
+                  type="button"
+                  onClick={cancelRecording}
+                  title="Cancel recording"
+                  style={{ background: 'rgba(220, 53, 69, 0.12)', color: '#dc3545', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
+                >
+                  🗑️
+                </button>
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0' }}>
                   <span className="recording-dot" />
                   <canvas ref={recordingCanvasRef} width={120} height={26} style={{ flex: 1 }} />
                   <span className="recording-label">{formatRecordingTime(recordingSeconds)}</span>
                 </div>
-                <button type="button" onClick={stopAndSendRecording} title="Send voice message" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
+                <button
+                  type="button"
+                  onClick={stopAndSendRecording}
+                  title="Send voice message"
+                  style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}
+                >
+                  ➤
+                </button>
               </div>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
                 <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
-                <button type="button" onClick={startRecording} title="Record a voice message" style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}><MicIcon /></button>
+
+                <button
+                  type="button"
+                  onClick={startRecording}
+                  title="Record a voice message"
+                  style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
+                >
+                  <MicIcon />
+                </button>
+
                 <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
                 <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
               </div>

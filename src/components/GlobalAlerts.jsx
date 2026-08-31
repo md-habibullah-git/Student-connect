@@ -4,14 +4,18 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import {
   collection, doc, onSnapshot, query, where, orderBy, limit,
-  updateDoc, setDoc, deleteDoc, getDocs
+  updateDoc, setDoc
 } from 'firebase/firestore';
 import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
+// নতুন: মোবাইল অ্যাপে (Capacitor-এ বিল্ড করলে) ব্যাকগ্রাউন্ড/ফোরগ্রাউন্ড রিলায়েবলি
+// ধরার জন্য। ওয়েবে এটা কিছু করে না (নিচে Capacitor.isNativePlatform() দিয়ে গার্ড
+// করা আছে), তাই ওয়েব ভার্সনের আচরণ অক্ষত থাকছে।
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 
 const GLOBAL_ROOM_ID = "campus_global_conference_room";
 
+// 🔧 NEW: proper phone icons instead of plain ✓ / ✕ characters
 const PhoneAcceptIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
     <path d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.4 21 3 13.6 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.46.57 3.58a1 1 0 0 1-.24 1.01l-2.21 2.2z" />
@@ -31,15 +35,21 @@ export default function GlobalAlerts() {
   const [messageBubbles, setMessageBubbles] = useState([]);
   const [incomingPersonalCall, setIncomingPersonalCall] = useState(null);
   const [incomingGlobalCall, setIncomingGlobalCall] = useState(null);
-  // এই ref আর প্রয়োজন নেই, তবে রেখে দিলাম, ক্ষতি নেই
-  const dismissedGlobalCallRef = useRef(false);
 
+  // নতুন: বর্তমানে চলমান (connected) পার্সোনাল কল — এটা shared session থেকে
+  // আসে, তাই PersonalChat.jsx-এর পেজ খোলা না থাকলেও (অন্য পেজে চলে গেলেও)
+  // এখানে দেখা যায়, আর তখন একটা ছোট "minimized call" bubble দেখানো হয়।
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
     const unsubscribe = subscribeActiveCallSession(setActiveSession);
     return unsubscribe;
   }, []);
 
+  // যে পার্সোনাল কলটা এখন সক্রিয় (session-এ আছে), তার Firestore ডকুমেন্ট
+  // watch করা হচ্ছে — অন্য পাশ কেটে দিলে (status "ended" হলে, বা ডকুমেন্টটাই
+  // মুছে গেলে) এখান থেকেই connection বন্ধ করে session পরিষ্কার করে দেওয়া হয়।
+  // এটা ইচ্ছাকৃতভাবে এখানে রাখা — GlobalAlerts সবসময় মাউন্ট থাকে, তাই
+  // PersonalChat.jsx-এর পেজ বন্ধ থাকা অবস্থাতেও এই cleanup কাজ করবে।
   useEffect(() => {
     if (!activeSession || activeSession.type !== 'personal') return;
     const unsubscribe = onSnapshot(doc(db, "personal-calls", activeSession.chatRoomId), (snap) => {
@@ -57,10 +67,12 @@ export default function GlobalAlerts() {
     return unsubscribe;
   }, [activeSession?.chatRoomId]);
 
+  // 🔧 NEW: the floating message bubble stack can be dragged anywhere on
+  // screen; its position is remembered across visits.
   const [bubblePos, setBubblePos] = useState(() => {
     try {
       const saved = localStorage.getItem('floatingBubblePos');
-      return saved ? JSON.parse(saved) : null;
+      return saved ? JSON.parse(saved) : null; // null = use the default bottom-right corner
     } catch (err) {
       return null;
     }
@@ -77,12 +89,17 @@ export default function GlobalAlerts() {
   const lastKnownGlobalMessageAtRef = useRef(0);
   const isFirstGlobalLoadRef = useRef(true);
 
+  // নতুন: বর্তমানে চলমান গ্লোবাল (গ্রুপ) কল — GlobalChat.jsx-এর পেজ খোলা না
+  // থাকলেও এখানে দেখা যায়, তখন একটা ছোট "Global Room call" bubble দেখানো হয়।
   const [activeGlobalSession, setActiveGlobalSession] = useState(() => getActiveGlobalCallSession());
   useEffect(() => {
     const unsubscribe = subscribeActiveGlobalCallSession(setActiveGlobalSession);
     return unsubscribe;
   }, []);
 
+  // গ্লোবাল কল রুমের ডকুমেন্ট watch করা হচ্ছে — আমাকে participants থেকে সরিয়ে
+  // দেওয়া হলে (বা পুরো রুমটাই মুছে গেলে, অর্থাৎ সবাই বেরিয়ে গেলে) এখান থেকেই
+  // local session বন্ধ করে দেওয়া হয়, GlobalChat.jsx-এর পেজ খোলা না থাকলেও।
   useEffect(() => {
     if (!activeGlobalSession || !currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
@@ -102,170 +119,26 @@ export default function GlobalAlerts() {
     return unsubscribe;
   }, [!!activeGlobalSession, currentUid]);
 
-  // ✅ ৭ দিনের পুরনো গ্লোবাল মেসেজ ডিলিট
-  useEffect(() => {
-    if (!currentUid) return;
-    
-    const autoCleanOldGlobalMessages = async () => {
-      try {
-        const sevenDaysAgoMs = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
-        
-        const oldMessagesQuery = query(
-          collection(db, "global-room-messages"), 
-          where("createdAt", "<", sevenDaysAgoMs),
-          limit(100)
-        );
-        
-        const snapshot = await getDocs(oldMessagesQuery);
-        
-        if (snapshot.empty) return;
-        
-        const deletePromises = snapshot.docs.map(async (docSnapshot) => {
-          try {
-            await deleteDoc(doc(db, "global-room-messages", docSnapshot.id));
-          } catch (deleteError) {
-            console.error(`Error deleting ${docSnapshot.id}:`, deleteError);
-          }
-        });
-        
-        await Promise.all(deletePromises);
-        
-      } catch (error) {
-        console.error("Global Chat Cleanup Error:", error);
-      }
-    };
-    
-    autoCleanOldGlobalMessages();
-    
-    const cleanupInterval = setInterval(() => {
-      autoCleanOldGlobalMessages();
-    }, 24 * 60 * 60 * 1000);
-    
-    return () => clearInterval(cleanupInterval);
-  }, [currentUid]);
 
-  // ✅ ৭ দিনের পুরনো পার্সোনাল মেসেজ ডিলিট
-  useEffect(() => {
-    if (!currentUid) return;
-    
-    const autoCleanOldPersonalMessages = async () => {
-      try {
-        const sevenDaysAgoMs = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
-        
-        const roomsQuery = query(
-          collection(db, "personal-rooms"), 
-          where("participants", "array-contains", currentUid)
-        );
-        
-        const roomsSnapshot = await getDocs(roomsQuery);
-        
-        for (const roomDoc of roomsSnapshot.docs) {
-          const roomId = roomDoc.id;
-          const oldMessagesQuery = query(
-            collection(db, "personal-rooms", roomId, "messages"), 
-            where("createdAt", "<", sevenDaysAgoMs),
-            limit(50)
-          );
-          
-          const messagesSnapshot = await getDocs(oldMessagesQuery);
-          
-          if (messagesSnapshot.empty) continue;
-          
-          const deletePromises = messagesSnapshot.docs.map(async (msgDoc) => {
-            try {
-              await deleteDoc(doc(db, "personal-rooms", roomId, "messages", msgDoc.id));
-            } catch (deleteError) {
-              console.error(`Error deleting ${msgDoc.id}:`, deleteError);
-            }
-          });
-          
-          await Promise.all(deletePromises);
-        }
-        
-      } catch (error) {
-        console.error("Personal Chat Cleanup Error:", error);
-      }
-    };
-    
-    autoCleanOldPersonalMessages();
-    
-    const cleanupInterval = setInterval(() => {
-      autoCleanOldPersonalMessages();
-    }, 24 * 60 * 60 * 1000);
-    
-    return () => clearInterval(cleanupInterval);
-  }, [currentUid]);
-
-  // ✅ ৭ দিনের পুরনো ভয়েস মেসেজ ডিলিট
-  useEffect(() => {
-    if (!currentUid) return;
-    
-    const autoCleanOldVoiceMessages = async () => {
-      try {
-        const sevenDaysAgoMs = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
-        
-        const globalVoiceQuery = query(
-          collection(db, "global-room-messages"), 
-          where("fileType", "==", "audio"),
-          where("createdAt", "<", sevenDaysAgoMs),
-          limit(50)
-        );
-        
-        const globalVoiceSnapshot = await getDocs(globalVoiceQuery);
-        
-        for (const voiceDoc of globalVoiceSnapshot.docs) {
-          await deleteDoc(doc(db, "global-room-messages", voiceDoc.id)).catch(() => {});
-        }
-        
-        const roomsQuery = query(
-          collection(db, "personal-rooms"), 
-          where("participants", "array-contains", currentUid)
-        );
-        
-        const roomsSnapshot = await getDocs(roomsQuery);
-        
-        for (const roomDoc of roomsSnapshot.docs) {
-          const roomId = roomDoc.id;
-          const personalVoiceQuery = query(
-            collection(db, "personal-rooms", roomId, "messages"), 
-            where("fileType", "==", "audio"),
-            where("createdAt", "<", sevenDaysAgoMs),
-            limit(50)
-          );
-          
-          const personalVoiceSnapshot = await getDocs(personalVoiceQuery);
-          
-          for (const voiceDoc of personalVoiceSnapshot.docs) {
-            await deleteDoc(doc(db, "personal-rooms", roomId, "messages", voiceDoc.id)).catch(() => {});
-          }
-        }
-        
-      } catch (error) {
-        console.error("Voice Message Cleanup Error:", error);
-      }
-    };
-    
-    autoCleanOldVoiceMessages();
-    
-    const cleanupInterval = setInterval(() => {
-      autoCleanOldVoiceMessages();
-    }, 24 * 60 * 60 * 1000);
-    
-    return () => clearInterval(cleanupInterval);
-  }, [currentUid]);
-
-  // Presence system
+  // ── Presence: ট্যাব/অ্যাপে সত্যিই তাকিয়ে আছি কিনা তার ওপর ভিত্তি করে online
+  // status — কিন্তু ট্যাব সুইচ করলেই সাথে সাথে অফলাইন দেখাবে না। ৫ মিনিটের
+  // গ্রেস পিরিয়ড আছে: এর মধ্যে ফিরে এলে ডট থেকেই যায়, না ফিরলে অফলাইন হয়ে যায়।
   useEffect(() => {
     if (!currentUid) return;
     const selfRef = doc(db, "users", currentUid);
-    const OFFLINE_GRACE_MS = 5 * 60 * 1000;
-    const HEARTBEAT_MS = 60 * 1000;
+    const OFFLINE_GRACE_MS = 5 * 60 * 1000; // ৫ মিনিট
+    const HEARTBEAT_MS = 60 * 1000; // ৬০ সেকেন্ড — presence.js-এর STALE_THRESHOLD_MS-এর সাথে মিলিয়ে
     let offlineTimer = null;
     let heartbeatInterval = null;
 
     const goOnline = () => {
       if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
       setDoc(selfRef, { online: true, lastSeen: new Date().getTime() }, { merge: true }).catch(() => {});
+      // নতুন: যতক্ষণ সত্যিই visible/active থাকি, ততক্ষণ প্রতি ৬০ সেকেন্ডে
+      // lastSeen রিফ্রেশ হতে থাকে — ট্যাব ক্র্যাশ করলে/হুট করে বন্ধ হয়ে গেলে এই
+      // heartbeat বন্ধ হয়ে যাবে, আর presence.js-এর isUserOnline() কিছুক্ষণ পর
+      // (২ মিনিট) সেটা নিজে থেকেই ধরে ফেলবে — অন্য কোথাও "online: true" লেখাটা
+      // চিরতরে আটকে থাকবে না।
       if (!heartbeatInterval) {
         heartbeatInterval = setInterval(() => {
           updateDoc(selfRef, { lastSeen: new Date().getTime() }).catch(() => {});
@@ -278,7 +151,7 @@ export default function GlobalAlerts() {
     };
 
     const scheduleGoOffline = () => {
-      stopHeartbeat();
+      stopHeartbeat(); // ব্যাকগ্রাউন্ডে থাকা অবস্থায় heartbeat দেওয়ার দরকার নেই
       if (offlineTimer) clearTimeout(offlineTimer);
       offlineTimer = setTimeout(() => {
         updateDoc(selfRef, { online: false }).catch(() => {});
@@ -288,20 +161,24 @@ export default function GlobalAlerts() {
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        scheduleGoOffline();
+        scheduleGoOffline(); // ট্যাব থেকে সরে গেলাম — এখনই অফলাইন না, ৫ মিনিটের কাউন্টডাউন শুরু
       } else {
-        goOnline();
+        goOnline(); // ফিরে এলাম — সাথে সাথে অনলাইন, আগের কাউন্টডাউন বাতিল
       }
     };
 
-    goOnline();
+    goOnline(); // মাউন্ট হওয়ার সময় ট্যাব খোলা মানেই ধরে নেওয়া হচ্ছে visible/active
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
+    // ট্যাব/ব্রাউজার সত্যিই বন্ধ করে দিলে ৫ মিনিট অপেক্ষা না করে সাথে সাথে অফলাইন
     const handleBeforeUnload = () => {
       updateDoc(selfRef, { online: false }).catch(() => {});
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
 
+    // নতুন: Capacitor দিয়ে বানানো নেটিভ মোবাইল অ্যাপে visibilitychange-এর চেয়ে
+    // বেশি নির্ভরযোগ্যভাবে অ্যাপ ব্যাকগ্রাউন্ড/ফোরগ্রাউন্ড ধরার জন্য। ওয়েবে
+    // Capacitor.isNativePlatform() false হবে, তাই এই ব্লকটা ওয়েবে কিছুই করবে না।
     let appStateListenerHandle = null;
     if (Capacitor.isNativePlatform()) {
       CapacitorApp.addListener('appStateChange', ({ isActive }) => {
@@ -322,7 +199,7 @@ export default function GlobalAlerts() {
     };
   }, [currentUid]);
 
-  // Personal message bubbles
+  // ── Floating message bubbles: new personal messages from any room I'm in ──
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-rooms"), where("participants", "array-contains", currentUid));
@@ -366,7 +243,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Global message bubbles
+  // ── Floating message bubble: new global room messages ──
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
@@ -374,7 +251,7 @@ export default function GlobalAlerts() {
       const isFirst = isFirstGlobalLoadRef.current;
       if (!snapshot.empty) {
         const data = snapshot.docs[0].data();
-        const msgTime = typeof data.createdAt === 'number' ? data.createdAt : (data.createdAt?.seconds ? data.createdAt.seconds * 1000 : 0);
+        const msgTime = data.createdAt?.seconds ? data.createdAt.seconds * 1000 : 0;
 
         if (!isFirst && msgTime > lastKnownGlobalMessageAtRef.current && data.senderUid && data.senderUid !== currentUid) {
           const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
@@ -398,7 +275,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Incoming personal call listener
+  // ── Floating call bar: incoming personal calls from any room I'm in ──
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-calls"), where("participants", "array-contains", currentUid));
@@ -415,27 +292,13 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ✅ FIXED: Incoming global call listener
+  // ── Floating call bar: incoming global conference calls ──
   useEffect(() => {
     if (!currentUid) return;
-    
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        const participants = data.participants || [];
-        const alreadyInCall = participants.includes(currentUid);
-        const onGlobalPage = location.pathname === '/chat/global/Global-Chatroom';
-        const hasActiveGlobalSession = !!activeGlobalSession; // কল চলছে কি না
-
-        // ✅ কল চললে বা গ্লোবাল পেজে থাকলে বার দেখাবে না
-        if (
-          data.status === "ringing" &&
-          data.hostId !== currentUid &&
-          !alreadyInCall &&
-          !onGlobalPage &&
-          !hasActiveGlobalSession &&
-          !dismissedGlobalCallRef.current
-        ) {
+        if (data.status === "ringing" && data.hostId !== currentUid) {
           setIncomingGlobalCall({ hostName: data.hostName });
           return;
         }
@@ -443,9 +306,9 @@ export default function GlobalAlerts() {
       setIncomingGlobalCall(null);
     });
     return () => unsubscribe();
-  }, [currentUid, location.pathname, activeGlobalSession]);
+  }, [currentUid]);
 
-  // Clear bubbles when opening relevant chat
+  // ── Clear bubbles for a room the moment the user actually opens that room ──
   useEffect(() => {
     setMessageBubbles((prev) => prev.filter((b) => {
       if (b.isGlobal) return location.pathname !== '/chat/global/Global-Chatroom';
@@ -453,20 +316,22 @@ export default function GlobalAlerts() {
     }));
   }, [location.pathname]);
 
+  // ফিক্স: আগে "আমি যদি এই মুহূর্তে সেই নির্দিষ্ট চ্যাট পেজেই থাকি" তাহলে এই
+  // top bar-টা লুকানো থাকত (কারণ তখন চ্যাটের ভিতরে আলাদা একটা বড় ব্যানার
+  // দেখানো হতো)। এখন সেই আলাদা in-page ব্যানার তুলে দেওয়া হয়েছে — এই একটাই
+  // top bar এখন সব জায়গা থেকে (এমনকি সেই চ্যাটের ভিতর থেকেও) দেখা যাবে।
   const activeCall = incomingPersonalCall
     ? { type: 'personal', ...incomingPersonalCall }
     : (incomingGlobalCall ? { type: 'global', ...incomingGlobalCall } : null);
 
+  // মিনিমাইজড কল bubble — শুধু তখনই দেখানো হয় যখন আমি ওই চ্যাটের পেজে নেই
+  // (ওই পেজেই থাকলে PersonalChat.jsx নিজেই ফুলস্ক্রিন কল UI দেখাচ্ছে)
   const showMinimizedCallBubble = activeSession
     && activeSession.type === 'personal'
     && !location.pathname.startsWith(`/chat/${activeSession.otherUid}/`);
 
   const handleReceive = () => {
     if (!activeCall) return;
-    
-    setIncomingPersonalCall(null);
-    setIncomingGlobalCall(null);
-    
     if (activeCall.type === 'personal') {
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
@@ -474,16 +339,17 @@ export default function GlobalAlerts() {
     }
   };
 
+  // 🔧 NEW: declining a personal call reloads the page — after "hangup after
+  // talking" (handled inside PersonalChat.jsx's endCall) or "decline before
+  // ever answering" (here), the app always resumes from a clean state.
   const handleDecline = async () => {
     if (!activeCall) return;
-    
     if (activeCall.type === 'personal') {
-      try { 
-        await updateDoc(doc(db, "personal-calls", activeCall.roomId), { status: "ended" }); 
-      } catch (err) { /* best effort */ }
-      
-      setIncomingPersonalCall(null);
+      try { await updateDoc(doc(db, "personal-calls", activeCall.roomId), { status: "ended" }); } catch (err) { /* best effort */ }
+      window.location.reload();
     } else {
+      // matches the existing "Ignore" behavior inside GlobalChat.jsx — the
+      // conference keeps running for everyone else, so only dismiss locally.
       setIncomingGlobalCall(null);
     }
   };
@@ -494,12 +360,14 @@ export default function GlobalAlerts() {
   };
 
   const handleBubbleClick = (bubble) => {
-    if (dragMovedRef.current) { dragMovedRef.current = false; return; }
+    if (dragMovedRef.current) { dragMovedRef.current = false; return; } // ignore click right after a drag
     if (bubble.isGlobal) navigate('/chat/global/Global-Chatroom');
     else navigate(`/chat/${bubble.otherUid}/${encodeURIComponent(bubble.senderName || 'Student')}`);
     setMessageBubbles((prev) => prev.filter((b) => b !== bubble));
   };
 
+  // 🔧 NEW: drag-to-reposition for the bubble stack (pointer events cover
+  // mouse + touch in one handler set).
   const handleDragStart = (e) => {
     draggingRef.current = true;
     dragMovedRef.current = false;
@@ -539,6 +407,9 @@ export default function GlobalAlerts() {
 
   return (
     <>
+      {/* thin floating call bar — appears at the very top, above everything,
+          from anywhere in the app (including inside the relevant chat itself)
+          whenever someone is calling and I haven't answered yet. */}
       {activeCall && (
         <div style={{
           position: 'fixed', top: '8px', left: '50%', transform: 'translateX(-50%)',
@@ -573,6 +444,9 @@ export default function GlobalAlerts() {
         </div>
       )}
 
+      {/* নতুন: চলমান পার্সোনাল কল থেকে অন্য পেজে চলে গেলে এখানে ছোট একটা
+          "call in progress" bubble দেখায় — ট্যাপ করলে সরাসরি কলে ফিরে যাওয়া যায়।
+          কলটা আসলেই ব্যাকগ্রাউন্ডে চলতে থাকে (callSession.js দেখুন)। */}
       {showMinimizedCallBubble && (
         <button
           onClick={handleMinimizedCallClick}
@@ -595,6 +469,8 @@ export default function GlobalAlerts() {
         </button>
       )}
 
+      {/* নতুন: চলমান গ্লোবাল (গ্রুপ) কল থেকে অন্য পেজে গেলে এখানে ছোট একটা
+          "Global Room call" bubble দেখায় — ট্যাপ করলে সরাসরি কনফারেন্সে ফিরে যাওয়া যায় */}
       {activeGlobalSession && location.pathname !== '/chat/global/Global-Chatroom' && (
         <button
           onClick={() => navigate('/chat/global/Global-Chatroom')}
@@ -615,6 +491,8 @@ export default function GlobalAlerts() {
         </button>
       )}
 
+      {/* 🔧 UPDATED: floating message bubble stack is now draggable anywhere
+          on screen — press and drag the stack, its new spot is remembered. */}
       {messageBubbles.length > 0 && (
         <div style={bubbleContainerStyle}>
           {messageBubbles.map((bubble) => (

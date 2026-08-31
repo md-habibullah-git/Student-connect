@@ -1,77 +1,60 @@
-// GlobalChat.jsx - শুধু এই দুটি অংশ পরিবর্তন করুন
+// src/callSession.js
+//
+// একটা ছোট shared module — সক্রিয় (active/connected) পার্সোনাল কলের
+// RTCPeerConnection ও MediaStream এই module-এ ধরে রাখা হয়। এতে
+// PersonalChat.jsx থেকে অন্য পেজে চলে গেলেও (Back চাপলে, অন্য চ্যাট খুললে
+// ইত্যাদি) কলটা বন্ধ হয়ে যায় না — কারণ এই অবজেক্টগুলো React কম্পোনেন্টের
+// lifecycle-এর বাইরে থাকে। GlobalAlerts.jsx (যেটা পুরো অ্যাপে একবারই মাউন্ট
+// হয়) এখান থেকে state পড়ে সব জায়গায় একটা ছোট "call in progress" bubble
+// দেখাতে পারে, এবং কল সত্যিই শেষ হলে (remote hangup বা status "ended")
+// এই session-টাও পরিষ্কার করে দেয়।
 
-// ১. connectToPeer ফাংশনের শুরুতে log যোগ করুন
-const connectToPeer = async (peerUid) => {
-  console.log('🚀🚀🚀 connectToPeer CALLED for:', peerUid);
-  console.log('🚀 My UID:', currentUid);
-  console.log('🚀 peerUid === currentUid?', peerUid === currentUid);
-  
-  const s = ensureSession();
-  
-  // ⚠️ এই check টা বাদ দিন - কারণ knownPeers সমস্যা করছে
-  // if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
-  
-  if (!peerUid || peerUid === currentUid) {
-    console.log('❌ Invalid peerUid');
-    return;
-  }
-  
-  if (s.peerConnections[peerUid]) {
-    console.log('⚠️ Already connected to:', peerUid);
-    return;
-  }
-  
-  console.log('✅ Proceeding with connection to:', peerUid);
-  
-  // বাকি code আগের মতোই...
-};
+// --- পার্সোনাল (1:1) কল ---
+let session = null;
+const listeners = new Set();
 
-// ২. participants sync useEffect পরিবর্তন করুন
-useEffect(() => {
-  if (!inCall) {
-    console.log('❌ Not in call, skipping');
-    return;
-  }
-  
-  console.log('✅ In call, starting sync');
-  const s = ensureSession();
-  const callRef = doc(db, "global-calls", globalRoomId);
-  
-  const unsubscribe = onSnapshot(callRef, (snap) => {
-    if (!snap.exists()) {
-      console.log('❌ No call document');
-      return;
-    }
-    
-    const data = snap.data();
-    const participants = data.participants || [];
-    console.log('📋 Call data:', JSON.stringify(data));
-    console.log('👥 ALL participants:', participants);
-    console.log('👤 My UID:', currentUid);
-    
-    const otherParticipants = participants.filter(uid => uid !== currentUid);
-    console.log('👥 Other participants:', otherParticipants);
-    
-    // ✅ প্রতিটা other participant-এর জন্য connectToPeer call করুন
-    // knownPeers check বাদ দিন - সবসময় connect করার চেষ্টা করুন
-    otherParticipants.forEach(uid => {
-      if (!s.peerConnections[uid]) {
-        console.log('🔗 Connecting to:', uid);
-        connectToPeer(uid);
-      } else {
-        console.log('✅ Already connected to:', uid);
-      }
-    });
-    
-    // Cleanup - চলে যাওয়া peer-দের disconnect করুন
-    Object.keys(s.peerConnections).forEach(uid => {
-      if (!otherParticipants.includes(uid)) {
-        console.log('🔌 Disconnecting:', uid);
-        disconnectFromPeer(uid);
-      }
-    });
-  });
-  
-  return () => unsubscribe();
-}, [inCall, currentUid]);
+export function getActiveCallSession() {
+  return session;
+}
 
+export function setActiveCallSession(next) {
+  session = next;
+  listeners.forEach((fn) => fn(session));
+}
+
+export function clearActiveCallSession() {
+  session = null;
+  listeners.forEach((fn) => fn(null));
+}
+
+export function subscribeActiveCallSession(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+// --- গ্লোবাল (গ্রুপ) কল ---
+// এখানে একটা mutable অবজেক্ট রাখা হয় যার ভেতরে সব peer connection/stream
+// থাকে — GlobalChat.jsx সরাসরি এই অবজেক্টের ভেতরের maps ব্যবহার করে (নিজের
+// আলাদা local ref না রেখে), যাতে পেজ আনমাউন্ট/রিমাউন্ট হলেও একই অবজেক্ট
+// রেফারেন্স ধরে রাখা যায় এবং কল চলতেই থাকে।
+let globalSession = null;
+const globalListeners = new Set();
+
+export function getActiveGlobalCallSession() {
+  return globalSession;
+}
+
+export function setActiveGlobalCallSession(next) {
+  globalSession = next;
+  globalListeners.forEach((fn) => fn(globalSession));
+}
+
+export function clearActiveGlobalCallSession() {
+  globalSession = null;
+  globalListeners.forEach((fn) => fn(null));
+}
+
+export function subscribeActiveGlobalCallSession(fn) {
+  globalListeners.add(fn);
+  return () => globalListeners.delete(fn);
+}
