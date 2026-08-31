@@ -686,6 +686,9 @@ export default function GlobalChat() {
       const pc = new RTCPeerConnection(rtcConfiguration);
       s.peerConnections[peerUid] = pc;
 
+      // NEW: ICE candidate buffer — remote description set হওয়ার আগে candidates জমা থাকবে
+      const pendingCandidates = [];
+
       const stream = await getLocalStream(s.callType);
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
@@ -696,7 +699,6 @@ export default function GlobalChat() {
       pc.addEventListener('track', (event) => {
         console.log(`[GlobalChat] Track received from ${peerUid}:`, event.track.kind);
         event.streams[0].getTracks().forEach(track => {
-          console.log(`[GlobalChat] Adding ${track.kind} track to remote stream`);
           remoteStream.addTrack(track);
         });
         setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
@@ -704,7 +706,6 @@ export default function GlobalChat() {
 
       pc.addEventListener('icecandidate', (event) => {
         if (event.candidate) {
-          console.log(`[GlobalChat] ICE candidate from ${peerUid}`);
           addDoc(myCandidatesRef, event.candidate.toJSON());
         }
       });
@@ -716,22 +717,39 @@ export default function GlobalChat() {
         }
       });
 
+      // NEW: candidates buffer করে রাখা, পরে add করা হবে
+      const addPendingCandidates = async () => {
+        while (pendingCandidates.length > 0) {
+          const candidate = pendingCandidates.shift();
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log(`[GlobalChat] Added buffered ICE candidate from ${peerUid}`);
+          } catch (err) {
+            console.error(`[GlobalChat] Error adding buffered ICE candidate:`, err);
+          }
+        }
+      };
+
       const unsubscribers = [
         onSnapshot(theirCandidatesRef, (snapshot) => {
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'added') {
-              console.log(`[GlobalChat] Adding ICE candidate from ${peerUid}`);
-              pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch((err) => {
-                console.error(`[GlobalChat] Error adding ICE candidate:`, err);
-              });
+              const candidateData = change.doc.data();
+              if (pc.remoteDescription) {
+                pc.addIceCandidate(new RTCIceCandidate(candidateData)).catch((err) => {
+                  console.error(`[GlobalChat] Error adding ICE candidate:`, err);
+                });
+              } else {
+                // Remote description এখনো set হয়নি — buffer করে রাখুন
+                pendingCandidates.push(candidateData);
+                console.log(`[GlobalChat] Buffered ICE candidate (remote description not set yet)`);
+              }
             }
           });
         })
       ];
 
       if (isInitiator) {
-        console.log(`[GlobalChat] I am initiator for ${peerUid}`);
-        
         const [staleA, staleB] = await Promise.all([
           getDocs(collection(connRef, "candidatesA")),
           getDocs(collection(connRef, "candidatesB"))
@@ -740,31 +758,28 @@ export default function GlobalChat() {
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        console.log(`[GlobalChat] Setting offer for ${peerUid}`);
         await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } }, { merge: true });
 
         unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
-          console.log(`[GlobalChat] Connection doc update (initiator):`, data ? Object.keys(data) : 'no data');
           if (data?.answer && !pc.currentRemoteDescription) {
             console.log(`[GlobalChat] Setting remote description (answer) from ${peerUid}`);
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            // NEW: Remote description set হয়েছে, এখন buffered candidates add করুন
+            await addPendingCandidates();
           }
         }));
       } else {
-        console.log(`[GlobalChat] I am non-initiator for ${peerUid}, waiting for offer...`);
-        
         unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
-          console.log(`[GlobalChat] Connection doc update (non-initiator):`, data ? Object.keys(data) : 'no data');
-          
           if (data?.offer && !pc.currentRemoteDescription && !pc.localDescription) {
             console.log(`[GlobalChat] Got offer from ${peerUid}, creating answer...`);
             try {
               await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+              // NEW: Remote description set হয়েছে, এখন buffered candidates add করুন
+              await addPendingCandidates();
               const answer = await pc.createAnswer();
               await pc.setLocalDescription(answer);
-              console.log(`[GlobalChat] Setting answer for ${peerUid}`);
               await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
             } catch (err) {
               console.error(`[GlobalChat] Error creating answer:`, err);
