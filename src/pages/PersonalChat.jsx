@@ -1,4 +1,4 @@
-// File Name: src/components/PersonalChat.jsx
+// File Name: src/pages/PersonalChat.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';

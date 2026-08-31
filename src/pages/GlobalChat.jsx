@@ -24,25 +24,24 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// RemoteVideoTile - ভিডিও ট্র্যাক সঠিকভাবে handle করবে
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
   const [hasVideo, setHasVideo] = useState(false);
-
+  
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
       videoRef.current.play().catch(() => {});
-
+      
       const checkVideo = () => {
         const videoTracks = stream.getVideoTracks();
         setHasVideo(videoTracks.length > 0 && videoTracks[0].enabled);
       };
-
+      
       checkVideo();
       stream.addEventListener('addtrack', checkVideo);
       stream.addEventListener('removetrack', checkVideo);
-
+      
       return () => {
         stream.removeEventListener('addtrack', checkVideo);
         stream.removeEventListener('removetrack', checkVideo);
@@ -50,7 +49,7 @@ function RemoteVideoTile({ stream, label }) {
       };
     }
   }, [stream]);
-
+  
   return (
     <div style={{ position: 'relative', background: hasVideo ? '#111' : 'linear-gradient(135deg, #667eea, #764ba2)', borderRadius: '8px', overflow: 'hidden', width: '100%', height: '100%', minHeight: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <video 
@@ -347,7 +346,7 @@ export default function GlobalChat() {
           createdAt: new Date().getTime(), isEdited: false, isDeleted: false, replyTo: replyData
         });
         setNewMessage("");
-      } catch (error) {}
+      } catch (error) { console.error("Message send error:", error); }
     }
     await Promise.all(selectedFiles.map(async (fileData) => {
       try {
@@ -428,7 +427,7 @@ export default function GlobalChat() {
       });
       setReplyToMessage(null);
       capturedReplyRef.current = null;
-    } catch (error) {}
+    } catch (error) { console.error("Voice send error:", error); }
   };
 
   const drawRecordingBars = () => {
@@ -533,7 +532,6 @@ export default function GlobalChat() {
     }
   };
 
-  // getLocalStream - callType অনুযায়ী camera চালু হবে
   const getLocalStream = async (callType = 'video') => {
     const s = ensureSession();
     if (s.localStream) return s.localStream;
@@ -576,7 +574,6 @@ export default function GlobalChat() {
     }
   }, [inCall]);
 
-  // WebRTC connection - signaling data global-call-signals collection-এ
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
     if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
@@ -708,7 +705,6 @@ export default function GlobalChat() {
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
-      localStorage.removeItem('global_call_dismissed'); // flag clear
       await getLocalStream(callType);
       await setDoc(doc(db, "global-calls", globalRoomId), { 
         status: "ringing", 
@@ -729,7 +725,6 @@ export default function GlobalChat() {
 
   const handleRejoinCall = async () => {
     try {
-      localStorage.removeItem('global_call_dismissed'); // flag clear
       const callDocRef = doc(db, "global-calls", globalRoomId);
       const snapshot = await getDoc(callDocRef);
       if (snapshot.exists()) {
@@ -782,7 +777,6 @@ export default function GlobalChat() {
     setActiveCallType('video');
     setRemoteStreams({});
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
-    localStorage.setItem('global_call_dismissed', 'true'); // flag set
   };
 
   const toggleMenu = (e, msgId) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
