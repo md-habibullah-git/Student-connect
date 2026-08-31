@@ -83,12 +83,6 @@ export default function GlobalAlerts() {
   }, []);
 
   useEffect(() => {
-    if (!activeGlobalSession) {
-      dismissedGlobalCallRef.current = false;
-    }
-  }, [activeGlobalSession]);
-
-  useEffect(() => {
     if (!activeGlobalSession || !currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
       const data = snap.data();
@@ -420,15 +414,22 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ✅ FIXED: Incoming global call listener - গ্লোবাল চ্যাট পেজে থাকলে বার দেখাবে না
+  // ✅ FIXED: Incoming global call listener
   useEffect(() => {
     if (!currentUid) return;
-    const onGlobalPage = location.pathname === '/chat/global/Global-Chatroom';
+    
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        // ✅ শুধুমাত্র global chat page-এ না থাকলে incoming call bar দেখাবে
-        if (data.status === "ringing" && data.hostId !== currentUid && !onGlobalPage && !dismissedGlobalCallRef.current) {
+        const participants = data.participants || [];
+        
+        // ✅ যদি ইউজার ইতিমধ্যে participants-এ থাকে তাহলে বার দেখাবে না
+        const alreadyInCall = participants.includes(currentUid);
+        
+        // ✅ গ্লোবাল চ্যাট পেজে থাকলে বার দেখাবে না
+        const onGlobalPage = location.pathname === '/chat/global/Global-Chatroom';
+        
+        if (data.status === "ringing" && data.hostId !== currentUid && !alreadyInCall && !onGlobalPage && !dismissedGlobalCallRef.current) {
           setIncomingGlobalCall({ hostName: data.hostName });
           return;
         }
