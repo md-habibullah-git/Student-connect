@@ -422,13 +422,10 @@ export default function GlobalAlerts() {
       if (snap.exists()) {
         const data = snap.data();
         const participants = data.participants || [];
-        
-        // ✅ যদি ইউজার ইতিমধ্যে participants-এ থাকে তাহলে বার দেখাবে না
         const alreadyInCall = participants.includes(currentUid);
-        
-        // ✅ গ্লোবাল চ্যাট পেজে থাকলে বার দেখাবে না
         const onGlobalPage = location.pathname === '/chat/global/Global-Chatroom';
         
+        // ✅ status "accepted" হলে বার দেখাবে না
         if (data.status === "ringing" && data.hostId !== currentUid && !alreadyInCall && !onGlobalPage && !dismissedGlobalCallRef.current) {
           setIncomingGlobalCall({ hostName: data.hostName });
           return;
