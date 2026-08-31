@@ -611,7 +611,6 @@ export default function GlobalChat() {
     }
   }, [inCall]);
 
-  // PersonalChat-এর মতো simple connection logic
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
     if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
@@ -760,8 +759,22 @@ export default function GlobalChat() {
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
+      // পুরনো call data cleanup
+      const callRef = doc(db, "global-calls", globalRoomId);
+      const oldConnections = await getDocs(collection(callRef, "connections"));
+      await Promise.all(oldConnections.docs.map(d => deleteDoc(d.ref)));
+      await deleteDoc(callRef).catch(() => {});
+      
+      // নতুন call শুরু
       await getLocalStream(callType);
-      await setDoc(doc(db, "global-calls", globalRoomId), { status: "ringing", callType, hostName: currentUserName, hostId: currentUid, roomId: globalRoomId, participants: [currentUid] });
+      await setDoc(callRef, { 
+        status: "ringing", 
+        callType, 
+        hostName: currentUserName, 
+        hostId: currentUid, 
+        roomId: globalRoomId, 
+        participants: [currentUid] 
+      });
       setActiveCallType(callType);
       setInCall(true);
       setActiveGlobalCallSession(sessionRef.current);
