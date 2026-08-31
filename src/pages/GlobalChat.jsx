@@ -24,7 +24,6 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// RemoteVideoTile - remote participant-এর video দেখানোর জন্য
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
   
@@ -46,7 +45,6 @@ function RemoteVideoTile({ stream, label }) {
   );
 }
 
-// VoiceMessageBubble - voice message player
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -549,16 +547,18 @@ export default function GlobalChat() {
     }
   }, [inCall]);
 
-  // ✅ PersonalChat-এর মতোই - সরাসরি connection তৈরি
+  // ✅ WebRTC connection - signaling data এখন global-call-signals collection-এ
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
     if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
 
     const isInitiator = currentUid < peerUid;
     const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
-    const connRef = doc(db, "global-calls", globalRoomId, "connections", pairKey);
-    const myCandidatesRef = collection(connRef, isInitiator ? "candidatesA" : "candidatesB");
-    const theirCandidatesRef = collection(connRef, isInitiator ? "candidatesB" : "candidatesA");
+    
+    // ✅ আলাদা top-level collection ব্যবহার করা হয়েছে
+    const signalRef = doc(db, "global-call-signals", pairKey);
+    const myCandidatesRef = collection(signalRef, isInitiator ? "candidatesA" : "candidatesB");
+    const theirCandidatesRef = collection(signalRef, isInitiator ? "candidatesB" : "candidatesA");
 
     try {
       const pc = new RTCPeerConnection(rtcConfiguration);
@@ -592,29 +592,29 @@ export default function GlobalChat() {
 
       if (isInitiator) {
         const [staleA, staleB] = await Promise.all([
-          getDocs(collection(connRef, "candidatesA")),
-          getDocs(collection(connRef, "candidatesB"))
+          getDocs(collection(signalRef, "candidatesA")),
+          getDocs(collection(signalRef, "candidatesB"))
         ]);
         await Promise.all([...staleA.docs, ...staleB.docs].map(d => deleteDoc(d.ref)));
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } });
+        await setDoc(signalRef, { offer: { type: offer.type, sdp: offer.sdp } });
 
-        unsubscribers.push(onSnapshot(connRef, async (snap) => {
+        unsubscribers.push(onSnapshot(signalRef, async (snap) => {
           const data = snap.data();
           if (data?.answer && !pc.currentRemoteDescription) {
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
           }
         }));
       } else {
-        unsubscribers.push(onSnapshot(connRef, async (snap) => {
+        unsubscribers.push(onSnapshot(signalRef, async (snap) => {
           const data = snap.data();
           if (data?.offer && !pc.currentRemoteDescription) {
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
+            await updateDoc(signalRef, { answer: { type: answer.type, sdp: answer.sdp } });
           }
         }));
       }
@@ -678,6 +678,7 @@ export default function GlobalChat() {
   const initiateGlobalCall = async (callType = 'video') => {
     try {
       await getLocalStream(callType);
+      // ✅ call document তৈরি করুন - ডিলিট হবে না
       await setDoc(doc(db, "global-calls", globalRoomId), { 
         status: "ringing", 
         callType, 
@@ -686,7 +687,7 @@ export default function GlobalChat() {
         roomId: globalRoomId, 
         participants: [currentUid],
         createdAt: new Date().getTime()
-      }, { merge: true });
+      });
       setActiveCallType(callType);
       setInCall(true);
       setActiveGlobalCallSession(sessionRef.current);
