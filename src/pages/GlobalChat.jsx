@@ -250,6 +250,25 @@ export default function GlobalChat() {
   const currentUserName = auth.currentUser?.displayName || "Campus Student";
   const globalRoomId = "campus_global_conference_room";
 
+  // Cleanup function — connections subcollection completely delete করে
+  const cleanupAllConnections = async () => {
+    try {
+      const callRef = doc(db, "global-calls", globalRoomId);
+      const oldConnections = await getDocs(collection(callRef, "connections"));
+      await Promise.all(oldConnections.docs.map(async (d) => {
+        const [subA, subB] = await Promise.all([
+          getDocs(collection(d.ref, "candidatesA")),
+          getDocs(collection(d.ref, "candidatesB"))
+        ]);
+        await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
+        await deleteDoc(d.ref);
+      }));
+      await deleteDoc(callRef).catch(() => {});
+    } catch (err) {
+      console.error("Cleanup error:", err);
+    }
+  };
+
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
@@ -260,6 +279,8 @@ export default function GlobalChat() {
       } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
     };
     autoCleanOldGlobalMessages();
+    // Page load-এ সব পুরনো connections clean করুন
+    cleanupAllConnections();
   }, []);
 
   useEffect(() => {
@@ -730,8 +751,11 @@ export default function GlobalChat() {
       const snap = await getDoc(callRef);
       if (snap.exists()) {
         const updated = (snap.data().participants || []).filter(id => id !== peerUid);
-        if (updated.length === 0) await deleteDoc(callRef);
-        else await updateDoc(callRef, { participants: updated });
+        if (updated.length === 0) {
+          await cleanupAllConnections();
+        } else {
+          await updateDoc(callRef, { participants: updated });
+        }
       }
     } catch (err) {}
   };
@@ -758,18 +782,8 @@ export default function GlobalChat() {
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
-      // Complete cleanup — সব পুরনো data মুছুন
-      const callRef = doc(db, "global-calls", globalRoomId);
-      const oldConnections = await getDocs(collection(callRef, "connections"));
-      await Promise.all(oldConnections.docs.map(async (d) => {
-        const [subA, subB] = await Promise.all([
-          getDocs(collection(d.ref, "candidatesA")),
-          getDocs(collection(d.ref, "candidatesB"))
-        ]);
-        await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
-        await deleteDoc(d.ref);
-      }));
-      await deleteDoc(callRef).catch(() => {});
+      // আগে সব পুরনো connections clean করুন
+      await cleanupAllConnections();
       
       // Session reset
       sessionRef.current = null;
@@ -778,7 +792,7 @@ export default function GlobalChat() {
       
       // নতুন call শুরু
       await getLocalStream(callType);
-      await setDoc(callRef, { 
+      await setDoc(doc(db, "global-calls", globalRoomId), { 
         status: "ringing", 
         callType, 
         hostName: currentUserName, 
@@ -836,17 +850,8 @@ export default function GlobalChat() {
       if (snapshot.exists()) {
         const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
         if (updatedParts.length === 0) {
-          // সবাই চলে গেলে সব data মুছুন
-          const oldConnections = await getDocs(collection(callDocRef, "connections"));
-          await Promise.all(oldConnections.docs.map(async (d) => {
-            const [subA, subB] = await Promise.all([
-              getDocs(collection(d.ref, "candidatesA")),
-              getDocs(collection(d.ref, "candidatesB"))
-            ]);
-            await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
-            await deleteDoc(d.ref);
-          }));
-          await deleteDoc(callDocRef).catch(() => {});
+          // সবাই চলে গেলে সব connections delete করুন
+          await cleanupAllConnections();
         } else {
           await updateDoc(callDocRef, { participants: updatedParts });
         }
