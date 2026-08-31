@@ -319,6 +319,8 @@ export default function GlobalChat() {
             deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
             setShowRejoinBtn(false);
             setInCall(false);
+            // Refresh — সবাই বের হয়ে গেলে page reload হবে
+            window.location.reload();
             return;
           }
           setShowRejoinBtn(true);
@@ -863,6 +865,8 @@ export default function GlobalChat() {
     setActiveCallType('video');
     setRemoteStreams({});
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    // Refresh — call শেষে page reload হবে
+    window.location.reload();
   };
 
   const toggleMenu = (e, msgId) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
