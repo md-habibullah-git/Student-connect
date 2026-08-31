@@ -250,30 +250,6 @@ export default function GlobalChat() {
   const currentUserName = auth.currentUser?.displayName || "Campus Student";
   const globalRoomId = "campus_global_conference_room";
 
-  // Cleanup function — শুধু connections subcollection delete করে, মূল document রাখে
-  const cleanupConnectionsOnly = async () => {
-    try {
-      const callRef = doc(db, "global-calls", globalRoomId);
-      const oldConnections = await getDocs(collection(callRef, "connections"));
-      await Promise.all(oldConnections.docs.map(async (d) => {
-        const [subA, subB] = await Promise.all([
-          getDocs(collection(d.ref, "candidatesA")),
-          getDocs(collection(d.ref, "candidatesB"))
-        ]);
-        await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
-        await deleteDoc(d.ref);
-      }));
-      // মূল document reset করুন কিন্তু delete করবেন না
-      await setDoc(callRef, { 
-        status: "idle", 
-        participants: [], 
-        roomId: globalRoomId 
-      }, { merge: true });
-    } catch (err) {
-      console.error("Cleanup error:", err);
-    }
-  };
-
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
@@ -284,7 +260,6 @@ export default function GlobalChat() {
       } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
     };
     autoCleanOldGlobalMessages();
-    cleanupConnectionsOnly();
   }, []);
 
   useEffect(() => {
@@ -341,7 +316,7 @@ export default function GlobalChat() {
         if (callData.status === "ringing" || callData.status === "active") {
           const participants = callData.participants || [];
           if (participants.length === 0) {
-            cleanupConnectionsOnly();
+            deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
             setShowRejoinBtn(false);
             setInCall(false);
             return;
@@ -755,11 +730,8 @@ export default function GlobalChat() {
       const snap = await getDoc(callRef);
       if (snap.exists()) {
         const updated = (snap.data().participants || []).filter(id => id !== peerUid);
-        if (updated.length === 0) {
-          await cleanupConnectionsOnly();
-        } else {
-          await updateDoc(callRef, { participants: updated });
-        }
+        if (updated.length === 0) await deleteDoc(callRef);
+        else await updateDoc(callRef, { participants: updated });
       }
     } catch (err) {}
   };
@@ -786,8 +758,18 @@ export default function GlobalChat() {
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
-      // আগে পুরনো connections clean করুন
-      await cleanupConnectionsOnly();
+      // Complete cleanup — সব পুরনো data মুছুন
+      const callRef = doc(db, "global-calls", globalRoomId);
+      const oldConnections = await getDocs(collection(callRef, "connections"));
+      await Promise.all(oldConnections.docs.map(async (d) => {
+        const [subA, subB] = await Promise.all([
+          getDocs(collection(d.ref, "candidatesA")),
+          getDocs(collection(d.ref, "candidatesB"))
+        ]);
+        await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
+        await deleteDoc(d.ref);
+      }));
+      await deleteDoc(callRef).catch(() => {});
       
       // Session reset
       sessionRef.current = null;
@@ -796,7 +778,7 @@ export default function GlobalChat() {
       
       // নতুন call শুরু
       await getLocalStream(callType);
-      await setDoc(doc(db, "global-calls", globalRoomId), { 
+      await setDoc(callRef, { 
         status: "ringing", 
         callType, 
         hostName: currentUserName, 
@@ -840,11 +822,8 @@ export default function GlobalChat() {
       getDoc(callDocRef).then((snapshot) => {
         if (snapshot.exists()) {
           const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
-          if (updatedParts.length === 0) {
-            cleanupConnectionsOnly();
-          } else {
-            updateDoc(callDocRef, { participants: updatedParts }).catch(() => {});
-          }
+          if (updatedParts.length === 0) deleteDoc(callDocRef).catch(() => {});
+          else updateDoc(callDocRef, { participants: updatedParts }).catch(() => {});
         }
       }).catch(() => {});
     } catch (err) {}
@@ -857,8 +836,17 @@ export default function GlobalChat() {
       if (snapshot.exists()) {
         const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
         if (updatedParts.length === 0) {
-          // সবাই চলে গেলে শুধু connections delete করুন
-          await cleanupConnectionsOnly();
+          // সবাই চলে গেলে সব data মুছুন
+          const oldConnections = await getDocs(collection(callDocRef, "connections"));
+          await Promise.all(oldConnections.docs.map(async (d) => {
+            const [subA, subB] = await Promise.all([
+              getDocs(collection(d.ref, "candidatesA")),
+              getDocs(collection(d.ref, "candidatesB"))
+            ]);
+            await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
+            await deleteDoc(d.ref);
+          }));
+          await deleteDoc(callDocRef).catch(() => {});
         } else {
           await updateDoc(callDocRef, { participants: updatedParts });
         }
