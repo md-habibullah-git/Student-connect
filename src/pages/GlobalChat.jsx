@@ -208,7 +208,6 @@ export default function GlobalChat() {
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [avatarMenuFor, setAvatarMenuFor] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
-  const [callHistoryDisplay, setCallHistoryDisplay] = useState(null);
 
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -264,14 +263,6 @@ export default function GlobalChat() {
     if (!timestamp) return '';
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
-
-  // Call history localStorage থেকে load করুন
-  useEffect(() => {
-    const saved = localStorage.getItem('globalCallHistory');
-    if (saved) {
-      setCallHistoryDisplay(JSON.parse(saved));
-    }
-  }, []);
 
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
@@ -818,7 +809,6 @@ export default function GlobalChat() {
       clearActiveGlobalCallSession();
       setRemoteStreams({});
       localStorage.removeItem('globalCallHistory');
-      setCallHistoryDisplay(null);
       
       await getLocalStream(callType);
       const startedAt = new Date().getTime();
@@ -895,9 +885,24 @@ export default function GlobalChat() {
             if (data.callStartedAt) {
               callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
             }
-            // localStorage-এ save করুন যাতে reload-এও থাকে
-            localStorage.setItem('globalCallHistory', JSON.stringify(callHistory));
-            await setDoc(callDocRef, { callHistory: callHistory, participants: [] }, { merge: true });
+            // Call summary message হিসেবে chat-এ add করুন
+            const callSummaryText = `📞 Call ended\n${Object.entries(callHistory)
+              .filter(([key]) => key !== 'totalDuration')
+              .map(([key, info]) => `${info.name}: ${formatDuration(info.duration)}`)
+              .join('\n')}\nTotal: ${formatDuration(callHistory.totalDuration)}`;
+            
+            await addDoc(collection(db, "global-room-messages"), {
+              text: callSummaryText,
+              senderUid: 'system',
+              senderName: 'System',
+              senderPhoto: '',
+              createdAt: serverTimestamp(),
+              isEdited: false,
+              isDeleted: false,
+              replyTo: null,
+              isCallSummary: true
+            });
+            localStorage.removeItem('globalCallHistory');
           } else {
             await updateDoc(callDocRef, { 
               participants: updatedParts,
@@ -925,10 +930,24 @@ export default function GlobalChat() {
           if (data.callStartedAt) {
             callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
           }
-          // localStorage-এ save করুন যাতে reload-এও থাকে
-          localStorage.setItem('globalCallHistory', JSON.stringify(callHistory));
-          setCallHistoryDisplay(callHistory);
-          await setDoc(callDocRef, { callHistory: callHistory, participants: [] }, { merge: true });
+          // Call summary message হিসেবে chat-এ add করুন
+          const callSummaryText = `📞 Call ended\n${Object.entries(callHistory)
+            .filter(([key]) => key !== 'totalDuration')
+            .map(([key, info]) => `${info.name}: ${formatDuration(info.duration)}`)
+            .join('\n')}\nTotal: ${formatDuration(callHistory.totalDuration)}`;
+          
+          await addDoc(collection(db, "global-room-messages"), {
+            text: callSummaryText,
+            senderUid: 'system',
+            senderName: 'System',
+            senderPhoto: '',
+            createdAt: serverTimestamp(),
+            isEdited: false,
+            isDeleted: false,
+            replyTo: null,
+            isCallSummary: true
+          });
+          
           const oldConnections = await getDocs(collection(callDocRef, "connections"));
           await Promise.all(oldConnections.docs.map(async (d) => {
             const [subA, subB] = await Promise.all([
@@ -1013,8 +1032,7 @@ export default function GlobalChat() {
         @keyframes recordPulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }
         .recording-dot { width: 10px; height: 10px; border-radius: 50%; background: #dc3545; animation: recordPulse 1.2s infinite; display: inline-block; flex-shrink: 0; }
         .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
-        .call-history-card { background: rgba(0,86,179,0.05); border: 1px solid rgba(0,86,179,0.2); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
-        .call-history-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(0,86,179,0.1); font-size: 13px; }
+        .call-summary-msg { background: rgba(0,86,179,0.08) !important; border: 1px solid rgba(0,86,179,0.2) !important; text-align: center; }
       `}</style>
       
       {inCall && (
@@ -1071,38 +1089,33 @@ export default function GlobalChat() {
       {!inCall && (
         <>
           <div style={{ flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-            {/* Call History Display */}
-            {callHistoryDisplay && Object.keys(callHistoryDisplay).length > 0 && (
-              <div className="call-history-card">
-                <div style={{ fontWeight: 'bold', color: '#0056b3', marginBottom: '8px', fontSize: '14px' }}>
-                  📞 Last Call Summary
-                </div>
-                {Object.entries(callHistoryDisplay).map(([uid, info]) => {
-                  if (uid === 'totalDuration') return null;
-                  return (
-                    <div key={uid} className="call-history-item">
-                      <span style={{ fontWeight: 'bold' }}>{info.name || 'Unknown'}</span>
-                      <span style={{ fontSize: '12px', color: '#666' }}>
-                        {formatTimeDisplay(info.joinedAt)} - {formatTimeDisplay(info.leftAt)} | 
-                        <strong style={{ color: '#0056b3' }}> {formatDuration(info.duration)}</strong>
-                      </span>
-                    </div>
-                  );
-                })}
-                {callHistoryDisplay.totalDuration && (
-                  <div className="call-history-item" style={{ borderBottom: 'none', fontWeight: 'bold', color: '#28a745' }}>
-                    <span>Total Call Duration</span>
-                    <span>{formatDuration(callHistoryDisplay.totalDuration)}</span>
-                  </div>
-                )}
-              </div>
-            )}
             {messages.map((getMsg) => {
               if (localDeletedIds.includes(getMsg.id)) return null;
               const isMe = getMsg.senderUid === currentUid;
+              const isSystem = getMsg.isCallSummary === true;
               const firestoreProfilePhoto = usersCache[getMsg.senderUid]?.photo || getMsg.senderPhoto;
               const defaultFallbackAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(getMsg.senderName || 'Student')}`;
               const senderOnline = usersCache[getMsg.senderUid]?.online === true;
+
+              // System message (call summary) আলাদা ভাবে render করুন
+              if (isSystem) {
+                return (
+                  <div key={getMsg.id} style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div className="call-summary-msg" style={{ 
+                      padding: '12px 20px', 
+                      borderRadius: '12px', 
+                      fontSize: '13px', 
+                      whiteSpace: 'pre-line',
+                      background: 'rgba(0,86,179,0.08)',
+                      border: '1px solid rgba(0,86,179,0.2)',
+                      textAlign: 'center',
+                      maxWidth: '80%'
+                    }}>
+                      {getMsg.text}
+                    </div>
+                  </div>
+                );
+              }
 
               return (
                 <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px', position: 'relative', zIndex: avatarMenuFor === getMsg.id ? 50 : 'auto' }}>
