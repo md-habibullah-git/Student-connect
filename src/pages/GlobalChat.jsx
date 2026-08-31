@@ -10,9 +10,13 @@ import {
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 
+// PersonalChat-এর মতোই rtcConfiguration — STUN + Free TURN
 const rtcConfiguration = {
   iceServers: [
     { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -607,6 +611,7 @@ export default function GlobalChat() {
     }
   }, [inCall]);
 
+  // PersonalChat-এর মতো simple connection logic
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
     if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
