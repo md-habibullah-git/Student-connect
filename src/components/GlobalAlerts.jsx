@@ -31,6 +31,8 @@ export default function GlobalAlerts() {
   const [messageBubbles, setMessageBubbles] = useState([]);
   const [incomingPersonalCall, setIncomingPersonalCall] = useState(null);
   const [incomingGlobalCall, setIncomingGlobalCall] = useState(null);
+  // এই ref আর প্রয়োজন নেই, তবে রেখে দিলাম, ক্ষতি নেই
+  const dismissedGlobalCallRef = useRef(false);
 
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
@@ -413,7 +415,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Incoming global call listener (localStorage flag ব্যবহার)
+  // ✅ FIXED: Incoming global call listener
   useEffect(() => {
     if (!currentUid) return;
     
@@ -423,14 +425,16 @@ export default function GlobalAlerts() {
         const participants = data.participants || [];
         const alreadyInCall = participants.includes(currentUid);
         const onGlobalPage = location.pathname === '/chat/global/Global-Chatroom';
-        const dismissed = localStorage.getItem('global_call_dismissed') === 'true';
-        
+        const hasActiveGlobalSession = !!activeGlobalSession; // কল চলছে কি না
+
+        // ✅ কল চললে বা গ্লোবাল পেজে থাকলে বার দেখাবে না
         if (
           data.status === "ringing" &&
           data.hostId !== currentUid &&
           !alreadyInCall &&
           !onGlobalPage &&
-          !dismissed
+          !hasActiveGlobalSession &&
+          !dismissedGlobalCallRef.current
         ) {
           setIncomingGlobalCall({ hostName: data.hostName });
           return;
@@ -439,7 +443,7 @@ export default function GlobalAlerts() {
       setIncomingGlobalCall(null);
     });
     return () => unsubscribe();
-  }, [currentUid, location.pathname]);
+  }, [currentUid, location.pathname, activeGlobalSession]);
 
   // Clear bubbles when opening relevant chat
   useEffect(() => {
@@ -457,30 +461,19 @@ export default function GlobalAlerts() {
     && activeSession.type === 'personal'
     && !location.pathname.startsWith(`/chat/${activeSession.otherUid}/`);
 
-  // ========== FIXED: Receive handler ==========
-  const handleReceive = async () => {
+  const handleReceive = () => {
     if (!activeCall) return;
     
     setIncomingPersonalCall(null);
     setIncomingGlobalCall(null);
-    localStorage.removeItem('global_call_dismissed');
     
     if (activeCall.type === 'personal') {
-      // Update call status to 'active' so the listener won't show it again
-      try {
-        await updateDoc(doc(db, "personal-calls", activeCall.roomId), { status: "active" });
-      } catch (err) { /* best effort */ }
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
-      // Update global call status to 'active'
-      try {
-        await updateDoc(doc(db, "global-calls", GLOBAL_ROOM_ID), { status: "active" });
-      } catch (err) { /* best effort */ }
       navigate('/chat/global/Global-Chatroom', { state: { autoJoinCall: true } });
     }
   };
 
-  // ========== FIXED: Decline handler ==========
   const handleDecline = async () => {
     if (!activeCall) return;
     
@@ -488,12 +481,9 @@ export default function GlobalAlerts() {
       try { 
         await updateDoc(doc(db, "personal-calls", activeCall.roomId), { status: "ended" }); 
       } catch (err) { /* best effort */ }
+      
       setIncomingPersonalCall(null);
     } else {
-      // Update global call status to 'ended' so it won't show again
-      try {
-        await updateDoc(doc(db, "global-calls", GLOBAL_ROOM_ID), { status: "ended" });
-      } catch (err) { /* best effort */ }
       setIncomingGlobalCall(null);
     }
   };
