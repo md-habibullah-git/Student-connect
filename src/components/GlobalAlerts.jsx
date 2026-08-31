@@ -31,7 +31,6 @@ export default function GlobalAlerts() {
   const [messageBubbles, setMessageBubbles] = useState([]);
   const [incomingPersonalCall, setIncomingPersonalCall] = useState(null);
   const [incomingGlobalCall, setIncomingGlobalCall] = useState(null);
-  const dismissedGlobalCallRef = useRef(false);
 
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
@@ -414,7 +413,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ✅ FIXED: Incoming global call listener
+  // ✅ FIXED: Incoming global call listener (localStorage flag ব্যবহার)
   useEffect(() => {
     if (!currentUid) return;
     
@@ -424,9 +423,15 @@ export default function GlobalAlerts() {
         const participants = data.participants || [];
         const alreadyInCall = participants.includes(currentUid);
         const onGlobalPage = location.pathname === '/chat/global/Global-Chatroom';
+        const dismissed = localStorage.getItem('global_call_dismissed') === 'true';
         
-        // ✅ status "accepted" হলে বার দেখাবে না
-        if (data.status === "ringing" && data.hostId !== currentUid && !alreadyInCall && !onGlobalPage && !dismissedGlobalCallRef.current) {
+        if (
+          data.status === "ringing" &&
+          data.hostId !== currentUid &&
+          !alreadyInCall &&
+          !onGlobalPage &&
+          !dismissed
+        ) {
           setIncomingGlobalCall({ hostName: data.hostName });
           return;
         }
@@ -457,11 +462,11 @@ export default function GlobalAlerts() {
     
     setIncomingPersonalCall(null);
     setIncomingGlobalCall(null);
+    localStorage.removeItem('global_call_dismissed'); // flag clear
     
     if (activeCall.type === 'personal') {
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
-      dismissedGlobalCallRef.current = true;
       navigate('/chat/global/Global-Chatroom', { state: { autoJoinCall: true } });
     }
   };
@@ -476,7 +481,6 @@ export default function GlobalAlerts() {
       
       setIncomingPersonalCall(null);
     } else {
-      dismissedGlobalCallRef.current = true;
       setIncomingGlobalCall(null);
     }
   };
