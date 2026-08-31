@@ -152,7 +152,7 @@ export default function Messenger() {
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.transform = 'translateY(-2px)';
-          e.currentTarget.style.boxShadow = '0 6px 20 rgba(0,86,179,0.35)';
+          e.currentTarget.style.boxShadow = '0 6px 20px rgba(0,86,179,0.35)';
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.transform = 'translateY(0)';
@@ -217,7 +217,7 @@ export default function Messenger() {
             </div>
 
             {/* Student metadata texts block */}
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContext: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
               <strong style={{ fontSize: '16px', color: '#ffffff', display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}> {/* ⚡ Fixed: Font size has been set to 16 pixels, just like the text of the global box */}
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.name}</span>
                 {unreadCounts[user.uid] > 0 && (
