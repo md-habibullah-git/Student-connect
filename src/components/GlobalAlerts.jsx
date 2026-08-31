@@ -31,7 +31,6 @@ export default function GlobalAlerts() {
   const [messageBubbles, setMessageBubbles] = useState([]);
   const [incomingPersonalCall, setIncomingPersonalCall] = useState(null);
   const [incomingGlobalCall, setIncomingGlobalCall] = useState(null);
-  // ✅ ফিক্স: গ্লোবাল কল রিসিভ করলে বার বার দেখাবে না
   const dismissedGlobalCallRef = useRef(false);
 
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
@@ -83,7 +82,6 @@ export default function GlobalAlerts() {
     return unsubscribe;
   }, []);
 
-  // ✅ ফিক্স: গ্লোবাল কল session clear হলে dismissed flag reset হবে
   useEffect(() => {
     if (!activeGlobalSession) {
       dismissedGlobalCallRef.current = false;
@@ -261,6 +259,7 @@ export default function GlobalAlerts() {
     return () => clearInterval(cleanupInterval);
   }, [currentUid]);
 
+  // Presence system
   useEffect(() => {
     if (!currentUid) return;
     const selfRef = doc(db, "users", currentUid);
@@ -328,6 +327,7 @@ export default function GlobalAlerts() {
     };
   }, [currentUid]);
 
+  // Personal message bubbles
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-rooms"), where("participants", "array-contains", currentUid));
@@ -371,6 +371,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
+  // Global message bubbles
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
@@ -402,6 +403,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
+  // Incoming personal call listener
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-calls"), where("participants", "array-contains", currentUid));
@@ -418,13 +420,15 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ✅ ফিক্স: গ্লোবাল কল - শুধু একবার দেখাবে, ডিক্লাইন করলে আর দেখাবে না
+  // ✅ Incoming global call listener - now checks if on global chat page
   useEffect(() => {
     if (!currentUid) return;
+    const onGlobalPage = location.pathname === '/chat/global/Global-Chatroom';
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        if (data.status === "ringing" && data.hostId !== currentUid && !dismissedGlobalCallRef.current) {
+        // ✅ Only show incoming call bar if NOT on global chat page
+        if (data.status === "ringing" && data.hostId !== currentUid && !onGlobalPage && !dismissedGlobalCallRef.current) {
           setIncomingGlobalCall({ hostName: data.hostName });
           return;
         }
@@ -432,8 +436,9 @@ export default function GlobalAlerts() {
       setIncomingGlobalCall(null);
     });
     return () => unsubscribe();
-  }, [currentUid]);
+  }, [currentUid, location.pathname]); // ✅ dependency added
 
+  // Clear bubbles when opening relevant chat
   useEffect(() => {
     setMessageBubbles((prev) => prev.filter((b) => {
       if (b.isGlobal) return location.pathname !== '/chat/global/Global-Chatroom';
@@ -449,7 +454,6 @@ export default function GlobalAlerts() {
     && activeSession.type === 'personal'
     && !location.pathname.startsWith(`/chat/${activeSession.otherUid}/`);
 
-  // ✅ ফিক্স: কল রিসিভ করলে সাথে সাথে বার বন্ধ, dismissed flag সেট
   const handleReceive = () => {
     if (!activeCall) return;
     
@@ -459,13 +463,11 @@ export default function GlobalAlerts() {
     if (activeCall.type === 'personal') {
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
-      // ✅ গ্লোবাল কল রিসিভ করলে dismissed flag সেট হবে
       dismissedGlobalCallRef.current = true;
       navigate('/chat/global/Global-Chatroom', { state: { autoJoinCall: true } });
     }
   };
 
-  // ✅ ফিক্স: কল ডিক্লাইন করলে সাথে সাথে বার বন্ধ
   const handleDecline = async () => {
     if (!activeCall) return;
     
@@ -476,7 +478,6 @@ export default function GlobalAlerts() {
       
       setIncomingPersonalCall(null);
     } else {
-      // ✅ গ্লোবাল কল ডিক্লাইন করলে dismissed flag সেট হবে
       dismissedGlobalCallRef.current = true;
       setIncomingGlobalCall(null);
     }
