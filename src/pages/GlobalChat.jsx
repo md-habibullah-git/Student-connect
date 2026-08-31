@@ -24,23 +24,48 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
+// ✅ FIXED: RemoteVideoTile - ভিডিও ট্র্যাক সঠিকভাবে handle করবে
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
+  const [hasVideo, setHasVideo] = useState(false);
   
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
       videoRef.current.play().catch(() => {});
+      
+      const checkVideo = () => {
+        const videoTracks = stream.getVideoTracks();
+        setHasVideo(videoTracks.length > 0 && videoTracks[0].enabled);
+      };
+      
+      checkVideo();
+      stream.addEventListener('addtrack', checkVideo);
+      stream.addEventListener('removetrack', checkVideo);
+      
+      return () => {
+        stream.removeEventListener('addtrack', checkVideo);
+        stream.removeEventListener('removetrack', checkVideo);
+        if (videoRef.current) videoRef.current.srcObject = null;
+      };
     }
-    return () => {
-      if (videoRef.current) videoRef.current.srcObject = null;
-    };
   }, [stream]);
   
   return (
-    <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden', width: '100%', height: '100%', minHeight: '150px' }}>
-      <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-      <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
+    <div style={{ position: 'relative', background: hasVideo ? '#111' : 'linear-gradient(135deg, #667eea, #764ba2)', borderRadius: '8px', overflow: 'hidden', width: '100%', height: '100%', minHeight: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <video 
+        ref={videoRef} 
+        autoPlay 
+        playsInline 
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: hasVideo ? 'block' : 'none' }} 
+      />
+      {!hasVideo && (
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '8px' }}>
+          <span style={{ fontSize: '48px' }}>👤</span>
+          <span style={{ color: '#fff', fontSize: '14px' }}>{label}</span>
+        </div>
+      )}
+      <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px', zIndex: 10 }}>{label}</span>
     </div>
   );
 }
@@ -508,10 +533,14 @@ export default function GlobalChat() {
     }
   };
 
+  // ✅ FIXED: getLocalStream - camera resolution সহ
   const getLocalStream = async (callType = 'video') => {
     const s = ensureSession();
     if (s.localStream) return s.localStream;
-    const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: callType === 'video' ? { width: 640, height: 480 } : false, 
+      audio: true 
+    });
     s.localStream = stream;
     s.callType = callType;
     return stream;
@@ -547,7 +576,7 @@ export default function GlobalChat() {
     }
   }, [inCall]);
 
-  // ✅ WebRTC connection - signaling data এখন global-call-signals collection-এ
+  // WebRTC connection - signaling data এখন global-call-signals collection-এ
   const connectToPeer = async (peerUid) => {
     const s = ensureSession();
     if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
@@ -555,7 +584,6 @@ export default function GlobalChat() {
     const isInitiator = currentUid < peerUid;
     const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
     
-    // ✅ আলাদা top-level collection ব্যবহার করা হয়েছে
     const signalRef = doc(db, "global-call-signals", pairKey);
     const myCandidatesRef = collection(signalRef, isInitiator ? "candidatesA" : "candidatesB");
     const theirCandidatesRef = collection(signalRef, isInitiator ? "candidatesB" : "candidatesA");
@@ -572,7 +600,11 @@ export default function GlobalChat() {
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
 
       pc.addEventListener('track', (event) => {
-        event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+        event.streams[0].getTracks().forEach(track => {
+          if (!remoteStream.getTracks().includes(track)) {
+            remoteStream.addTrack(track);
+          }
+        });
         setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       });
 
@@ -665,9 +697,9 @@ export default function GlobalChat() {
       const otherParticipants = (snap.data().participants || []).filter(uid => uid !== currentUid);
       const currentSet = new Set(otherParticipants);
       otherParticipants.forEach(uid => {
-        if (!s.knownPeers.has(uid)) connectToPeer(uid);
+        if (!s.peerConnections[uid]) connectToPeer(uid);
       });
-      s.knownPeers.forEach(uid => {
+      Object.keys(s.peerConnections).forEach(uid => {
         if (!currentSet.has(uid)) disconnectFromPeer(uid);
       });
       s.knownPeers = currentSet;
@@ -678,7 +710,6 @@ export default function GlobalChat() {
   const initiateGlobalCall = async (callType = 'video') => {
     try {
       await getLocalStream(callType);
-      // ✅ call document তৈরি করুন - ডিলিট হবে না
       await setDoc(doc(db, "global-calls", globalRoomId), { 
         status: "ringing", 
         callType, 
@@ -696,6 +727,7 @@ export default function GlobalChat() {
     }
   };
 
+  // ✅ FIXED: handleRejoinCall - camera চালু হবে
   const handleRejoinCall = async () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
