@@ -250,8 +250,8 @@ export default function GlobalChat() {
   const currentUserName = auth.currentUser?.displayName || "Campus Student";
   const globalRoomId = "campus_global_conference_room";
 
-  // Cleanup function — connections subcollection completely delete করে
-  const cleanupAllConnections = async () => {
+  // Cleanup function — শুধু connections subcollection delete করে, মূল document রাখে
+  const cleanupConnectionsOnly = async () => {
     try {
       const callRef = doc(db, "global-calls", globalRoomId);
       const oldConnections = await getDocs(collection(callRef, "connections"));
@@ -263,7 +263,12 @@ export default function GlobalChat() {
         await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
         await deleteDoc(d.ref);
       }));
-      await deleteDoc(callRef).catch(() => {});
+      // মূল document reset করুন কিন্তু delete করবেন না
+      await setDoc(callRef, { 
+        status: "idle", 
+        participants: [], 
+        roomId: globalRoomId 
+      }, { merge: true });
     } catch (err) {
       console.error("Cleanup error:", err);
     }
@@ -279,8 +284,7 @@ export default function GlobalChat() {
       } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
     };
     autoCleanOldGlobalMessages();
-    // Page load-এ সব পুরনো connections clean করুন
-    cleanupAllConnections();
+    cleanupConnectionsOnly();
   }, []);
 
   useEffect(() => {
@@ -337,7 +341,7 @@ export default function GlobalChat() {
         if (callData.status === "ringing" || callData.status === "active") {
           const participants = callData.participants || [];
           if (participants.length === 0) {
-            deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
+            cleanupConnectionsOnly();
             setShowRejoinBtn(false);
             setInCall(false);
             return;
@@ -752,7 +756,7 @@ export default function GlobalChat() {
       if (snap.exists()) {
         const updated = (snap.data().participants || []).filter(id => id !== peerUid);
         if (updated.length === 0) {
-          await cleanupAllConnections();
+          await cleanupConnectionsOnly();
         } else {
           await updateDoc(callRef, { participants: updated });
         }
@@ -782,8 +786,8 @@ export default function GlobalChat() {
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
-      // আগে সব পুরনো connections clean করুন
-      await cleanupAllConnections();
+      // আগে পুরনো connections clean করুন
+      await cleanupConnectionsOnly();
       
       // Session reset
       sessionRef.current = null;
@@ -836,8 +840,11 @@ export default function GlobalChat() {
       getDoc(callDocRef).then((snapshot) => {
         if (snapshot.exists()) {
           const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
-          if (updatedParts.length === 0) deleteDoc(callDocRef).catch(() => {});
-          else updateDoc(callDocRef, { participants: updatedParts }).catch(() => {});
+          if (updatedParts.length === 0) {
+            cleanupConnectionsOnly();
+          } else {
+            updateDoc(callDocRef, { participants: updatedParts }).catch(() => {});
+          }
         }
       }).catch(() => {});
     } catch (err) {}
@@ -850,8 +857,8 @@ export default function GlobalChat() {
       if (snapshot.exists()) {
         const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
         if (updatedParts.length === 0) {
-          // সবাই চলে গেলে সব connections delete করুন
-          await cleanupAllConnections();
+          // সবাই চলে গেলে শুধু connections delete করুন
+          await cleanupConnectionsOnly();
         } else {
           await updateDoc(callDocRef, { participants: updatedParts });
         }
