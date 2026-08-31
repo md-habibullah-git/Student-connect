@@ -208,6 +208,7 @@ export default function GlobalChat() {
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [avatarMenuFor, setAvatarMenuFor] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
+  const [callHistoryDisplay, setCallHistoryDisplay] = useState(null);
 
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -251,6 +252,19 @@ export default function GlobalChat() {
   const currentUserName = auth.currentUser?.displayName || "Campus Student";
   const globalRoomId = "campus_global_conference_room";
 
+  const formatDuration = (ms) => {
+    if (!ms) return '0:00';
+    const totalSeconds = Math.floor(ms / 1000);
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const formatTimeDisplay = (timestamp) => {
+    if (!timestamp) return '';
+    return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
@@ -261,6 +275,21 @@ export default function GlobalChat() {
       } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
     };
     autoCleanOldGlobalMessages();
+  }, []);
+
+  // Call history display দেখানোর জন্য listener
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, "global-calls", globalRoomId), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.callHistory && Object.keys(data.callHistory).length > 0 && !data.participants?.length) {
+          setCallHistoryDisplay(data.callHistory);
+        }
+      } else {
+        setCallHistoryDisplay(null);
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -738,7 +767,6 @@ export default function GlobalChat() {
     } catch (err) {}
   };
 
-  // NEW: Peer leave করলে তার connection data delete করুন
   const deletePeerConnectionData = async (peerUid) => {
     try {
       const callRef = doc(db, "global-calls", globalRoomId);
@@ -798,6 +826,7 @@ export default function GlobalChat() {
       setRemoteStreams({});
       
       await getLocalStream(callType);
+      const startedAt = new Date().getTime();
       await setDoc(callRef, { 
         status: "ringing", 
         callType, 
@@ -805,10 +834,15 @@ export default function GlobalChat() {
         hostId: currentUid, 
         roomId: globalRoomId, 
         participants: [currentUid],
-        callStartedAt: new Date().getTime(),
-        callHistory: {}
+        callStartedAt: startedAt,
+        callHistory: {
+          [currentUid]: {
+            name: currentUserName,
+            joinedAt: startedAt
+          }
+        }
       });
-      callStartTimeRef.current = new Date().getTime();
+      callStartTimeRef.current = startedAt;
       setActiveCallType(callType);
       setInCall(true);
       setActiveGlobalCallSession(sessionRef.current);
@@ -829,10 +863,12 @@ export default function GlobalChat() {
         const updatedParts = data.participants || [];
         if (!updatedParts.includes(currentUid)) updatedParts.push(currentUid);
         const callHistory = data.callHistory || {};
-        callHistory[currentUid] = {
-          name: currentUserName,
-          joinedAt: new Date().getTime()
-        };
+        if (!callHistory[currentUid]) {
+          callHistory[currentUid] = {
+            name: currentUserName,
+            joinedAt: new Date().getTime()
+          };
+        }
         await updateDoc(callDocRef, { 
           participants: updatedParts,
           callHistory: callHistory
@@ -856,16 +892,15 @@ export default function GlobalChat() {
           const data = snapshot.data();
           const updatedParts = (data.participants || []).filter(id => id !== currentUid);
           const callHistory = data.callHistory || {};
-          if (callHistory[currentUid]) {
+          if (callHistory[currentUid] && callHistory[currentUid].joinedAt) {
             callHistory[currentUid].leftAt = new Date().getTime();
             callHistory[currentUid].duration = callHistory[currentUid].leftAt - callHistory[currentUid].joinedAt;
           }
           if (updatedParts.length === 0) {
-            callHistory.endedAt = new Date().getTime();
             if (data.callStartedAt) {
-              callHistory.totalDuration = callHistory.endedAt - data.callStartedAt;
+              callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
             }
-            await setDoc(callDocRef, { callHistory: callHistory }, { merge: true });
+            await setDoc(callDocRef, { callHistory: callHistory, participants: [] }, { merge: true });
           } else {
             await updateDoc(callDocRef, { 
               participants: updatedParts,
@@ -885,16 +920,15 @@ export default function GlobalChat() {
         const data = snapshot.data();
         const updatedParts = (data.participants || []).filter(id => id !== currentUid);
         const callHistory = data.callHistory || {};
-        if (callHistory[currentUid]) {
+        if (callHistory[currentUid] && callHistory[currentUid].joinedAt) {
           callHistory[currentUid].leftAt = new Date().getTime();
           callHistory[currentUid].duration = callHistory[currentUid].leftAt - callHistory[currentUid].joinedAt;
         }
         if (updatedParts.length === 0) {
-          callHistory.endedAt = new Date().getTime();
           if (data.callStartedAt) {
-            callHistory.totalDuration = callHistory.endedAt - data.callStartedAt;
+            callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
           }
-          await setDoc(callDocRef, { callHistory: callHistory }, { merge: true });
+          await setDoc(callDocRef, { callHistory: callHistory, participants: [] }, { merge: true });
           const oldConnections = await getDocs(collection(callDocRef, "connections"));
           await Promise.all(oldConnections.docs.map(async (d) => {
             const [subA, subB] = await Promise.all([
@@ -979,6 +1013,8 @@ export default function GlobalChat() {
         @keyframes recordPulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }
         .recording-dot { width: 10px; height: 10px; border-radius: 50%; background: #dc3545; animation: recordPulse 1.2s infinite; display: inline-block; flex-shrink: 0; }
         .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
+        .call-history-card { background: rgba(0,86,179,0.05); border: 1px solid rgba(0,86,179,0.2); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+        .call-history-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(0,86,179,0.1); font-size: 13px; }
       `}</style>
       
       {inCall && (
@@ -1035,6 +1071,32 @@ export default function GlobalChat() {
       {!inCall && (
         <>
           <div style={{ flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            {/* Call History Display */}
+            {callHistoryDisplay && Object.keys(callHistoryDisplay).length > 0 && (
+              <div className="call-history-card">
+                <div style={{ fontWeight: 'bold', color: '#0056b3', marginBottom: '8px', fontSize: '14px' }}>
+                  📞 Last Call Summary
+                </div>
+                {Object.entries(callHistoryDisplay).map(([uid, info]) => {
+                  if (uid === 'totalDuration') return null;
+                  return (
+                    <div key={uid} className="call-history-item">
+                      <span style={{ fontWeight: 'bold' }}>{info.name || 'Unknown'}</span>
+                      <span style={{ fontSize: '12px', color: '#666' }}>
+                        {formatTimeDisplay(info.joinedAt)} - {formatTimeDisplay(info.leftAt)} | 
+                        <strong style={{ color: '#0056b3' }}> {formatDuration(info.duration)}</strong>
+                      </span>
+                    </div>
+                  );
+                })}
+                {callHistoryDisplay.totalDuration && (
+                  <div className="call-history-item" style={{ borderBottom: 'none', fontWeight: 'bold', color: '#28a745' }}>
+                    <span>Total Call Duration</span>
+                    <span>{formatDuration(callHistoryDisplay.totalDuration)}</span>
+                  </div>
+                )}
+              </div>
+            )}
             {messages.map((getMsg) => {
               if (localDeletedIds.includes(getMsg.id)) return null;
               const isMe = getMsg.senderUid === currentUid;
