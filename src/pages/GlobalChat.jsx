@@ -10,14 +10,9 @@ import {
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 
-// ICE configuration: Google STUN + free TURN relay (OpenRelay)
-// একই network-এ direct connection হয়, ভিন্ন network-এ TURN দরকার
 const rtcConfiguration = {
   iceServers: [
     { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -27,7 +22,6 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// Remote video tile for group call grid
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
   useEffect(() => {
@@ -44,7 +38,6 @@ function RemoteVideoTile({ stream, label }) {
   );
 }
 
-// Remote audio tile — audio call-এ remote stream play করার জন্য
 function RemoteAudioTile({ stream }) {
   const audioRef = useRef(null);
   useEffect(() => {
@@ -56,7 +49,6 @@ function RemoteAudioTile({ stream }) {
   return <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />;
 }
 
-// Local audio tile — নিজের mic muted করে play করার জন্য
 function LocalAudioTile({ stream }) {
   const audioRef = useRef(null);
   useEffect(() => {
@@ -69,7 +61,6 @@ function LocalAudioTile({ stream }) {
   return <audio ref={audioRef} autoPlay playsInline muted style={{ display: 'none' }} />;
 }
 
-// Voice message player with visualization
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -145,9 +136,7 @@ function VoiceMessageBubble({ src, isMe }) {
       analyser.connect(audioCtx.destination);
       audioCtxRef.current = audioCtx;
       analyserRef.current = analyser;
-    } catch (err) {
-      // Web Audio API unavailable/blocked
-    }
+    } catch (err) {}
   };
 
   const togglePlay = () => {
@@ -192,16 +181,7 @@ function VoiceMessageBubble({ src, isMe }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', minWidth: '210px' }}>
       <audio ref={audioRef} src={src} preload="metadata" style={{ display: 'none' }} />
-      <button
-        type="button"
-        onClick={togglePlay}
-        style={{
-          width: '30px', height: '30px', borderRadius: '50%', border: 'none', cursor: 'pointer',
-          background: isMe ? 'rgba(255,255,255,0.25)' : 'rgba(0,86,179,0.12)',
-          color: isMe ? '#fff' : '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, fontSize: '13px'
-        }}
-      >
+      <button type="button" onClick={togglePlay} style={{ width: '30px', height: '30px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: isMe ? 'rgba(255,255,255,0.25)' : 'rgba(0,86,179,0.12)', color: isMe ? '#fff' : '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '13px' }}>
         {isPlaying ? '⏸️' : '▶️'}
       </button>
       <canvas ref={canvasRef} width={120} height={28} style={{ flex: 1 }} />
@@ -246,9 +226,7 @@ export default function GlobalChat() {
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null); 
-
   const inCallRef = useRef(false);
-
   const localVideoRef = useRef(null);
   const sessionRef = useRef(null);
 
@@ -275,9 +253,7 @@ export default function GlobalChat() {
         const sevenDaysAgo = Timestamp.fromMillis(Date.now() - 7 * 24 * 60 * 60 * 1000);
         const oldMessagesQuery = query(collection(db, "global-room-messages"), where("createdAt", "<", sevenDaysAgo));
         const snapshot = await getDocs(oldMessagesQuery);
-        await Promise.all(
-          snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "global-room-messages", docSnapshot.id)))
-        );
+        await Promise.all(snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "global-room-messages", docSnapshot.id))));
       } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
     };
     autoCleanOldGlobalMessages();
@@ -285,24 +261,17 @@ export default function GlobalChat() {
 
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (inCallRef.current) {
-        leaveGlobalCallBeacon();
-      }
+      if (inCallRef.current) leaveGlobalCallBeacon();
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
-
     return () => {
-      if (inCallRef.current) {
-        leaveGlobalCall();
-      }
+      if (inCallRef.current) leaveGlobalCall();
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUid]);
 
-  useEffect(() => {
-    inCallRef.current = inCall;
-  }, [inCall]);
+  useEffect(() => { inCallRef.current = inCall; }, [inCall]);
 
   useEffect(() => {
     let interval;
@@ -482,9 +451,7 @@ export default function GlobalChat() {
 
       setReplyToMessage(null);
       capturedReplyRef.current = null;
-    } catch (error) {
-      console.error("Error sending voice message:", error);
-    }
+    } catch (error) { console.error("Error sending voice message:", error); }
   };
 
   const drawRecordingBars = () => {
@@ -496,7 +463,6 @@ export default function GlobalChat() {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
     analyser.getByteFrequencyData(dataArray);
-
     ctx.clearRect(0, 0, w, h);
     const barCount = 28;
     const step = Math.max(1, Math.floor(bufferLength / barCount));
@@ -522,7 +488,6 @@ export default function GlobalChat() {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContextClass();
@@ -533,9 +498,7 @@ export default function GlobalChat() {
         recordingAudioCtxRef.current = audioCtx;
         recordingAnalyserRef.current = analyser;
         drawRecordingBars();
-      } catch (visualizerErr) {
-        // visualization is best-effort
-      }
+      } catch (visualizerErr) {}
 
       let recorderOptions = { audioBitsPerSecond: 32000 };
       if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
@@ -554,11 +517,7 @@ export default function GlobalChat() {
         stream.getTracks().forEach(track => track.stop());
         stopRecordingVisualizer();
         clearTimeout(maxDurationTimeoutRef.current);
-
-        if (discardRecordingRef.current) {
-          audioChunksRef.current = [];
-          return;
-        }
+        if (discardRecordingRef.current) { audioChunksRef.current = []; return; }
         const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         const reader = new FileReader();
         reader.onload = (event) => {
@@ -672,32 +631,22 @@ export default function GlobalChat() {
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       
       pc.addEventListener('track', (event) => {
-        event.streams[0].getTracks().forEach(track => {
-          remoteStream.addTrack(track);
-        });
+        event.streams[0].getTracks().forEach(track => { remoteStream.addTrack(track); });
         setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       });
 
       pc.addEventListener('icecandidate', (event) => {
-        if (event.candidate) {
-          addDoc(myCandidatesRef, event.candidate.toJSON());
-        }
+        if (event.candidate) { addDoc(myCandidatesRef, event.candidate.toJSON()); }
       });
 
       pc.addEventListener('connectionstatechange', () => {
-        if (pc.connectionState === 'failed') {
-          removeStalePeerFromRoom(peerUid);
-        }
+        if (pc.connectionState === 'failed') { removeStalePeerFromRoom(peerUid); }
       });
 
       const addPendingCandidates = async () => {
         while (pendingCandidates.length > 0) {
           const candidate = pendingCandidates.shift();
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (err) {
-            console.error(`Error adding buffered ICE candidate:`, err);
-          }
+          try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (err) {}
         }
       };
 
@@ -744,17 +693,13 @@ export default function GlobalChat() {
               const answer = await pc.createAnswer();
               await pc.setLocalDescription(answer);
               await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
-            } catch (err) {
-              console.error(`Error creating answer:`, err);
-            }
+            } catch (err) {}
           }
         }));
       }
 
       s.peerUnsubscribers[peerUid] = unsubscribers;
-    } catch (err) {
-      console.error(`Error connecting to peer ${peerUid}:`, err);
-    }
+    } catch (err) {}
   };
 
   const disconnectFromPeer = (peerUid) => {
@@ -785,21 +730,17 @@ export default function GlobalChat() {
         if (updated.length === 0) await deleteDoc(callRef);
         else await updateDoc(callRef, { participants: updated });
       }
-    } catch (err) {
-      console.error("Error removing stale peer from room:", err);
-    }
+    } catch (err) {}
   };
 
   useEffect(() => {
     if (!inCall) return;
     const s = ensureSession();
-
     const callRef = doc(db, "global-calls", globalRoomId);
     const unsubscribe = onSnapshot(callRef, (snap) => {
       if (!snap.exists()) return;
       const otherParticipants = (snap.data().participants || []).filter(uid => uid !== currentUid);
       const currentSet = new Set(otherParticipants);
-
       otherParticipants.forEach(uid => {
         if (!s.knownPeers.has(uid)) connectToPeer(uid);
       });
@@ -808,7 +749,6 @@ export default function GlobalChat() {
       });
       s.knownPeers = currentSet;
     });
-
     return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inCall]);
@@ -857,7 +797,7 @@ export default function GlobalChat() {
           else updateDoc(callDocRef, { participants: updatedParts }).catch(() => {});
         }
       }).catch(() => {});
-    } catch (err) { /* best effort only */ }
+    } catch (err) {}
   };
 
   const leaveGlobalCall = async () => {
@@ -869,9 +809,7 @@ export default function GlobalChat() {
         if (updatedParts.length === 0) await deleteDoc(callDocRef);
         else await updateDoc(callDocRef, { participants: updatedParts });
       }
-    } catch (err) {
-      console.error("Error leaving global call:", err);
-    }
+    } catch (err) {}
     const s = sessionRef.current;
     if (s) {
       Object.keys(s.peerConnections).forEach(disconnectFromPeer);
@@ -930,12 +868,10 @@ export default function GlobalChat() {
         :root[data-theme='dark'] .threedot-dropdown-menu { background: #222; border-color: #444; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
         .threedot-menu-item { background: none; border: none; padding: 6px 12px; font-size: 12px; cursor: pointer; text-align: left; width: 100%; font-weight: bold; }
         .threedot-menu-item.reply-btn { color: #28a745; } .threedot-menu-item.edit-btn { color: #0088ff; } .threedot-menu-item.delete-btn { color: #dc3545; } .threedot-menu-item:hover { background: rgba(0,0,0,0.05); }
-        
         .threedot-action-btn { background: none; border: none; cursor: pointer; font-size: 18px; color: #444444; padding: 4px 8px; opacity: 0.8; transition: all 0.2s; border-radius: 50%; }
         .threedot-action-btn:hover { background: rgba(0, 0, 0, 0.08); opacity: 1; }
         :root[data-theme='dark'] .threedot-action-btn { color: #ffffff !important; opacity: 1 !important; text-shadow: 0 0 2px rgba(255,255,255,0.5); }
         :root[data-theme='dark'] .threedot-action-btn:hover { background: rgba(255, 255, 255, 0.15); }
-
         @keyframes recordPulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }
         .recording-dot { width: 10px; height: 10px; border-radius: 50%; background: #dc3545; animation: recordPulse 1.2s infinite; display: inline-block; flex-shrink: 0; }
         .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
@@ -953,11 +889,7 @@ export default function GlobalChat() {
                   <span key={uid} style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>{usersCache[uid]?.name || 'Student'}</span>
                 ))}
               </div>
-              
-              {sessionRef.current?.localStream && (
-                <LocalAudioTile stream={sessionRef.current.localStream} />
-              )}
-              
+              {sessionRef.current?.localStream && <LocalAudioTile stream={sessionRef.current.localStream} />}
               {Object.entries(remoteStreams).map(([uid, stream]) => (
                 <RemoteAudioTile key={uid} stream={stream} />
               ))}
@@ -973,11 +905,7 @@ export default function GlobalChat() {
               ))}
             </div>
           )}
-          <button
-            onClick={leaveGlobalCall}
-            title="Leave call"
-            style={{ alignSelf: 'center', margin: '14px 0', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', flexShrink: 0 }}
-          >
+          <button onClick={leaveGlobalCall} title="Leave call" style={{ alignSelf: 'center', margin: '14px 0', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', flexShrink: 0 }}>
             <HangUpIcon />
           </button>
         </div>
@@ -1013,41 +941,12 @@ export default function GlobalChat() {
               return (
                 <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px', position: 'relative', zIndex: avatarMenuFor === getMsg.id ? 50 : 'auto' }}>
                   <div style={{ position: 'relative', flexShrink: 0 }}>
-                    <img
-                      src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar}
-                      alt=""
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (isMe) { navigate(`/profile/${currentUid}`); return; }
-                        setAvatarMenuFor(avatarMenuFor === getMsg.id ? null : getMsg.id);
-                      }}
-                      onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }}
-                      style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block', cursor: 'pointer' }}
-                    />
-                    {senderOnline && (
-                      <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />
-                    )}
+                    <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onClick={(e) => { e.stopPropagation(); if (isMe) { navigate(`/profile/${currentUid}`); return; } setAvatarMenuFor(avatarMenuFor === getMsg.id ? null : getMsg.id); }} onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block', cursor: 'pointer' }} />
+                    {senderOnline && <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />}
                     {avatarMenuFor === getMsg.id && !isMe && (
-                      <div
-                        className="threedot-dropdown-menu"
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ top: 'auto', bottom: 'calc(100% + 6px)', left: 0, right: 'auto', zIndex: 999 }}
-                      >
-                        <button
-                          type="button"
-                          className="threedot-menu-item"
-                          style={{ color: '#0056b3' }}
-                          onClick={() => { setAvatarMenuFor(null); navigate(`/profile/${getMsg.senderUid}`); }}
-                        >
-                          👤 View Profile
-                        </button>
-                        <button
-                          type="button"
-                          className="threedot-menu-item reply-btn"
-                          onClick={() => { setAvatarMenuFor(null); navigate(`/chat/${getMsg.senderUid}/${encodeURIComponent(getMsg.senderName || 'Student')}`); }}
-                        >
-                          💬 Message
-                        </button>
+                      <div className="threedot-dropdown-menu" onClick={(e) => e.stopPropagation()} style={{ top: 'auto', bottom: 'calc(100% + 6px)', left: 0, right: 'auto', zIndex: 999 }}>
+                        <button type="button" className="threedot-menu-item" style={{ color: '#0056b3' }} onClick={() => { setAvatarMenuFor(null); navigate(`/profile/${getMsg.senderUid}`); }}>👤 View Profile</button>
+                        <button type="button" className="threedot-menu-item reply-btn" onClick={() => { setAvatarMenuFor(null); navigate(`/chat/${getMsg.senderUid}/${encodeURIComponent(getMsg.senderName || 'Student')}`); }}>💬 Message</button>
                       </div>
                     )}
                   </div>
@@ -1119,41 +1018,20 @@ export default function GlobalChat() {
 
             {isRecording ? (
               <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #dc3545 10%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(220, 53, 69, 0.4)' }}>
-                <button
-                  type="button"
-                  onClick={cancelRecording}
-                  title="Cancel recording"
-                  style={{ background: 'rgba(220, 53, 69, 0.12)', color: '#dc3545', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
-                >
-                  🗑️
-                </button>
+                <button type="button" onClick={cancelRecording} title="Cancel recording" style={{ background: 'rgba(220, 53, 69, 0.12)', color: '#dc3545', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>🗑️</button>
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0' }}>
                   <span className="recording-dot" />
                   <canvas ref={recordingCanvasRef} width={120} height={26} style={{ flex: 1 }} />
                   <span className="recording-label">{formatRecordingTime(recordingSeconds)}</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={stopAndSendRecording}
-                  title="Send voice message"
-                  style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}
-                >
-                  ➤
-                </button>
+                <button type="button" onClick={stopAndSendRecording} title="Send voice message" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
               </div>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
                 <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
-
-                <button
-                  type="button"
-                  onClick={startRecording}
-                  title="Record a voice message"
-                  style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
-                >
+                <button type="button" onClick={startRecording} title="Record a voice message" style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>
                   <MicIcon />
                 </button>
-
                 <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
                 <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
               </div>
