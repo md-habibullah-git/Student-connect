@@ -265,6 +265,14 @@ export default function GlobalChat() {
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  // Call history localStorage থেকে load করুন
+  useEffect(() => {
+    const saved = localStorage.getItem('globalCallHistory');
+    if (saved) {
+      setCallHistoryDisplay(JSON.parse(saved));
+    }
+  }, []);
+
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
@@ -275,21 +283,6 @@ export default function GlobalChat() {
       } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
     };
     autoCleanOldGlobalMessages();
-  }, []);
-
-  // Call history display দেখানোর জন্য listener
-  useEffect(() => {
-    const unsubscribe = onSnapshot(doc(db, "global-calls", globalRoomId), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        if (data.callHistory && Object.keys(data.callHistory).length > 0 && !data.participants?.length) {
-          setCallHistoryDisplay(data.callHistory);
-        }
-      } else {
-        setCallHistoryDisplay(null);
-      }
-    });
-    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -824,6 +817,8 @@ export default function GlobalChat() {
       sessionRef.current = null;
       clearActiveGlobalCallSession();
       setRemoteStreams({});
+      localStorage.removeItem('globalCallHistory');
+      setCallHistoryDisplay(null);
       
       await getLocalStream(callType);
       const startedAt = new Date().getTime();
@@ -900,6 +895,8 @@ export default function GlobalChat() {
             if (data.callStartedAt) {
               callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
             }
+            // localStorage-এ save করুন যাতে reload-এও থাকে
+            localStorage.setItem('globalCallHistory', JSON.stringify(callHistory));
             await setDoc(callDocRef, { callHistory: callHistory, participants: [] }, { merge: true });
           } else {
             await updateDoc(callDocRef, { 
@@ -928,6 +925,9 @@ export default function GlobalChat() {
           if (data.callStartedAt) {
             callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
           }
+          // localStorage-এ save করুন যাতে reload-এও থাকে
+          localStorage.setItem('globalCallHistory', JSON.stringify(callHistory));
+          setCallHistoryDisplay(callHistory);
           await setDoc(callDocRef, { callHistory: callHistory, participants: [] }, { merge: true });
           const oldConnections = await getDocs(collection(callDocRef, "connections"));
           await Promise.all(oldConnections.docs.map(async (d) => {
