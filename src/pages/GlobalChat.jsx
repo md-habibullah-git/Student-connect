@@ -885,11 +885,10 @@ export default function GlobalChat() {
             if (data.callStartedAt) {
               callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
             }
-            // Call summary message হিসেবে chat-এ add করুন
-            const callSummaryText = `📞 Call ended\n${Object.entries(callHistory)
-              .filter(([key]) => key !== 'totalDuration')
-              .map(([key, info]) => `${info.name}: ${formatDuration(info.duration)}`)
-              .join('\n')}\nTotal: ${formatDuration(callHistory.totalDuration)}`;
+            const memberCount = Object.keys(callHistory).filter(k => k !== 'totalDuration').length;
+            const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
+            const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
+            const callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call (${memberCount} members) • ${formatDuration(callHistory.totalDuration)}`;
             
             await addDoc(collection(db, "global-room-messages"), {
               text: callSummaryText,
@@ -930,11 +929,10 @@ export default function GlobalChat() {
           if (data.callStartedAt) {
             callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
           }
-          // Call summary message হিসেবে chat-এ add করুন
-          const callSummaryText = `📞 Call ended\n${Object.entries(callHistory)
-            .filter(([key]) => key !== 'totalDuration')
-            .map(([key, info]) => `${info.name}: ${formatDuration(info.duration)}`)
-            .join('\n')}\nTotal: ${formatDuration(callHistory.totalDuration)}`;
+          const memberCount = Object.keys(callHistory).filter(k => k !== 'totalDuration').length;
+          const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
+          const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
+          const callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call (${memberCount} members) • ${formatDuration(callHistory.totalDuration)}`;
           
           await addDoc(collection(db, "global-room-messages"), {
             text: callSummaryText,
@@ -1097,7 +1095,6 @@ export default function GlobalChat() {
               const defaultFallbackAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(getMsg.senderName || 'Student')}`;
               const senderOnline = usersCache[getMsg.senderUid]?.online === true;
 
-              // System message (call summary) আলাদা ভাবে render করুন
               if (isSystem) {
                 return (
                   <div key={getMsg.id} style={{ display: 'flex', justifyContent: 'center' }}>
