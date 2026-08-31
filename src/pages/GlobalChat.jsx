@@ -10,7 +10,6 @@ import {
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 
-// PersonalChat-এর মতোই rtcConfiguration — STUN + Free TURN
 const rtcConfiguration = {
   iceServers: [
     { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
@@ -759,11 +758,23 @@ export default function GlobalChat() {
 
   const initiateGlobalCall = async (callType = 'video') => {
     try {
-      // পুরনো call data cleanup
+      // Complete cleanup — সব পুরনো data মুছুন
       const callRef = doc(db, "global-calls", globalRoomId);
       const oldConnections = await getDocs(collection(callRef, "connections"));
-      await Promise.all(oldConnections.docs.map(d => deleteDoc(d.ref)));
+      await Promise.all(oldConnections.docs.map(async (d) => {
+        const [subA, subB] = await Promise.all([
+          getDocs(collection(d.ref, "candidatesA")),
+          getDocs(collection(d.ref, "candidatesB"))
+        ]);
+        await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
+        await deleteDoc(d.ref);
+      }));
       await deleteDoc(callRef).catch(() => {});
+      
+      // Session reset
+      sessionRef.current = null;
+      clearActiveGlobalCallSession();
+      setRemoteStreams({});
       
       // নতুন call শুরু
       await getLocalStream(callType);
@@ -824,8 +835,21 @@ export default function GlobalChat() {
       const snapshot = await getDoc(callDocRef);
       if (snapshot.exists()) {
         const updatedParts = (snapshot.data().participants || []).filter(id => id !== currentUid);
-        if (updatedParts.length === 0) await deleteDoc(callDocRef);
-        else await updateDoc(callDocRef, { participants: updatedParts });
+        if (updatedParts.length === 0) {
+          // সবাই চলে গেলে সব data মুছুন
+          const oldConnections = await getDocs(collection(callDocRef, "connections"));
+          await Promise.all(oldConnections.docs.map(async (d) => {
+            const [subA, subB] = await Promise.all([
+              getDocs(collection(d.ref, "candidatesA")),
+              getDocs(collection(d.ref, "candidatesB"))
+            ]);
+            await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
+            await deleteDoc(d.ref);
+          }));
+          await deleteDoc(callDocRef).catch(() => {});
+        } else {
+          await updateDoc(callDocRef, { participants: updatedParts });
+        }
       }
     } catch (err) {}
     const s = sessionRef.current;
