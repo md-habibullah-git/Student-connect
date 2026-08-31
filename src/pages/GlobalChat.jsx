@@ -24,6 +24,7 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
+// ✅ FIXED: RemoteVideoTile - ভিডিও ট্র্যাক এলে স্বয়ংক্রিয়ভাবে দেখাবে
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
   const [hasVideo, setHasVideo] = useState(false);
@@ -31,16 +32,22 @@ function RemoteVideoTile({ stream, label }) {
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(() => {});
+      videoRef.current.muted = false;
+      videoRef.current.volume = 1.0;
+      videoRef.current.autoplay = true;
+      videoRef.current.playsInline = true;
       
       const checkVideo = () => {
         const videoTracks = stream.getVideoTracks();
-        setHasVideo(videoTracks.length > 0 && videoTracks[0].enabled);
+        const active = videoTracks.length > 0 && videoTracks[0].enabled;
+        setHasVideo(active);
       };
       
       checkVideo();
       stream.addEventListener('addtrack', checkVideo);
       stream.addEventListener('removetrack', checkVideo);
+      
+      videoRef.current.play().catch(() => {});
       
       return () => {
         stream.removeEventListener('addtrack', checkVideo);
@@ -51,7 +58,7 @@ function RemoteVideoTile({ stream, label }) {
   }, [stream]);
   
   return (
-    <div style={{ position: 'relative', background: hasVideo ? '#111' : 'linear-gradient(135deg, #667eea, #764ba2)', borderRadius: '8px', overflow: 'hidden', width: '100%', height: '100%', minHeight: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden', width: '100%', height: '100%', minHeight: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <video 
         ref={videoRef} 
         autoPlay 
@@ -59,12 +66,12 @@ function RemoteVideoTile({ stream, label }) {
         style={{ width: '100%', height: '100%', objectFit: 'cover', display: hasVideo ? 'block' : 'none' }} 
       />
       {!hasVideo && (
-        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '8px', background: 'linear-gradient(135deg, #667eea, #764ba2)' }}>
           <span style={{ fontSize: '48px' }}>👤</span>
           <span style={{ color: '#fff', fontSize: '14px' }}>{label}</span>
         </div>
       )}
-      <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
+      <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px', zIndex: 10 }}>{label}</span>
     </div>
   );
 }
@@ -532,7 +539,7 @@ export default function GlobalChat() {
     }
   };
 
-  // ✅ getLocalStream - callType অনুযায়ী camera চালু হবে
+  // ✅ getLocalStream - camera চালু হবে
   const getLocalStream = async (callType = 'video') => {
     const s = ensureSession();
     if (s.localStream) return s.localStream;
@@ -591,21 +598,24 @@ export default function GlobalChat() {
       s.peerConnections[peerUid] = pc;
 
       const stream = await getLocalStream(s.callType);
-      // ✅ সব track add করুন - video সহ
-      stream.getTracks().forEach(track => {
-        pc.addTrack(track, stream);
-      });
+      // ✅ সব track add - video সহ
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
 
       pc.addEventListener('track', (event) => {
-        event.streams[0].getTracks().forEach(track => {
-          if (!remoteStream.getTracks().includes(track)) {
-            remoteStream.addTrack(track);
-          }
-        });
+        console.log('📥 Track received:', event.track.kind);
+        if (event.streams && event.streams[0]) {
+          event.streams[0].getTracks().forEach(track => {
+            if (!remoteStream.getTracks().includes(track)) {
+              remoteStream.addTrack(track);
+            }
+          });
+        } else {
+          remoteStream.addTrack(event.track);
+        }
         setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       });
 
@@ -729,7 +739,7 @@ export default function GlobalChat() {
     }
   };
 
-  // ✅ handleRejoinCall - সঠিক callType দিয়ে camera চালু হবে
+  // ✅ FIXED: handleRejoinCall - camera চালু হবে
   const handleRejoinCall = async () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
@@ -737,8 +747,9 @@ export default function GlobalChat() {
       if (snapshot.exists()) {
         const data = snapshot.data();
         const callType = data.callType || 'video';
+        console.log('🔄 Rejoining call, callType:', callType);
         
-        // ✅ সঠিক callType দিয়ে local stream নিন
+        // ✅ সঠিক callType দিয়ে local stream নিন - camera চালু হবে
         await getLocalStream(callType);
         
         const updatedParts = data.participants || [];
