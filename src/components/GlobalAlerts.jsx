@@ -420,14 +420,14 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ✅ Incoming global call listener - now checks if on global chat page
+  // ✅ FIXED: Incoming global call listener - গ্লোবাল চ্যাট পেজে থাকলে বার দেখাবে না
   useEffect(() => {
     if (!currentUid) return;
     const onGlobalPage = location.pathname === '/chat/global/Global-Chatroom';
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        // ✅ Only show incoming call bar if NOT on global chat page
+        // ✅ শুধুমাত্র global chat page-এ না থাকলে incoming call bar দেখাবে
         if (data.status === "ringing" && data.hostId !== currentUid && !onGlobalPage && !dismissedGlobalCallRef.current) {
           setIncomingGlobalCall({ hostName: data.hostName });
           return;
@@ -436,7 +436,7 @@ export default function GlobalAlerts() {
       setIncomingGlobalCall(null);
     });
     return () => unsubscribe();
-  }, [currentUid, location.pathname]); // ✅ dependency added
+  }, [currentUid, location.pathname]);
 
   // Clear bubbles when opening relevant chat
   useEffect(() => {
