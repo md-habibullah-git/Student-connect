@@ -33,7 +33,10 @@ const MAX_RECORDING_SECONDS = 30;
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
   useEffect(() => {
-    if (videoRef.current) videoRef.current.srcObject = stream;
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(() => {});
+    }
   }, [stream]);
   return (
     <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
@@ -43,7 +46,7 @@ function RemoteVideoTile({ stream, label }) {
   );
 }
 
-// নতুন: Remote audio element — audio call-এ remote stream play করার জন্য
+// Remote audio element — audio call-এ remote stream play করার জন্য
 function RemoteAudioTile({ stream }) {
   const audioRef = useRef(null);
   useEffect(() => {
@@ -662,6 +665,7 @@ export default function GlobalChat() {
   useEffect(() => {
     if (inCall && localVideoRef.current && sessionRef.current?.localStream) {
       localVideoRef.current.srcObject = sessionRef.current.localStream;
+      localVideoRef.current.play().catch(() => {});
     }
   }, [inCall]);
 
@@ -688,15 +692,25 @@ export default function GlobalChat() {
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
+      
       pc.addEventListener('track', (event) => {
-        event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+        console.log(`[GlobalChat] Track received from ${peerUid}:`, event.track.kind);
+        event.streams[0].getTracks().forEach(track => {
+          console.log(`[GlobalChat] Adding ${track.kind} track to remote stream`);
+          remoteStream.addTrack(track);
+        });
+        setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       });
 
       pc.addEventListener('icecandidate', (event) => {
-        if (event.candidate) addDoc(myCandidatesRef, event.candidate.toJSON());
+        if (event.candidate) {
+          console.log(`[GlobalChat] ICE candidate from ${peerUid}`);
+          addDoc(myCandidatesRef, event.candidate.toJSON());
+        }
       });
 
       pc.addEventListener('connectionstatechange', () => {
+        console.log(`[GlobalChat] Connection state with ${peerUid}: ${pc.connectionState}`);
         if (pc.connectionState === 'failed') {
           removeStalePeerFromRoom(peerUid);
         }
@@ -706,13 +720,18 @@ export default function GlobalChat() {
         onSnapshot(theirCandidatesRef, (snapshot) => {
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'added') {
-              pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
+              console.log(`[GlobalChat] Adding ICE candidate from ${peerUid}`);
+              pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch((err) => {
+                console.error(`[GlobalChat] Error adding ICE candidate:`, err);
+              });
             }
           });
         })
       ];
 
       if (isInitiator) {
+        console.log(`[GlobalChat] I am initiator for ${peerUid}`);
+        
         const [staleA, staleB] = await Promise.all([
           getDocs(collection(connRef, "candidatesA")),
           getDocs(collection(connRef, "candidatesB"))
@@ -721,29 +740,43 @@ export default function GlobalChat() {
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } });
+        console.log(`[GlobalChat] Setting offer for ${peerUid}`);
+        await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } }, { merge: true });
 
         unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
+          console.log(`[GlobalChat] Connection doc update (initiator):`, data ? Object.keys(data) : 'no data');
           if (data?.answer && !pc.currentRemoteDescription) {
+            console.log(`[GlobalChat] Setting remote description (answer) from ${peerUid}`);
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
           }
         }));
       } else {
+        console.log(`[GlobalChat] I am non-initiator for ${peerUid}, waiting for offer...`);
+        
         unsubscribers.push(onSnapshot(connRef, async (snap) => {
           const data = snap.data();
-          if (data?.offer && !pc.currentRemoteDescription) {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
+          console.log(`[GlobalChat] Connection doc update (non-initiator):`, data ? Object.keys(data) : 'no data');
+          
+          if (data?.offer && !pc.currentRemoteDescription && !pc.localDescription) {
+            console.log(`[GlobalChat] Got offer from ${peerUid}, creating answer...`);
+            try {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              console.log(`[GlobalChat] Setting answer for ${peerUid}`);
+              await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
+            } catch (err) {
+              console.error(`[GlobalChat] Error creating answer:`, err);
+            }
           }
         }));
       }
 
       s.peerUnsubscribers[peerUid] = unsubscribers;
+      console.log(`[GlobalChat] Connection setup complete for ${peerUid}`);
     } catch (err) {
-      console.error(`Error connecting to peer ${peerUid}:`, err);
+      console.error(`[GlobalChat] Error connecting to peer ${peerUid}:`, err);
     }
   };
 
@@ -965,7 +998,6 @@ export default function GlobalChat() {
               {Object.entries(remoteStreams).map(([uid, stream]) => (
                 <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />
               ))}
-              {/* Video call-এও remote audio play হবে — video element-এ audio track আছে */}
             </div>
           )}
           <button
