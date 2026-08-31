@@ -885,7 +885,9 @@ export default function GlobalChat() {
             if (data.callStartedAt) {
               callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
             }
-            const memberCount = Object.keys(callHistory).filter(k => k !== 'totalDuration').length;
+            // FIX: participants array থেকে member count নিন
+            const allMembers = data.participants || [];
+            const memberCount = allMembers.length > 0 ? allMembers.length : Object.keys(callHistory).filter(k => k !== 'totalDuration').length;
             const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
             const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
             const callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call (${memberCount} members) • ${formatDuration(callHistory.totalDuration)}`;
@@ -929,6 +931,7 @@ export default function GlobalChat() {
           if (data.callStartedAt) {
             callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
           }
+          // FIX: callHistory-তে যতগুলো member entry আছে সেই সংখ্যা নিন
           const memberCount = Object.keys(callHistory).filter(k => k !== 'totalDuration').length;
           const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
           const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
