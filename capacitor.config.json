@@ -13,5 +13,18 @@
   "android": {
     "allowMixedContent": true,
     "captureInput": true
+  },
+  "plugins": {
+    "Camera": {
+      "android": {
+        "useAndroidX": true,
+        "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera",
+        "photosPermission": "Allow $(PRODUCT_NAME) to access your photos",
+        "videosPermission": "Allow $(PRODUCT_NAME) to access your videos"
+      }
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
   }
 }

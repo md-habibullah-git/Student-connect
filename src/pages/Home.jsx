@@ -1,3 +1,5 @@
+// File Name: src/pages/Home.jsx
+
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { db, auth } from '../firebase';
@@ -5,6 +7,7 @@ import {
   collection, addDoc, query, onSnapshot, doc, updateDoc, 
   arrayUnion, arrayRemove, deleteDoc, getDocs, where 
 } from 'firebase/firestore';
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 
 const CLOUDINARY_CLOUD_NAME = 'hvdnthrl';
 const CLOUDINARY_UPLOAD_PRESET = 'student-connect';
@@ -362,8 +365,52 @@ export default function Home({ isAdmin }) {
     };
   }, []);
 
-  const handleFileChange = (e) => {
-    const file = e.target.files[0];
+  // 🔥 Camera plugin দিয়ে gallery access (Native platform)
+  const handleFileChange = async (e) => {
+    // Native platform-এ Camera plugin ব্যবহার
+    if (window.Capacitor?.isNativePlatform?.()) {
+      try {
+        const photo = await Camera.getPhoto({
+          quality: 80,
+          allowEditing: false,
+          resultType: CameraResultType.Uri,
+          source: CameraSource.Photos,
+        });
+        
+        if (photo && photo.webPath) {
+          const response = await fetch(photo.webPath);
+          const blob = await response.blob();
+          const fileName = photo.path?.split('/').pop() || `photo-${Date.now()}.jpg`;
+          const fileType = blob.type || 'image/jpeg';
+          const file = new File([blob], fileName, { type: fileType });
+          
+          if (fileType.startsWith('video/')) {
+            if (file.size > MAX_VIDEO_BYTES) {
+              alert("This video is larger than 100MB. Please choose a smaller video file.");
+              resetFileInput();
+              return;
+            }
+          }
+          
+          const previewUrl = URL.createObjectURL(file);
+          
+          setSelectedFile({
+            kind: fileType.startsWith('video/') ? 'video' : 'image',
+            file: file,
+            previewUrl: previewUrl,
+            fileName: fileName,
+            fileSize: file.size,
+            selectedAt: Date.now()
+          });
+        }
+      } catch (err) {
+        console.error("Gallery error:", err);
+      }
+      return;
+    }
+    
+    // Web browser-এ file input
+    const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
       return;
@@ -378,7 +425,7 @@ export default function Home({ isAdmin }) {
     }
 
     const previewUrl = URL.createObjectURL(file);
-    setSelectedFile({ 
+    setSelectedFile({
       kind: file.type.startsWith('video/') ? 'video' : 'image',
       file: file,
       previewUrl: previewUrl,
@@ -635,14 +682,35 @@ export default function Home({ isAdmin }) {
               
               <div style={{ marginTop: '12px', width: '95%' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: 'var(--text, #555)', marginBottom: '5px' }}>Upload from Device:</label>
-                <input 
-                  key={fileInputKey}
-                  ref={fileInputRef}
-                  type="file" 
-                  accept="image/*,video/*" 
-                  onChange={handleFileChange} 
-                  style={{ fontSize: '13px' }}
-                />
+                
+                {/* 🔥 Native-এ button, Web-এ file input */}
+                {window.Capacitor?.isNativePlatform?.() ? (
+                  <button
+                    type="button"
+                    onClick={handleFileChange}
+                    style={{ 
+                      padding: '10px 15px', 
+                      backgroundColor: '#0056b3', 
+                      color: '#fff', 
+                      border: 'none', 
+                      borderRadius: '5px', 
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      fontWeight: 'bold'
+                    }}
+                  >
+                    📷 Choose from Gallery
+                  </button>
+                ) : (
+                  <input 
+                    key={fileInputKey}
+                    ref={fileInputRef}
+                    type="file" 
+                    accept="image/*,video/*" 
+                    onChange={handleFileChange} 
+                    style={{ fontSize: '13px' }}
+                  />
+                )}
 
                 {selectedFile?.kind === 'video' && selectedFile.previewUrl && (
                   <div style={{ marginTop: '10px', textAlign: 'center' }}>
