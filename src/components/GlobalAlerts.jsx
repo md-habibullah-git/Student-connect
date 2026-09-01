@@ -343,46 +343,41 @@ export default function GlobalAlerts() {
       let found = null;
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        const callId = docSnap.id;
+        
+        // Incoming ringing call
         if (data.status === "ringing" && data.hostId !== currentUid) {
-          found = { roomId: docSnap.id, hostId: data.hostId, hostName: data.hostName, hostPhoto: data.hostPhoto };
+          found = { roomId: callId, hostId: data.hostId, hostName: data.hostName, hostPhoto: data.hostPhoto };
         }
-      });
-      setIncomingPersonalCall(found);
-      
-      snapshot.docChanges().forEach((change) => {
-        // Document removed মানে কল শেষ হয়ে গেছে (delete হয়ে গেছে)
-        if (change.type === 'removed') {
-          const oldData = change.doc.data();
-          // answer না থাকলে missed call
-          if (oldData && oldData.hostId !== currentUid && !oldData.answer) {
-            const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
-            const callId = change.doc.id;
-            const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
-            
-            if (!alreadySaved) {
-              missedCallsStorage.push({
-                callId: callId,
-                hostId: oldData.hostId,
-                hostName: oldData.hostName || 'Unknown',
-                hostPhoto: oldData.hostPhoto || '',
-                callType: oldData.callType || 'video',
-                missedAt: Date.now(),
-                isGlobal: false
-              });
-              localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
-            }
+        
+        // Missed call: status is "ended" or "missed" but no answer
+        if ((data.status === "ended" || data.status === "missed") && data.hostId !== currentUid && !data.answer) {
+          const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
+          const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
+          
+          if (!alreadySaved) {
+            missedCallsStorage.push({
+              callId: callId,
+              hostId: data.hostId,
+              hostName: data.hostName || 'Unknown',
+              hostPhoto: data.hostPhoto || '',
+              callType: data.callType || 'video',
+              missedAt: Date.now(),
+              isGlobal: false
+            });
+            localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
             
             playMessageSound();
             
             const missedBubble = {
               roomId: `missed_${callId}`,
-              otherUid: oldData.hostId,
+              otherUid: data.hostId,
               isGlobal: false,
               count: 1,
-              senderName: oldData.hostName || 'Unknown',
-              senderPhoto: oldData.hostPhoto || '',
+              senderName: data.hostName || 'Unknown',
+              senderPhoto: data.hostPhoto || '',
               isMissedCall: true,
-              callTypeIcon: oldData.callType === 'audio' ? '🎙️' : '📹'
+              callTypeIcon: data.callType === 'audio' ? '🎙️' : '📹'
             };
             
             setMessageBubbles((prev) => {
@@ -395,6 +390,7 @@ export default function GlobalAlerts() {
           }
         }
       });
+      setIncomingPersonalCall(found);
     });
     return () => unsubscribe();
   }, [currentUid]);

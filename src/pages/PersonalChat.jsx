@@ -802,7 +802,6 @@ export default function PersonalChat() {
       unsubscribeCallSignalRef.current = onSnapshot(callRef, async (snap) => {
         const data = snap.data();
         if (!data) {
-          // Document deleted - call ended by other party
           const endedAt = new Date().getTime();
           await saveCallHistory(callType, startedAt, endedAt, false);
           cleanupCallLocally();
@@ -846,7 +845,7 @@ export default function PersonalChat() {
         } catch (err) {
           console.error("Error setting missed call status:", err);
         }
-      }, 30000); // 30 seconds
+      }, 30000);
 
       setActiveCallType(callType);
       setInCall(true);
@@ -914,7 +913,6 @@ export default function PersonalChat() {
 
       unsubscribeCallSignalRef.current = onSnapshot(callRef, (snap) => {
         if (!snap.exists()) {
-          // Document deleted - call ended by other party
           const endedAt = new Date().getTime();
           saveCallHistory(callType, startedAt, endedAt, false);
           cleanupCallLocally();
@@ -952,18 +950,11 @@ export default function PersonalChat() {
     const callType = activeCallType;
     
     try {
-      // Check if call was answered or not
       const callSnap = await getDoc(callRef);
       if (callSnap.exists()) {
         const callData = callSnap.data();
         const wasAnswered = callData.answer ? true : false;
         
-        if (!wasAnswered) {
-          // Call was not answered - set missed status first
-          await updateDoc(callRef, { status: "missed" }).catch(() => {});
-        }
-        
-        // Delete candidates
         const [callerCandidates, calleeCandidates] = await Promise.all([
           getDocs(collection(callRef, "callerCandidates")),
           getDocs(collection(callRef, "calleeCandidates"))
@@ -973,8 +964,17 @@ export default function PersonalChat() {
           ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
         ]);
         
-        // Delete the call document
-        await deleteDoc(callRef).catch(() => {});
+        if (!wasAnswered) {
+          await updateDoc(callRef, { status: "ended", answer: false }).catch(() => {});
+        } else {
+          await updateDoc(callRef, { status: "ended" }).catch(() => {});
+        }
+        
+        setTimeout(async () => {
+          try {
+            await deleteDoc(callRef).catch(() => {});
+          } catch (err) {}
+        }, 3000);
       }
     } catch (err) {
       console.error("Error ending call:", err);
