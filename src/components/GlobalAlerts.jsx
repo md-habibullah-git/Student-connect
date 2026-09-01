@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import {
   collection, doc, onSnapshot, query, where, orderBy, limit,
-  updateDoc, setDoc
+  updateDoc, setDoc, getDocs
 } from 'firebase/firestore';
 import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 import { Capacitor } from '@capacitor/core';
@@ -349,7 +349,6 @@ export default function GlobalAlerts() {
       });
       setIncomingPersonalCall(found);
       
-      // Missed call detection
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'removed') {
           const oldData = change.doc.data();
@@ -372,7 +371,6 @@ export default function GlobalAlerts() {
               localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
             }
             
-            // Live missed call bubble + sound
             playMessageSound();
             
             const missedBubble = {
@@ -444,39 +442,116 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid, dismissedGlobalCalls]);
 
-  // Home page load-এ localStorage থেকে missed calls check + bubble + sound
+  // 🔧 FIXED: Home page-এ ঢুকলে সব missed calls + unread messages check + bubble + sound
   useEffect(() => {
     if (!currentUid) return;
     if (location.pathname !== '/') return;
     
-    const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
-    const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
-    
-    const unseenMissedCalls = missedCallsStorage.filter(call => !seenCallsStorage.includes(call.callId));
-    
-    if (unseenMissedCalls.length > 0) {
-      const missedBubbles = unseenMissedCalls.map(call => ({
-        roomId: call.isGlobal ? `missed_global_${call.callId.replace('global_', '')}` : `missed_${call.callId}`,
-        otherUid: call.hostId,
-        isGlobal: call.isGlobal || false,
-        count: 1,
-        senderName: call.hostName || 'Unknown',
-        senderPhoto: call.hostPhoto || '',
-        isMissedCall: true,
-        callTypeIcon: call.callType === 'audio' ? '🎙️' : '📹'
-      }));
+    const checkAllAlerts = () => {
+      // Check missed calls from localStorage
+      const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
+      const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
       
-      setMessageBubbles(prev => {
-        const merged = [...prev];
-        missedBubbles.forEach(bubble => {
-          const existing = merged.find(b => b.roomId === bubble.roomId);
-          if (!existing) merged.push(bubble);
+      const unseenMissedCalls = missedCallsStorage.filter(call => !seenCallsStorage.includes(call.callId));
+      
+      if (unseenMissedCalls.length > 0) {
+        const missedBubbles = unseenMissedCalls.map(call => ({
+          roomId: call.isGlobal ? `missed_global_${call.callId.replace('global_', '')}` : `missed_${call.callId}`,
+          otherUid: call.hostId,
+          isGlobal: call.isGlobal || false,
+          count: 1,
+          senderName: call.hostName || 'Unknown',
+          senderPhoto: call.hostPhoto || '',
+          isMissedCall: true,
+          callTypeIcon: call.callType === 'audio' ? '🎙️' : '📹'
+        }));
+        
+        setMessageBubbles(prev => {
+          const merged = [...prev];
+          missedBubbles.forEach(bubble => {
+            const existing = merged.find(b => b.roomId === bubble.roomId);
+            if (!existing) merged.push(bubble);
+          });
+          return merged.slice(-5);
         });
-        return merged.slice(-5);
-      });
+        
+        playMessageSound();
+      }
       
-      playMessageSound();
-    }
+      // Check unread personal messages from Firestore
+      const personalRoomsRef = collection(db, "personal-rooms");
+      const personalQ = query(personalRoomsRef, where("participants", "array-contains", currentUid));
+      
+      getDocs(personalQ).then(snapshot => {
+        const unreadBubbles = [];
+        
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data();
+          const roomId = docSnap.id;
+          const lastReadKey = `lastRead_personal_${roomId}`;
+          const lastRead = Number(localStorage.getItem(lastReadKey)) || 0;
+          
+          if (data.lastMessageAt && data.lastMessageAt > lastRead && data.lastMessageSenderId !== currentUid) {
+            const otherUid = (data.participants || []).find((id) => id !== currentUid);
+            unreadBubbles.push({
+              roomId,
+              otherUid,
+              isGlobal: false,
+              count: 1,
+              senderName: data.lastMessageSenderName || 'Unknown',
+              senderPhoto: data.lastMessageSenderPhoto || '',
+            });
+          }
+        });
+        
+        if (unreadBubbles.length > 0) {
+          setMessageBubbles(prev => {
+            const merged = [...prev];
+            unreadBubbles.forEach(bubble => {
+              const existing = merged.find(b => b.roomId === bubble.roomId);
+              if (!existing) merged.push(bubble);
+            });
+            return merged.slice(-5);
+          });
+          
+          playMessageSound();
+        }
+      }).catch(err => console.error("Error checking personal unread:", err));
+      
+      // Check unread global messages from Firestore
+      const lastReadGlobal = Number(localStorage.getItem('lastRead_global')) || 0;
+      const globalMsgRef = collection(db, "global-room-messages");
+      const globalQ = query(globalMsgRef, orderBy("createdAt", "desc"), limit(1));
+      
+      getDocs(globalQ).then(snapshot => {
+        if (!snapshot.empty) {
+          const globalData = snapshot.docs[0].data();
+          const msgTime = globalData.createdAt?.seconds ? globalData.createdAt.seconds * 1000 : globalData.createdAt;
+          
+          if (msgTime > lastReadGlobal && globalData.senderUid !== currentUid) {
+            const unreadBubble = {
+              roomId: 'global',
+              isGlobal: true,
+              count: 1,
+              senderName: globalData.senderName || 'Unknown',
+              senderPhoto: globalData.senderPhoto || '',
+            };
+            
+            setMessageBubbles(prev => {
+              const existing = prev.find(b => b.roomId === 'global' && !b.isMissedCall);
+              if (!existing) {
+                return [...prev, unreadBubble].slice(-5);
+              }
+              return prev;
+            });
+            
+            playMessageSound();
+          }
+        }
+      }).catch(err => console.error("Error checking global unread:", err));
+    };
+    
+    checkAllAlerts();
   }, [currentUid, location.pathname]);
 
   useEffect(() => {
