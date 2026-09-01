@@ -36,15 +36,20 @@ const startRingtone = () => {
     ringtoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     ringtoneGainNode = ringtoneAudioCtx.createGain();
     ringtoneGainNode.connect(ringtoneAudioCtx.destination);
-    ringtoneGainNode.gain.value = 0.5; // Louder volume
+    ringtoneGainNode.gain.value = 2.0; // 4x louder (আগে 0.5 ছিল, এখন 2.0)
     
     const playBeep = () => {
-      ringtoneOscillator = ringtoneAudioCtx.createOscillator();
-      ringtoneOscillator.connect(ringtoneGainNode);
-      ringtoneOscillator.frequency.value = 880;
-      ringtoneOscillator.type = 'square'; // More audible
-      ringtoneOscillator.start(ringtoneAudioCtx.currentTime);
-      ringtoneOscillator.stop(ringtoneAudioCtx.currentTime + 0.5);
+      try {
+        if (ringtoneOscillator) {
+          ringtoneOscillator.stop();
+        }
+        ringtoneOscillator = ringtoneAudioCtx.createOscillator();
+        ringtoneOscillator.connect(ringtoneGainNode);
+        ringtoneOscillator.frequency.value = 880;
+        ringtoneOscillator.type = 'square';
+        ringtoneOscillator.start(ringtoneAudioCtx.currentTime);
+        ringtoneOscillator.stop(ringtoneAudioCtx.currentTime + 0.5);
+      } catch (err) {}
     };
     
     playBeep();
@@ -75,9 +80,9 @@ const playMessageSound = () => {
     const gainNode = audioCtx.createGain();
     oscillator.connect(gainNode);
     gainNode.connect(audioCtx.destination);
-    oscillator.frequency.value = 1200; // Higher frequency for alert
+    oscillator.frequency.value = 1200;
     oscillator.type = 'sine';
-    gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(0.8, audioCtx.currentTime); // 4x louder (আগে 0.4 ছিল, এখন 0.8)
     gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
     oscillator.start(audioCtx.currentTime);
     oscillator.stop(audioCtx.currentTime + 0.4);
