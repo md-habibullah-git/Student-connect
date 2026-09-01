@@ -33,7 +33,7 @@ export default function GlobalAlerts() {
   const [incomingGlobalCall, setIncomingGlobalCall] = useState(null);
   const [dismissedGlobalCalls, setDismissedGlobalCalls] = useState(() => {
     try {
-      const saved = localStorage.getItem('dismissedGlobalCalls');
+      const saved = localStorage.getItem(`dismissedGlobalCalls_${auth.currentUser?.uid || 'guest'}`);
       return saved ? JSON.parse(saved) : [];
     } catch (err) {
       return [];
@@ -266,31 +266,21 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Global call listener — updated for re-ringing on new call
+  // Global call listener — updated for per-call dismissal
   useEffect(() => {
     if (!currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        const callId = data.callStartedAt || 'current';
-        
-        // নতুন call শুরু হলে dismissed list থেকে clear করো
-        if (data.status === "ringing" && data.participants?.length <= 1) {
-          // নতুন call শুরু — dismissed list reset
-          setDismissedGlobalCalls(prev => {
-            const newList = [];
-            localStorage.setItem('dismissedGlobalCalls', JSON.stringify(newList));
-            return newList;
-          });
-        }
+        const callId = String(data.callStartedAt || '0');
         
         if (data.status === "ringing" && data.hostId !== currentUid) {
           // Check if this call was already dismissed by this user
           const alreadyDismissed = dismissedGlobalCalls.includes(callId);
           if (!alreadyDismissed) {
             setIncomingGlobalCall({ hostName: data.hostName, callId });
+            return;
           }
-          return;
         }
       }
       setIncomingGlobalCall(null);
@@ -322,8 +312,9 @@ export default function GlobalAlerts() {
       if (activeCall.callId) {
         const updatedList = [...dismissedGlobalCalls, activeCall.callId];
         setDismissedGlobalCalls(updatedList);
-        localStorage.setItem('dismissedGlobalCalls', JSON.stringify(updatedList));
+        localStorage.setItem(`dismissedGlobalCalls_${currentUid}`, JSON.stringify(updatedList));
       }
+      setIncomingGlobalCall(null);
       navigate('/chat/global/Global-Chatroom', { state: { autoJoinCall: true } });
     }
   };
@@ -342,7 +333,7 @@ export default function GlobalAlerts() {
       if (activeCall.callId) {
         const updatedList = [...dismissedGlobalCalls, activeCall.callId];
         setDismissedGlobalCalls(updatedList);
-        localStorage.setItem('dismissedGlobalCalls', JSON.stringify(updatedList));
+        localStorage.setItem(`dismissedGlobalCalls_${currentUid}`, JSON.stringify(updatedList));
       }
       setIncomingGlobalCall(null);
     }
