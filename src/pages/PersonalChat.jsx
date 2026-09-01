@@ -193,6 +193,7 @@ export default function PersonalChat() {
   const unsubscribeCallSignalRef = useRef(null);
   const unsubscribeCandidatesRef = useRef(null);
   const callStartTimeRef = useRef(null);
+  const missedCallTimeoutRef = useRef(null);
 
   const initialMessagesLoadedRef = useRef(false);
 
@@ -707,6 +708,10 @@ export default function PersonalChat() {
   };
 
   const cleanupCallLocally = () => {
+    if (missedCallTimeoutRef.current) {
+      clearTimeout(missedCallTimeoutRef.current);
+      missedCallTimeoutRef.current = null;
+    }
     if (unsubscribeCallSignalRef.current) { unsubscribeCallSignalRef.current(); unsubscribeCallSignalRef.current = null; }
     if (unsubscribeCandidatesRef.current) { unsubscribeCandidatesRef.current(); unsubscribeCandidatesRef.current = null; }
     if (peerConnectionRef.current) { peerConnectionRef.current.close(); peerConnectionRef.current = null; }
@@ -817,6 +822,21 @@ export default function PersonalChat() {
           }
         });
       });
+
+      // Auto-miss call after 30 seconds if no answer
+      missedCallTimeoutRef.current = setTimeout(async () => {
+        try {
+          const currentCallSnap = await getDoc(callRef);
+          if (currentCallSnap.exists() && currentCallSnap.data().status === 'ringing' && !currentCallSnap.data().answer) {
+            await updateDoc(callRef, { status: 'missed' });
+            await saveCallHistory(callType, startedAt, new Date().getTime(), true);
+            cleanupCallLocally();
+            setInCall(false);
+          }
+        } catch (err) {
+          console.error("Error setting missed call status:", err);
+        }
+      }, 30000); // 30 seconds
 
       setActiveCallType(callType);
       setInCall(true);
