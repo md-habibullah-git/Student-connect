@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import {
   collection, doc, onSnapshot, query, where, orderBy, limit,
-  updateDoc, setDoc, getDoc
+  updateDoc, setDoc
 } from 'firebase/firestore';
 import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 import { Capacitor } from '@capacitor/core';
@@ -335,7 +335,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Personal call missed detection — bubble আকারে দেখাবে
+  // Personal call listener with missed call bubble + sound
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-calls"), where("participants", "array-contains", currentUid));
@@ -351,11 +351,12 @@ export default function GlobalAlerts() {
       
       // Missed call bubble detection
       snapshot.docChanges().forEach((change) => {
-        if (change.type === 'modified' || change.type === 'removed') {
+        if (change.type === 'removed') {
           const oldData = change.doc.data();
-          // If call ended and I didn't answer, show missed call bubble
           if (oldData && oldData.hostId !== currentUid && !oldData.answer) {
-            const callTypeIcon = oldData.callType === 'audio' ? '🎙️' : '📹';
+            // Play message sound for missed call
+            playMessageSound();
+            
             const missedBubble = {
               roomId: `missed_${change.doc.id}`,
               otherUid: oldData.hostId,
@@ -364,7 +365,7 @@ export default function GlobalAlerts() {
               senderName: oldData.hostName || 'Unknown',
               senderPhoto: oldData.hostPhoto || '',
               isMissedCall: true,
-              callTypeIcon: callTypeIcon
+              callTypeIcon: oldData.callType === 'audio' ? '🎙️' : '📹'
             };
             
             setMessageBubbles((prev) => {
@@ -381,6 +382,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
+  // Global call listener
   useEffect(() => {
     if (!currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
@@ -393,30 +395,6 @@ export default function GlobalAlerts() {
           if (!alreadyDismissed) {
             setIncomingGlobalCall({ hostName: data.hostName, callId });
             return;
-          }
-        }
-        
-        // Global call missed detection
-        if (data.status !== "ringing" && data.callStartedAt && data.hostId !== currentUid) {
-          const memberCount = Object.keys(data.callHistory || {}).filter(k => k !== 'totalDuration').length;
-          if (memberCount <= 1) {
-            const missedBubble = {
-              roomId: `missed_global_${callId}`,
-              isGlobal: true,
-              count: 1,
-              senderName: data.hostName || 'Unknown',
-              senderPhoto: '',
-              isMissedCall: true,
-              callTypeIcon: data.callType === 'audio' ? '🎙️' : '📹'
-            };
-            
-            setMessageBubbles((prev) => {
-              const existing = prev.find((b) => b.roomId === missedBubble.roomId);
-              if (!existing) {
-                return [...prev, missedBubble].slice(-3);
-              }
-              return prev;
-            });
           }
         }
       }
@@ -484,7 +462,6 @@ export default function GlobalAlerts() {
   const handleBubbleClick = (bubble) => {
     if (dragMovedRef.current) { dragMovedRef.current = false; return; }
     if (bubble.isGlobal) navigate('/chat/global/Global-Chatroom');
-    else if (bubble.isMissedCall) navigate(`/chat/${bubble.otherUid}/${encodeURIComponent(bubble.senderName || 'Student')}`);
     else navigate(`/chat/${bubble.otherUid}/${encodeURIComponent(bubble.senderName || 'Student')}`);
     setMessageBubbles((prev) => prev.filter((b) => b !== bubble));
   };
