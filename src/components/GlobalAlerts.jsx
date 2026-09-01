@@ -293,7 +293,7 @@ export default function GlobalAlerts() {
                 roomId, otherUid, isGlobal: false, count: 1,
                 senderName: data.lastMessageSenderName, senderPhoto: data.lastMessageSenderPhoto
               }];
-              return next.slice(-3);
+              return next.slice(-5);
             });
           }
         }
@@ -327,7 +327,7 @@ export default function GlobalAlerts() {
                   : b);
               }
               const next = [...prev, { roomId: 'global', isGlobal: true, count: 1, senderName: data.senderName, senderPhoto: data.senderPhoto }];
-              return next.slice(-3);
+              return next.slice(-5);
             });
           }
         }
@@ -355,8 +355,8 @@ export default function GlobalAlerts() {
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'removed') {
           const oldData = change.doc.data();
-          if (oldData && oldData.hostId !== currentUid && !oldData.answer) {
-            // Save missed call to localStorage
+          if (oldData && oldData.hostId !== currentUid) {
+            // Save missed call to localStorage regardless of answer
             const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
             const callId = change.doc.id;
             const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
@@ -374,26 +374,29 @@ export default function GlobalAlerts() {
               localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
             }
             
-            playMessageSound();
-            
-            const missedBubble = {
-              roomId: `missed_${change.doc.id}`,
-              otherUid: oldData.hostId,
-              isGlobal: false,
-              count: 1,
-              senderName: oldData.hostName || 'Unknown',
-              senderPhoto: oldData.hostPhoto || '',
-              isMissedCall: true,
-              callTypeIcon: oldData.callType === 'audio' ? '🎙️' : '📹'
-            };
-            
-            setMessageBubbles((prev) => {
-              const existing = prev.find((b) => b.roomId === missedBubble.roomId);
-              if (!existing) {
-                return [...prev, missedBubble].slice(-5);
-              }
-              return prev;
-            });
+            // Check if not answered
+            if (!oldData.answer) {
+              playMessageSound();
+              
+              const missedBubble = {
+                roomId: `missed_${change.doc.id}`,
+                otherUid: oldData.hostId,
+                isGlobal: false,
+                count: 1,
+                senderName: oldData.hostName || 'Unknown',
+                senderPhoto: oldData.hostPhoto || '',
+                isMissedCall: true,
+                callTypeIcon: oldData.callType === 'audio' ? '🎙️' : '📹'
+              };
+              
+              setMessageBubbles((prev) => {
+                const existing = prev.find((b) => b.roomId === missedBubble.roomId);
+                if (!existing) {
+                  return [...prev, missedBubble].slice(-5);
+                }
+                return prev;
+              });
+            }
           }
         }
       });
@@ -417,8 +420,8 @@ export default function GlobalAlerts() {
           }
         }
         
-        // Global missed call detection
-        if (data.status !== "ringing" && data.callStartedAt && data.hostId !== currentUid) {
+        // Global missed call detection - check if call ended without answering
+        if (data.status === "ended" && data.hostId !== currentUid) {
           const memberCount = Object.keys(data.callHistory || {}).filter(k => k !== 'totalDuration').length;
           if (memberCount <= 1) {
             const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
@@ -696,7 +699,10 @@ export default function GlobalAlerts() {
     
     if (isNearBottom && draggedBubbleRef.current) {
       // Remove the bubble
-      setMessageBubbles((prev) => prev.filter((b) => b !== draggedBubbleRef.current));
+      setMessageBubbles((prev) => {
+        const filtered = prev.filter((b) => b !== draggedBubbleRef.current);
+        return filtered;
+      });
       draggedBubbleRef.current = null;
     }
     
@@ -798,7 +804,7 @@ export default function GlobalAlerts() {
         </button>
       )}
 
-      {/* Delete Zone - only trash icon, no text */}
+      {/* Delete Zone - only trash icon */}
       {showDeleteZone && (
         <div style={{
           position: 'fixed',
