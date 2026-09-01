@@ -1,12 +1,14 @@
 {
   "appId": "com.studentconnect.app",
-  "appName": "Student Connect",
+  "appName": "StudentConnect",
   "webDir": "dist",
   "server": {
     "androidScheme": "https",
     "hostname": "localhost",
     "cleartext": true,
-    "allowNavigation": ["*"]
+    "allowNavigation": [
+      "*"
+    ]
   },
   "android": {
     "allowMixedContent": true,

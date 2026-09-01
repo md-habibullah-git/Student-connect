@@ -13,6 +13,21 @@ export default function Login() {
   const [studentClass, setStudentClass] = useState('');
   const [dept, setDept] = useState('');
   const [tempPhoto, setTempPhoto] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  
+  const EyeIcon = () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+  );
+
+  const EyeOffIcon = () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+      <line x1="1" y1="1" x2="23" y2="23"></line>
+    </svg>
+  );
   
   const handleImageChange = (e) => {
     const file = e.target.files[0]; 
@@ -207,6 +222,7 @@ export default function Login() {
     setDept('');
     setStudentClass('');
     setTempPhoto('');
+    setShowPassword(false);
   };
 
   return (
@@ -248,7 +264,19 @@ export default function Login() {
             </>
           )}
           <input type="email" placeholder="📧 Email Address" value={email} onChange={e => setEmail(e.target.value)} required style={{ padding: '12px', borderRadius: '6px', border: '1px solid #ccc', outline: 'none', fontSize: '14px' }} />
-          <input type="password" placeholder="🔒 Password" value={password} onChange={e => setPassword(e.target.value)} required style={{ padding: '12px', borderRadius: '6px', border: '1px solid #ccc', outline: 'none', fontSize: '14px' }} />
+          
+          {/* Password Field with Eye Icon */}
+          <div style={{ position: 'relative', width: '100%' }}>
+            <input type={showPassword ? "text" : "password"} placeholder="🔒 Password" value={password} onChange={e => setPassword(e.target.value)} required style={{ width: '100%', padding: '12px 40px 12px 12px', borderRadius: '6px', border: '1px solid #ccc', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
+            <button 
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: '0', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.7 }}
+              title={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+            </button>
+          </div>
           
           <button type="submit" style={{ background: '#0056b3', color: 'white', padding: '14px', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '15px', marginTop: '10px', boxShadow: '0 4px 12px rgba(0,86,179,0.25)', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.background = '#004494'} onMouseLeave={(e) => e.currentTarget.style.background = '#0056b3'}>
             {isRegister ? "Submit Request" : "Login"}

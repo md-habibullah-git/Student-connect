@@ -12,7 +12,6 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
   const [showDropdown, setShowDropdown] = useState(false); 
   const [showSettingsSub, setShowSettingsSub] = useState(false);
 
-  // Detect mobile screen size
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
 
   useEffect(() => {
@@ -20,6 +19,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+  
   useEffect(() => { 
     const closeDropdown = () => { 
       setShowDropdown(false); 
@@ -52,23 +52,19 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
   return ( 
     <nav style={{ background: 'linear-gradient(135deg, #a832ff 0%, #7016ff 100%)', padding: isMobile ? '10px 10px' : '10px 15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 1000, boxShadow: '0 3px 10px rgba(112, 22, 255, 0.25)', height: '50px', boxSizing: 'border-box' }}> 
       
-      {/* ⬅️ Left Items: Back & Logo */}
       <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '6px' : '12px' }}>
-        <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: 'white', padding: isMobile ? '4px 6px' : '4px 10px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '11px', whiteSpace: 'nowrap', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.35)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'} > 
+        <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: 'white', padding: isMobile ? '4px 6px' : '4px 10px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '11px', whiteSpace: 'nowrap', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.35)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'}> 
           {isMobile ? '⬅️' : '⬅️ Back'} 
         </button>
 
-        <button 
-          onClick={() => window.location.reload()} 
-          style={{ background: 'none', border: 'none', color: 'white', fontWeight: 'bold', fontSize: '18px', whiteSpace: 'nowrap', letterSpacing: '0.3px', cursor: 'pointer', padding: 0 }}
-        > 
+        <button onClick={() => window.location.reload()} style={{ background: 'none', border: 'none', color: 'white', fontWeight: 'bold', fontSize: '18px', whiteSpace: 'nowrap', letterSpacing: '0.3px', cursor: 'pointer', padding: 0 }}> 
           {isMobile ? '🎓' : '🎓 StudentConnect'} 
         </button> 
       </div>
-      {/* 🔍 Search and Plus Section */}
+      
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}> 
         <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}> 
-          <button onClick={() => setIsSearchOpen(!isSearchOpen)} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: 'white', fontSize: '13px', cursor: 'pointer', width: '26px', height: '26px', borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 0, transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.35)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'} > 
+          <button onClick={() => setIsSearchOpen(!isSearchOpen)} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: 'white', fontSize: '13px', cursor: 'pointer', width: '26px', height: '26px', borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 0, transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.35)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'}> 
             🔍 
           </button> 
           {isSearchOpen && ( 
@@ -78,11 +74,11 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
           )} 
         </div>
 
-        <button onClick={triggerPostModal} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: 'white', fontSize: '15px', cursor: 'pointer', width: '26px', height: '26px', borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 0, fontWeight: 'bold', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.35)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'} > + </button> 
+        <button onClick={triggerPostModal} style={{ background: 'rgba(255,255,255,0.25)', border: 'none', color: 'white', fontSize: '15px', cursor: 'pointer', width: '26px', height: '26px', borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 0, fontWeight: 'bold', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.35)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'}> + </button> 
       </div>
-      {/* 🏠 Navigation Core Menu Icons */}
+      
       <div style={{ display: 'flex', gap: isMobile ? '10px' : '20px', alignItems: 'center', justifyContent: 'center' }}> 
-        <Link to="/" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Home" > 
+        <Link to="/" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Home"> 
           <div style={{ background: location.pathname === '/' ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="18" viewBox="0 0 24 24" fill="none"> 
               <circle cx="12" cy="12" r="10" fill="#FFD700" /> 
@@ -95,7 +91,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
           )} 
         </Link>
 
-        <Link to="/messenger" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Chat" > 
+        <Link to="/messenger" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Chat"> 
           <div style={{ background: (location.pathname.startsWith('/messenger') || location.pathname.startsWith('/chat')) ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"> 
               <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z" fill="#7016ff" /> 
@@ -107,7 +103,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
           )} 
         </Link> 
 
-        <Link to="/profile" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="ID Profile" > 
+        <Link to="/profile" style={{ color: 'white', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="ID Profile"> 
           <div style={{ background: (location.pathname === '/profile' || location.pathname.startsWith('/profile/') && !location.pathname.includes('/edit')) ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"> 
               <circle cx="12" cy="12" r="10" fill="#9370DB" /> 
@@ -121,7 +117,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
         </Link> 
 
         {isAdmin && ( 
-          <Link to="/admin" style={{ color: '#ffeb3b', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Admin" > 
+          <Link to="/admin" style={{ color: '#ffeb3b', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? '30px' : '40px', height: '100%', position: 'relative' }} title="Admin"> 
             <div style={{ background: location.pathname.startsWith('/admin') ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}> 
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"> 
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 12z" fill="#7016ff" /> 
@@ -135,40 +131,40 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
           </Link> 
         )} 
       </div>
-      {/* 📥 Right Section: Web Button & Menu Trigger */}
+      
       <div style={{ display: 'flex', gap: isMobile ? '6px' : '12px', alignItems: 'center' }}> 
-        <a 
-          href="https://student-connect-sand.vercel.app/" 
-          target="_blank" 
-          rel="noreferrer"
-          style={{ backgroundColor: '#2e7d32', color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)', padding: isMobile ? '4px 8px' : '6px 14px', borderRadius: '15px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'all 0.2s ease', cursor: 'pointer' }} 
-          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1b5e20'; e.currentTarget.style.transform = 'scale(1.03)'; }} 
-          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#2e7d32'; e.currentTarget.style.transform = 'scale(1)'; }}
-        > 
+        <a href="https://student-connect-sand.vercel.app/" target="_blank" rel="noreferrer" style={{ backgroundColor: '#2e7d32', color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)', padding: isMobile ? '4px 8px' : '6px 14px', borderRadius: '15px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'all 0.2s ease', cursor: 'pointer' }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1b5e20'; e.currentTarget.style.transform = 'scale(1.03)'; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#2e7d32'; e.currentTarget.style.transform = 'scale(1)'; }}> 
           🌐 {isMobile ? 'Web' : 'Web'}
         </a> 
 
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}> 
-          <button onClick={() => { setShowDropdown(!showDropdown); setShowSettingsSub(false); }} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '22px', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', outline: 'none', fontWeight: 'bold' }} title="Menu" > 
+          <button onClick={() => { setShowDropdown(!showDropdown); setShowSettingsSub(false); }} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '22px', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', outline: 'none', fontWeight: 'bold' }} title="Menu"> 
             ⋮ 
           </button> 
           {showDropdown && ( 
-            <div style={{ position: 'absolute', top: '35px', right: '0', backgroundColor: theme === 'dark' ? '#1e1e1e' : '#ffffff', borderRadius: '6px', boxShadow: theme === 'dark' ? '0 4px 20px rgba(0,0,0,0.5)' : '0 4px 12px rgba(0,0,0,0.15)', border: theme === 'dark' ? '1px solid #333333' : '1px solid #dddddd', minWidth: '150px', zIndex: 1500, overflow: 'hidden' }}> 
-              <button onClick={() => setShowSettingsSub(!showSettingsSub)} style={{ width: '100%', padding: '10px 15px', background: 'none', border: 'none', color: theme === 'dark' ? '#ffffff' : '#333333', fontSize: '14px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer', borderBottom: theme === 'dark' ? '1px solid #333333' : '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme === 'dark' ? '#2d2d2d' : '#f8f9fa'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'} > 
+            <div style={{ position: 'absolute', top: '35px', right: '0', backgroundColor: theme === 'dark' ? '#1e1e1e' : '#ffffff', borderRadius: '6px', boxShadow: theme === 'dark' ? '0 4px 20px rgba(0,0,0,0.5)' : '0 4px 12px rgba(0,0,0,0.15)', border: theme === 'dark' ? '1px solid #333333' : '1px solid #dddddd', minWidth: '180px', zIndex: 1500, overflow: 'hidden' }}> 
+              
+              <button onClick={() => setShowSettingsSub(!showSettingsSub)} style={{ width: '100%', padding: '10px 15px', background: 'none', border: 'none', color: theme === 'dark' ? '#ffffff' : '#333333', fontSize: '14px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer', borderBottom: theme === 'dark' ? '1px solid #333333' : '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme === 'dark' ? '#2d2d2d' : '#f8f9fa'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}> 
                 <span>⚙️ Settings</span> 
                 <span style={{ fontSize: '10px', color: '#888' }}>{showSettingsSub ? '▲' : '▼'}</span> 
               </button>
+              
               {showSettingsSub && ( 
                 <div style={{ background: theme === 'dark' ? '#252526' : '#f8f9fa' }}> 
-                  <button onClick={() => { navigate('/edit-profile'); setShowDropdown(false); setShowSettingsSub(false); }} style={{ width: '100%', padding: '8px 15px 8px 25px', background: 'none', border: 'none', color: '#a832ff', fontSize: '13px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer', borderBottom: theme === 'dark' ? '1px solid #333333' : '1px solid #eee', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme === 'dark' ? '#333333' : '#e9ecef'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'} > 
+                  <button onClick={() => { navigate('/edit-profile'); setShowDropdown(false); setShowSettingsSub(false); }} style={{ width: '100%', padding: '8px 15px 8px 25px', background: 'none', border: 'none', color: '#a832ff', fontSize: '13px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer', borderBottom: theme === 'dark' ? '1px solid #333333' : '1px solid #eee', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme === 'dark' ? '#333333' : '#e9ecef'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}> 
                     📝 Edit ID Info 
                   </button> 
-                  <button onClick={() => { toggleTheme(); }} style={{ width: '100%', padding: '8px 15px 8px 25px', background: 'none', border: 'none', color: '#a832ff', fontSize: '13px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer', borderBottom: theme === 'dark' ? '1px solid #333333' : '1px solid #eee', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme === 'dark' ? '#333333' : '#e9ecef'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'} > 
-                    {theme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode'} 
+                  <button onClick={() => { navigate('/change-password'); setShowDropdown(false); setShowSettingsSub(false); }} style={{ width: '100%', padding: '8px 15px 8px 25px', background: 'none', border: 'none', color: '#ff6b6b', fontSize: '13px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer', borderBottom: theme === 'dark' ? '1px solid #333333' : '1px solid #eee', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme === 'dark' ? '#333333' : '#e9ecef'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}> 
+                    🔒 Change Password 
                   </button> 
                 </div> 
               )} 
-              <button onClick={async () => { try { await signOut(auth); navigate('/login'); } catch (err) { console.error("Logout Error:", err); } setShowDropdown(false); }} style={{ width: '100%', padding: '10px 15px', background: 'none', border: 'none', color: '#dc3545', fontSize: '14px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme === 'dark' ? '#2d2d2d' : '#f8f9fa'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'} > 
+              
+              <button onClick={() => { toggleTheme(); }} style={{ width: '100%', padding: '10px 15px', background: 'none', border: 'none', color: '#a832ff', fontSize: '14px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer', borderBottom: theme === 'dark' ? '1px solid #333333' : '1px solid #eee', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme === 'dark' ? '#2d2d2d' : '#f8f9fa'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}> 
+                {theme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode'} 
+              </button> 
+              
+              <button onClick={async () => { try { await signOut(auth); navigate('/login'); } catch (err) { console.error("Logout Error:", err); } setShowDropdown(false); }} style={{ width: '100%', padding: '10px 15px', background: 'none', border: 'none', color: '#dc3545', fontSize: '14px', fontWeight: 'bold', textAlign: 'left', cursor: 'pointer', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme === 'dark' ? '#2d2d2d' : '#f8f9fa'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}> 
                 🏃‍♂️ Logout 
               </button> 
             </div> 

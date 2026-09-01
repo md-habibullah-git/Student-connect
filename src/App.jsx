@@ -15,6 +15,7 @@ import Profile from './pages/Profile';
 import PersonalChat from './pages/PersonalChat'; 
 import EditProfile from './pages/EditProfile';
 import GlobalChat from './pages/GlobalChat';
+import ChangePassword from './pages/ChangePassword';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -67,6 +68,7 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+  
   useEffect(() => {
     if (theme === 'dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
@@ -117,6 +119,7 @@ export default function App() {
             <Route path="/profile" element={isAuthUser ? <Profile /> : <Navigate to="/login" replace />} />
             <Route path="/profile/:userId" element={isAuthUser ? <Profile /> : <Navigate to="/login" replace />} />
             <Route path="/edit-profile" element={isAuthUser ? <EditProfile /> : <Navigate to="/login" replace />} />
+            <Route path="/change-password" element={isAuthUser ? <ChangePassword /> : <Navigate to="/login" replace />} />
             <Route path="/chat/:receiverId/:receiverName" element={isAuthUser ? <PersonalChat /> : <Navigate to="/login" replace />} />
             
             {/* Global Chat and Group gateway route configuration */}

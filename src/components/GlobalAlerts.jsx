@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import {
   collection, doc, onSnapshot, query, where, orderBy, limit,
-  updateDoc, setDoc
+  updateDoc, setDoc, getDocs
 } from 'firebase/firestore';
 import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 import { Capacitor } from '@capacitor/core';
@@ -108,6 +108,7 @@ export default function GlobalAlerts() {
       return [];
     }
   });
+  const hasCheckedUnreadRef = useRef(false);
 
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
@@ -126,6 +127,107 @@ export default function GlobalAlerts() {
       stopRingtone();
     };
   }, [incomingPersonalCall, incomingGlobalCall]);
+
+  // 🔧 NEW: Check unread messages on home page load
+  useEffect(() => {
+    if (!currentUid || hasCheckedUnreadRef.current) return;
+    if (location.pathname !== '/') return;
+    
+    hasCheckedUnreadRef.current = true;
+    
+    const checkUnreadOnLoad = async () => {
+      try {
+        // Check unread personal messages
+        const personalRoomsRef = collection(db, "personal-rooms");
+        const q = query(personalRoomsRef, where("participants", "array-contains", currentUid));
+        const snapshot = await getDocs(q);
+        
+        const unreadBubbles = [];
+        
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data();
+          const roomId = docSnap.id;
+          const lastReadKey = `lastRead_personal_${roomId}`;
+          const lastRead = Number(localStorage.getItem(lastReadKey)) || 0;
+          
+          if (data.lastMessageAt && data.lastMessageAt > lastRead && data.lastMessageSenderId !== currentUid) {
+            const otherUid = (data.participants || []).find((id) => id !== currentUid);
+            unreadBubbles.push({
+              roomId,
+              otherUid,
+              isGlobal: false,
+              count: 1,
+              senderName: data.lastMessageSenderName || 'Unknown',
+              senderPhoto: data.lastMessageSenderPhoto || '',
+            });
+          }
+        });
+        
+        // Check unread global messages
+        const lastReadGlobal = Number(localStorage.getItem('lastRead_global')) || 0;
+        const globalMsgRef = collection(db, "global-room-messages");
+        const globalQ = query(globalMsgRef, orderBy("createdAt", "desc"), limit(1));
+        const globalSnapshot = await getDocs(globalQ);
+        
+        if (!globalSnapshot.empty) {
+          const globalData = globalSnapshot.docs[0].data();
+          const msgTime = globalData.createdAt?.seconds ? globalData.createdAt.seconds * 1000 : globalData.createdAt;
+          
+          if (msgTime > lastReadGlobal && globalData.senderUid !== currentUid) {
+            unreadBubbles.push({
+              roomId: 'global',
+              isGlobal: true,
+              count: 1,
+              senderName: globalData.senderName || 'Unknown',
+              senderPhoto: globalData.senderPhoto || '',
+            });
+          }
+        }
+        
+        // Check missed calls
+        const missedCallsRef = collection(db, "personal-calls");
+        const missedQ = query(missedCallsRef, where("participants", "array-contains", currentUid));
+        const missedSnapshot = await getDocs(missedQ);
+        
+        missedSnapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data();
+          const callId = docSnap.id;
+          const seenKey = `seen_call_${callId}`;
+          const hasSeen = localStorage.getItem(seenKey);
+          
+          if (!hasSeen && data.status === "ended" && data.hostId !== currentUid && !data.answer) {
+            unreadBubbles.push({
+              roomId: `missed_${callId}`,
+              otherUid: data.hostId,
+              isGlobal: false,
+              count: 1,
+              senderName: data.hostName || 'Unknown',
+              senderPhoto: data.hostPhoto || '',
+              isMissedCall: true,
+              callTypeIcon: data.callType === 'audio' ? '🎙️' : '📹'
+            });
+          }
+        });
+        
+        if (unreadBubbles.length > 0) {
+          setMessageBubbles(prev => {
+            const merged = [...prev];
+            unreadBubbles.forEach(bubble => {
+              const existing = merged.find(b => b.roomId === bubble.roomId);
+              if (!existing) merged.push(bubble);
+            });
+            return merged.slice(-5);
+          });
+          
+          playMessageSound();
+        }
+      } catch (err) {
+        console.error("Error checking unread messages:", err);
+      }
+    };
+    
+    checkUnreadOnLoad();
+  }, [currentUid, location.pathname]);
 
   useEffect(() => {
     if (!activeSession || activeSession.type !== 'personal') return;
@@ -349,12 +451,10 @@ export default function GlobalAlerts() {
       });
       setIncomingPersonalCall(found);
       
-      // Missed call bubble detection with sound
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'removed') {
           const oldData = change.doc.data();
           if (oldData && oldData.hostId !== currentUid && !oldData.answer) {
-            // Play message sound for personal missed call
             playMessageSound();
             
             const missedBubble = {
@@ -461,6 +561,21 @@ export default function GlobalAlerts() {
 
   const handleBubbleClick = (bubble) => {
     if (dragMovedRef.current) { dragMovedRef.current = false; return; }
+    
+    // Mark missed call as seen
+    if (bubble.isMissedCall) {
+      const seenKey = `seen_call_${bubble.roomId.replace('missed_', '')}`;
+      localStorage.setItem(seenKey, 'true');
+    }
+    
+    // Mark message as read
+    if (!bubble.isMissedCall && !bubble.isGlobal) {
+      localStorage.setItem(`lastRead_personal_${bubble.roomId}`, String(Date.now()));
+    }
+    if (bubble.isGlobal) {
+      localStorage.setItem('lastRead_global', String(Date.now()));
+    }
+    
     if (bubble.isGlobal) navigate('/chat/global/Global-Chatroom');
     else navigate(`/chat/${bubble.otherUid}/${encodeURIComponent(bubble.senderName || 'Student')}`);
     setMessageBubbles((prev) => prev.filter((b) => b !== bubble));
