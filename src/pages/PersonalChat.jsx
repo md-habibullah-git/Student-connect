@@ -85,7 +85,6 @@ function VoiceMessageBubble({ src, isMe }) {
         audioCtxRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setupAnalyser = () => {
@@ -134,7 +133,6 @@ function VoiceMessageBubble({ src, isMe }) {
       audioEl.removeEventListener('loadedmetadata', onLoaded);
       audioEl.removeEventListener('timeupdate', onTimeUpdate);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const formatTime = (secs) => {
@@ -290,7 +288,6 @@ export default function PersonalChat() {
       answerIncomingCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 
   useEffect(() => {
@@ -731,7 +728,6 @@ export default function PersonalChat() {
       setActiveCallType(existing.callType);
       setInCall(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatRoomId]);
 
   useEffect(() => {
@@ -747,7 +743,6 @@ export default function PersonalChat() {
       }
     });
     return unsubscribe;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatRoomId]);
 
   useEffect(() => {
@@ -801,7 +796,15 @@ export default function PersonalChat() {
 
       unsubscribeCallSignalRef.current = onSnapshot(callRef, async (snap) => {
         const data = snap.data();
-        if (!data) return;
+        if (!data) {
+          // Document deleted - call ended by other party
+          const endedAt = new Date().getTime();
+          await saveCallHistory(callType, startedAt, endedAt, false);
+          cleanupCallLocally();
+          setInCall(false);
+          setActiveCallType('video');
+          return;
+        }
         if (data.answer && pc.signalingState !== 'closed' && !pc.currentRemoteDescription) {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         }
@@ -811,6 +814,7 @@ export default function PersonalChat() {
           await saveCallHistory(callType, startedAt, endedAt, wasMissed);
           cleanupCallLocally();
           setInCall(false);
+          setActiveCallType('video');
         }
       });
 
@@ -832,11 +836,12 @@ export default function PersonalChat() {
             await saveCallHistory(callType, startedAt, new Date().getTime(), true);
             cleanupCallLocally();
             setInCall(false);
+            setActiveCallType('video');
           }
         } catch (err) {
           console.error("Error setting missed call status:", err);
         }
-      }, 30000); // 30 seconds
+      }, 30000);
 
       setActiveCallType(callType);
       setInCall(true);
@@ -903,11 +908,21 @@ export default function PersonalChat() {
       });
 
       unsubscribeCallSignalRef.current = onSnapshot(callRef, (snap) => {
+        if (!snap.exists()) {
+          // Document deleted - call ended by other party
+          const endedAt = new Date().getTime();
+          saveCallHistory(callType, startedAt, endedAt, false);
+          cleanupCallLocally();
+          setInCall(false);
+          setActiveCallType('video');
+          return;
+        }
         if (snap.data()?.status === 'ended') {
           const endedAt = new Date().getTime();
           saveCallHistory(callType, startedAt, endedAt, false);
           cleanupCallLocally();
           setInCall(false);
+          setActiveCallType('video');
         }
       });
 
@@ -932,7 +947,7 @@ export default function PersonalChat() {
     const callType = activeCallType;
     
     try {
-      await updateDoc(callRef, { status: "ended" }).catch(() => {});
+      // Delete candidates first
       const [callerCandidates, calleeCandidates] = await Promise.all([
         getDocs(collection(callRef, "callerCandidates")),
         getDocs(collection(callRef, "calleeCandidates"))
@@ -941,6 +956,7 @@ export default function PersonalChat() {
         ...callerCandidates.docs.map(c => deleteDoc(c.ref)),
         ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
       ]);
+      // Delete the call document
       await deleteDoc(callRef).catch(() => {});
     } catch (err) {
       console.error("Error ending call:", err);
