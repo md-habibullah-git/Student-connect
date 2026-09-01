@@ -23,6 +23,43 @@ const PhoneDeclineIcon = () => (
   </svg>
 );
 
+// Sound functions
+const playRingtone = () => {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.frequency.value = 880;
+    oscillator.type = 'sine';
+    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
+    oscillator.start(audioCtx.currentTime);
+    oscillator.stop(audioCtx.currentTime + 1.5);
+    // Repeat ringtone
+    setTimeout(() => {
+      playRingtone();
+    }, 2000);
+  } catch (err) {}
+};
+
+const playMessageSound = () => {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.frequency.value = 660;
+    oscillator.type = 'sine';
+    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+    oscillator.start(audioCtx.currentTime);
+    oscillator.stop(audioCtx.currentTime + 0.3);
+  } catch (err) {}
+};
+
 export default function GlobalAlerts() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -39,12 +76,49 @@ export default function GlobalAlerts() {
       return [];
     }
   });
+  const ringtoneTimeoutRef = useRef(null);
 
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
     const unsubscribe = subscribeActiveCallSession(setActiveSession);
     return unsubscribe;
   }, []);
+
+  // Ringtone start/stop based on activeCall
+  useEffect(() => {
+    if (incomingPersonalCall || incomingGlobalCall) {
+      // Start ringtone
+      const startRingtone = () => {
+        try {
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const oscillator = audioCtx.createOscillator();
+          const gainNode = audioCtx.createGain();
+          oscillator.connect(gainNode);
+          gainNode.connect(audioCtx.destination);
+          oscillator.frequency.value = 880;
+          oscillator.type = 'sine';
+          gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
+          oscillator.start(audioCtx.currentTime);
+          oscillator.stop(audioCtx.currentTime + 1.5);
+          
+          ringtoneTimeoutRef.current = setTimeout(() => {
+            if (incomingPersonalCall || incomingGlobalCall) {
+              startRingtone();
+            }
+          }, 2000);
+        } catch (err) {}
+      };
+      startRingtone();
+    }
+    
+    return () => {
+      if (ringtoneTimeoutRef.current) {
+        clearTimeout(ringtoneTimeoutRef.current);
+        ringtoneTimeoutRef.current = null;
+      }
+    };
+  }, [incomingPersonalCall, incomingGlobalCall]);
 
   useEffect(() => {
     if (!activeSession || activeSession.type !== 'personal') return;
@@ -196,6 +270,9 @@ export default function GlobalAlerts() {
           const onThisChatPage = otherUid && locationRef.current.pathname.startsWith(`/chat/${otherUid}/`);
 
           if (!onThisChatPage) {
+            // Play message sound
+            playMessageSound();
+            
             setMessageBubbles((prev) => {
               const existing = prev.find((b) => b.roomId === roomId);
               if (existing) {
@@ -231,6 +308,9 @@ export default function GlobalAlerts() {
         if (!isFirst && msgTime > lastKnownGlobalMessageAtRef.current && data.senderUid && data.senderUid !== currentUid) {
           const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
           if (!onGlobalPage) {
+            // Play message sound
+            playMessageSound();
+            
             setMessageBubbles((prev) => {
               const existing = prev.find((b) => b.isGlobal);
               if (existing) {
@@ -266,7 +346,6 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Global call listener — updated for per-call dismissal
   useEffect(() => {
     if (!currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
@@ -275,7 +354,6 @@ export default function GlobalAlerts() {
         const callId = String(data.callStartedAt || '0');
         
         if (data.status === "ringing" && data.hostId !== currentUid) {
-          // Check if this call was already dismissed by this user
           const alreadyDismissed = dismissedGlobalCalls.includes(callId);
           if (!alreadyDismissed) {
             setIncomingGlobalCall({ hostName: data.hostName, callId });
@@ -305,10 +383,14 @@ export default function GlobalAlerts() {
 
   const handleReceive = () => {
     if (!activeCall) return;
+    // Stop ringtone
+    if (ringtoneTimeoutRef.current) {
+      clearTimeout(ringtoneTimeoutRef.current);
+      ringtoneTimeoutRef.current = null;
+    }
     if (activeCall.type === 'personal') {
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
-      // Global call receive — mark as dismissed
       if (activeCall.callId) {
         const updatedList = [...dismissedGlobalCalls, activeCall.callId];
         setDismissedGlobalCalls(updatedList);
@@ -321,6 +403,11 @@ export default function GlobalAlerts() {
 
   const handleDecline = async () => {
     if (!activeCall) return;
+    // Stop ringtone
+    if (ringtoneTimeoutRef.current) {
+      clearTimeout(ringtoneTimeoutRef.current);
+      ringtoneTimeoutRef.current = null;
+    }
     if (activeCall.type === 'personal') {
       try { 
         await updateDoc(doc(db, "personal-calls", activeCall.roomId), { status: "ended" }); 
@@ -329,7 +416,6 @@ export default function GlobalAlerts() {
       }
       setIncomingPersonalCall(null);
     } else {
-      // Global call decline — mark as dismissed
       if (activeCall.callId) {
         const updatedList = [...dismissedGlobalCalls, activeCall.callId];
         setDismissedGlobalCalls(updatedList);
