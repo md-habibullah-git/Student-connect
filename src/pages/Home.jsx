@@ -7,7 +7,7 @@ import {
   collection, addDoc, query, onSnapshot, doc, updateDoc, 
   arrayUnion, arrayRemove, deleteDoc, getDocs, where 
 } from 'firebase/firestore';
-import { FilePicker } from 'capacitor-file-picker';
+import { FilePicker } from '@capawesome/capacitor-file-picker';
 
 const CLOUDINARY_CLOUD_NAME = 'hvdnthrl';
 const CLOUDINARY_UPLOAD_PRESET = 'student-connect';

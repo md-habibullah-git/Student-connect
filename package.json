@@ -16,7 +16,7 @@
     "@capacitor/cli": "^8.5.1",
     "@capacitor/core": "^8.5.1",
     "@capacitor/push-notifications": "^8.1.2",
-    "capacitor-file-picker": "^1.0.10",
+    "@capawesome/capacitor-file-picker": "^8.0.4",
     "firebase": "^12.16.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
