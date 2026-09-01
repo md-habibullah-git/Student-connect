@@ -349,17 +349,14 @@ export default function GlobalAlerts() {
       });
       setIncomingPersonalCall(found);
       
-      // Check for missed calls in existing documents (like global call logic)
+      // Personal missed call detection (like global call logic)
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
         const callId = docSnap.id;
         
-        // Check if call is not ringing and user didn't answer
         if (data.status !== "ringing" && data.hostId !== currentUid && !data.answer) {
           const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
-          const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
           const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
-          const alreadySeen = seenCallsStorage.includes(callId);
           
           if (!alreadySaved) {
             missedCallsStorage.push({
@@ -372,9 +369,7 @@ export default function GlobalAlerts() {
               isGlobal: false
             });
             localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
-          }
-          
-          if (!alreadySeen && !alreadySaved) {
+            
             playMessageSound();
             
             const missedBubble = {
