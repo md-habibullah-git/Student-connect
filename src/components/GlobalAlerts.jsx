@@ -23,25 +23,49 @@ const PhoneDeclineIcon = () => (
   </svg>
 );
 
-// Sound functions
-const playRingtone = () => {
+// Sound functions with AudioContext
+let ringtoneAudioCtx = null;
+let ringtoneOscillator = null;
+let ringtoneGainNode = null;
+let ringtoneIntervalRef = null;
+
+const startRingtone = () => {
   try {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
-    oscillator.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    oscillator.frequency.value = 880;
-    oscillator.type = 'sine';
-    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
-    oscillator.start(audioCtx.currentTime);
-    oscillator.stop(audioCtx.currentTime + 1.5);
-    // Repeat ringtone
-    setTimeout(() => {
-      playRingtone();
-    }, 2000);
+    if (ringtoneAudioCtx) return; // Already playing
+    
+    ringtoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    ringtoneGainNode = ringtoneAudioCtx.createGain();
+    ringtoneGainNode.connect(ringtoneAudioCtx.destination);
+    ringtoneGainNode.gain.value = 0.5; // Louder volume
+    
+    const playBeep = () => {
+      ringtoneOscillator = ringtoneAudioCtx.createOscillator();
+      ringtoneOscillator.connect(ringtoneGainNode);
+      ringtoneOscillator.frequency.value = 880;
+      ringtoneOscillator.type = 'square'; // More audible
+      ringtoneOscillator.start(ringtoneAudioCtx.currentTime);
+      ringtoneOscillator.stop(ringtoneAudioCtx.currentTime + 0.5);
+    };
+    
+    playBeep();
+    ringtoneIntervalRef = setInterval(playBeep, 1000); // Beep every 1 second
   } catch (err) {}
+};
+
+const stopRingtone = () => {
+  if (ringtoneIntervalRef) {
+    clearInterval(ringtoneIntervalRef);
+    ringtoneIntervalRef = null;
+  }
+  if (ringtoneOscillator) {
+    try { ringtoneOscillator.stop(); } catch (err) {}
+    ringtoneOscillator = null;
+  }
+  if (ringtoneAudioCtx) {
+    ringtoneAudioCtx.close().catch(() => {});
+    ringtoneAudioCtx = null;
+  }
+  ringtoneGainNode = null;
 };
 
 const playMessageSound = () => {
@@ -51,12 +75,15 @@ const playMessageSound = () => {
     const gainNode = audioCtx.createGain();
     oscillator.connect(gainNode);
     gainNode.connect(audioCtx.destination);
-    oscillator.frequency.value = 660;
+    oscillator.frequency.value = 1200; // Higher frequency for alert
     oscillator.type = 'sine';
-    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+    gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
     oscillator.start(audioCtx.currentTime);
-    oscillator.stop(audioCtx.currentTime + 0.3);
+    oscillator.stop(audioCtx.currentTime + 0.4);
+    oscillator.onended = () => {
+      audioCtx.close().catch(() => {});
+    };
   } catch (err) {}
 };
 
@@ -76,7 +103,6 @@ export default function GlobalAlerts() {
       return [];
     }
   });
-  const ringtoneTimeoutRef = useRef(null);
 
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
@@ -87,36 +113,13 @@ export default function GlobalAlerts() {
   // Ringtone start/stop based on activeCall
   useEffect(() => {
     if (incomingPersonalCall || incomingGlobalCall) {
-      // Start ringtone
-      const startRingtone = () => {
-        try {
-          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-          const oscillator = audioCtx.createOscillator();
-          const gainNode = audioCtx.createGain();
-          oscillator.connect(gainNode);
-          gainNode.connect(audioCtx.destination);
-          oscillator.frequency.value = 880;
-          oscillator.type = 'sine';
-          gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
-          gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
-          oscillator.start(audioCtx.currentTime);
-          oscillator.stop(audioCtx.currentTime + 1.5);
-          
-          ringtoneTimeoutRef.current = setTimeout(() => {
-            if (incomingPersonalCall || incomingGlobalCall) {
-              startRingtone();
-            }
-          }, 2000);
-        } catch (err) {}
-      };
       startRingtone();
+    } else {
+      stopRingtone();
     }
     
     return () => {
-      if (ringtoneTimeoutRef.current) {
-        clearTimeout(ringtoneTimeoutRef.current);
-        ringtoneTimeoutRef.current = null;
-      }
+      stopRingtone();
     };
   }, [incomingPersonalCall, incomingGlobalCall]);
 
@@ -270,7 +273,6 @@ export default function GlobalAlerts() {
           const onThisChatPage = otherUid && locationRef.current.pathname.startsWith(`/chat/${otherUid}/`);
 
           if (!onThisChatPage) {
-            // Play message sound
             playMessageSound();
             
             setMessageBubbles((prev) => {
@@ -308,7 +310,6 @@ export default function GlobalAlerts() {
         if (!isFirst && msgTime > lastKnownGlobalMessageAtRef.current && data.senderUid && data.senderUid !== currentUid) {
           const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
           if (!onGlobalPage) {
-            // Play message sound
             playMessageSound();
             
             setMessageBubbles((prev) => {
@@ -383,11 +384,7 @@ export default function GlobalAlerts() {
 
   const handleReceive = () => {
     if (!activeCall) return;
-    // Stop ringtone
-    if (ringtoneTimeoutRef.current) {
-      clearTimeout(ringtoneTimeoutRef.current);
-      ringtoneTimeoutRef.current = null;
-    }
+    stopRingtone();
     if (activeCall.type === 'personal') {
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
@@ -403,11 +400,7 @@ export default function GlobalAlerts() {
 
   const handleDecline = async () => {
     if (!activeCall) return;
-    // Stop ringtone
-    if (ringtoneTimeoutRef.current) {
-      clearTimeout(ringtoneTimeoutRef.current);
-      ringtoneTimeoutRef.current = null;
-    }
+    stopRingtone();
     if (activeCall.type === 'personal') {
       try { 
         await updateDoc(doc(db, "personal-calls", activeCall.roomId), { status: "ended" }); 
