@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "952632040307",
+    "project_id": "student-connect-ffa4a",
+    "storage_bucket": "student-connect-ffa4a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:952632040307:android:77106c3c5c4e26be920306",
+        "android_client_info": {
+          "package_name": "com.studentconnect.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBtajm-uiPLIVqNJOQH1baaPs0PWVUBQnE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
