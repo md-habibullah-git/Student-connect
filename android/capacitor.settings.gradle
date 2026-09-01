@@ -10,3 +10,6 @@ project(':capacitor-camera').projectDir = new File('../node_modules/@capacitor/c
 
 include ':capacitor-push-notifications'
 project(':capacitor-push-notifications').projectDir = new File('../node_modules/@capacitor/push-notifications/android')
+
+include ':capacitor-file-picker'
+project(':capacitor-file-picker').projectDir = new File('../node_modules/capacitor-file-picker/android')

@@ -7,7 +7,7 @@ import {
   collection, addDoc, query, onSnapshot, doc, updateDoc, 
   arrayUnion, arrayRemove, deleteDoc, getDocs, where 
 } from 'firebase/firestore';
-import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { FilePicker } from 'capacitor-file-picker';
 
 const CLOUDINARY_CLOUD_NAME = 'hvdnthrl';
 const CLOUDINARY_UPLOAD_PRESET = 'student-connect';
@@ -365,23 +365,34 @@ export default function Home({ isAdmin }) {
     };
   }, []);
 
-  // 🔥 Camera plugin দিয়ে gallery access (Native platform)
+  // 🔥 File Picker দিয়ে gallery + file manager access (Native platform)
   const handleFileChange = async (e) => {
-    // Native platform-এ Camera plugin ব্যবহার
+    // Native platform-এ File Picker ব্যবহার
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
-        const photo = await Camera.getPhoto({
-          quality: 80,
-          allowEditing: false,
-          resultType: CameraResultType.Uri,
-          source: CameraSource.Photos,
+        const result = await FilePicker.pickFiles({
+          types: ['image/*', 'video/*'],
+          readData: false,
         });
         
-        if (photo && photo.webPath) {
-          const response = await fetch(photo.webPath);
-          const blob = await response.blob();
-          const fileName = photo.path?.split('/').pop() || `photo-${Date.now()}.jpg`;
-          const fileType = blob.type || 'image/jpeg';
+        if (result && result.files && result.files.length > 0) {
+          const pickedFile = result.files[0];
+          
+          let blob = null;
+          let fileType = pickedFile.mimeType || 'image/jpeg';
+          let fileName = pickedFile.name || `file-${Date.now()}.jpg`;
+          
+          if (pickedFile.data) {
+            blob = pickedFile.data;
+          } else if (pickedFile.path || pickedFile.uri || pickedFile.webPath) {
+            const filePath = pickedFile.path || pickedFile.uri || pickedFile.webPath;
+            const response = await fetch(filePath);
+            blob = await response.blob();
+            fileType = blob.type || pickedFile.mimeType || 'image/jpeg';
+          }
+          
+          if (!blob) return;
+          
           const file = new File([blob], fileName, { type: fileType });
           
           if (fileType.startsWith('video/')) {
@@ -404,7 +415,7 @@ export default function Home({ isAdmin }) {
           });
         }
       } catch (err) {
-        console.error("Gallery error:", err);
+        console.error("File picker error:", err);
       }
       return;
     }
@@ -699,7 +710,7 @@ export default function Home({ isAdmin }) {
                       fontWeight: 'bold'
                     }}
                   >
-                    📷 Choose from Gallery
+                    📁 Choose Photo/Video
                   </button>
                 ) : (
                   <input 
