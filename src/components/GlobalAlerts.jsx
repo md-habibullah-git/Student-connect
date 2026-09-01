@@ -31,6 +31,14 @@ export default function GlobalAlerts() {
   const [messageBubbles, setMessageBubbles] = useState([]);
   const [incomingPersonalCall, setIncomingPersonalCall] = useState(null);
   const [incomingGlobalCall, setIncomingGlobalCall] = useState(null);
+  const [dismissedGlobalCalls, setDismissedGlobalCalls] = useState(() => {
+    try {
+      const saved = localStorage.getItem('dismissedGlobalCalls');
+      return saved ? JSON.parse(saved) : [];
+    } catch (err) {
+      return [];
+    }
+  });
 
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
@@ -258,20 +266,37 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
+  // Global call listener — updated for re-ringing on new call
   useEffect(() => {
     if (!currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
+        const callId = data.callStartedAt || 'current';
+        
+        // নতুন call শুরু হলে dismissed list থেকে clear করো
+        if (data.status === "ringing" && data.participants?.length <= 1) {
+          // নতুন call শুরু — dismissed list reset
+          setDismissedGlobalCalls(prev => {
+            const newList = [];
+            localStorage.setItem('dismissedGlobalCalls', JSON.stringify(newList));
+            return newList;
+          });
+        }
+        
         if (data.status === "ringing" && data.hostId !== currentUid) {
-          setIncomingGlobalCall({ hostName: data.hostName });
+          // Check if this call was already dismissed by this user
+          const alreadyDismissed = dismissedGlobalCalls.includes(callId);
+          if (!alreadyDismissed) {
+            setIncomingGlobalCall({ hostName: data.hostName, callId });
+          }
           return;
         }
       }
       setIncomingGlobalCall(null);
     });
     return () => unsubscribe();
-  }, [currentUid]);
+  }, [currentUid, dismissedGlobalCalls]);
 
   useEffect(() => {
     setMessageBubbles((prev) => prev.filter((b) => {
@@ -293,11 +318,16 @@ export default function GlobalAlerts() {
     if (activeCall.type === 'personal') {
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
+      // Global call receive — mark as dismissed
+      if (activeCall.callId) {
+        const updatedList = [...dismissedGlobalCalls, activeCall.callId];
+        setDismissedGlobalCalls(updatedList);
+        localStorage.setItem('dismissedGlobalCalls', JSON.stringify(updatedList));
+      }
       navigate('/chat/global/Global-Chatroom', { state: { autoJoinCall: true } });
     }
   };
 
-  // FIXED: No more window.location.reload() — just clear state and update Firestore
   const handleDecline = async () => {
     if (!activeCall) return;
     if (activeCall.type === 'personal') {
@@ -308,6 +338,12 @@ export default function GlobalAlerts() {
       }
       setIncomingPersonalCall(null);
     } else {
+      // Global call decline — mark as dismissed
+      if (activeCall.callId) {
+        const updatedList = [...dismissedGlobalCalls, activeCall.callId];
+        setDismissedGlobalCalls(updatedList);
+        localStorage.setItem('dismissedGlobalCalls', JSON.stringify(updatedList));
+      }
       setIncomingGlobalCall(null);
     }
   };
@@ -344,7 +380,6 @@ export default function GlobalAlerts() {
     setBubblePos({ x: newX, y: newY });
   };
 
-  // FIXED: Added setTimeout to properly reset dragMovedRef after drag ends
   const handleDragEnd = () => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
