@@ -155,6 +155,9 @@ export default function GlobalAlerts() {
   const draggingRef = useRef(false);
   const dragMovedRef = useRef(false);
   const dragOffsetRef = useRef({ x: 0, y: 0 });
+  const [showDeleteZone, setShowDeleteZone] = useState(false);
+  const [isDeleteZoneHover, setIsDeleteZoneHover] = useState(false);
+  const draggedBubbleRef = useRef(null);
 
   const locationRef = useRef(location);
   useEffect(() => { locationRef.current = location; }, [location]);
@@ -634,12 +637,14 @@ export default function GlobalAlerts() {
     setMessageBubbles((prev) => prev.filter((b) => b !== bubble));
   };
 
-  const handleDragStart = (e) => {
+  const handleDragStart = (e, bubble) => {
+    draggedBubbleRef.current = bubble;
     draggingRef.current = true;
     dragMovedRef.current = false;
     const rect = e.currentTarget.getBoundingClientRect();
     dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     e.currentTarget.setPointerCapture(e.pointerId);
+    setShowDeleteZone(true);
   };
 
   const handleDragMove = (e) => {
@@ -652,15 +657,34 @@ export default function GlobalAlerts() {
     newX = Math.max(4, Math.min(window.innerWidth - stackWidth - 4, newX));
     newY = Math.max(4, Math.min(window.innerHeight - stackHeight - 4, newY));
     setBubblePos({ x: newX, y: newY });
+    
+    // Check if near bottom center (delete zone)
+    const windowHeight = window.innerHeight;
+    const isNearBottom = e.clientY > windowHeight - 80 && e.clientX > window.innerWidth / 2 - 60 && e.clientX < window.innerWidth / 2 + 60;
+    setIsDeleteZoneHover(isNearBottom);
   };
 
-  const handleDragEnd = () => {
+  const handleDragEnd = (e) => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
+    
+    // Check if dropped on delete zone
+    const windowHeight = window.innerHeight;
+    const isNearBottom = e.clientY > windowHeight - 80 && e.clientX > window.innerWidth / 2 - 60 && e.clientX < window.innerWidth / 2 + 60;
+    
+    if (isNearBottom && draggedBubbleRef.current) {
+      // Remove the bubble
+      setMessageBubbles((prev) => prev.filter((b) => b !== draggedBubbleRef.current));
+      draggedBubbleRef.current = null;
+    }
+    
     setBubblePos((pos) => {
       if (pos) localStorage.setItem('floatingBubblePos', JSON.stringify(pos));
       return pos;
     });
+    setShowDeleteZone(false);
+    setIsDeleteZoneHover(false);
+    draggedBubbleRef.current = null;
     setTimeout(() => {
       dragMovedRef.current = false;
     }, 150);
@@ -752,16 +776,42 @@ export default function GlobalAlerts() {
         </button>
       )}
 
+      {/* Delete Zone - appears when dragging a bubble */}
+      {showDeleteZone && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 2000,
+          backgroundColor: isDeleteZoneHover ? '#dc3545' : 'rgba(0,0,0,0.6)',
+          color: '#fff',
+          padding: '12px 24px',
+          borderRadius: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          transition: 'background-color 0.2s',
+          border: isDeleteZoneHover ? '2px solid #ff6b6b' : '2px solid transparent',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+        }}>
+          <span style={{ fontSize: '24px' }}>🗑️</span>
+          <span style={{ fontWeight: 'bold', fontSize: '14px' }}>
+            {isDeleteZoneHover ? 'Drop to delete' : 'Drag here to delete'}
+          </span>
+        </div>
+      )}
+
       {messageBubbles.length > 0 && (
         <div style={bubbleContainerStyle}>
           {messageBubbles.map((bubble) => (
             <button
               key={bubble.roomId}
-              onPointerDown={handleDragStart}
+              onPointerDown={(e) => handleDragStart(e, bubble)}
               onPointerMove={handleDragMove}
               onPointerUp={handleDragEnd}
               onClick={() => handleBubbleClick(bubble)}
-              title={`${bubble.senderName || 'Student'} — ${bubble.count} new message${bubble.count > 1 ? 's' : ''} (drag to move)`}
+              title={`${bubble.senderName || 'Student'} — ${bubble.count} new message${bubble.count > 1 ? 's' : ''} (drag to delete)`}
               style={{
                 position: 'relative', width: '52px', height: '52px', borderRadius: '50%',
                 border: 'none', padding: 0, cursor: 'grab', boxShadow: '0 4px 14px rgba(0,0,0,0.3)', touchAction: 'none'
