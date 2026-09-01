@@ -258,6 +258,7 @@ export default function GlobalAlerts() {
     };
   }, [currentUid]);
 
+  // 🔥 Personal rooms listener — message + missed call detection
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-rooms"), where("participants", "array-contains", currentUid));
@@ -269,10 +270,45 @@ export default function GlobalAlerts() {
         const roomId = change.doc.id;
         const prevLastMessageAt = lastKnownRoomStateRef.current[roomId] || 0;
 
+        // 🔥 Missed call detection: lastMessageText-এ "missed" থাকলে bubble দেখায়
+        if (
+          !isFirst &&
+          data.lastMessageText && 
+          data.lastMessageText.includes('missed') &&
+          data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
+          data.lastMessageSenderId === 'system'
+        ) {
+          const otherUid = (data.participants || []).find((id) => id !== currentUid);
+          const onThisChatPage = otherUid && locationRef.current.pathname.startsWith(`/chat/${otherUid}/`);
+
+          if (!onThisChatPage) {
+            playMessageSound();
+            
+            setMessageBubbles((prev) => {
+              const existing = prev.find((b) => b.roomId === `missed_${roomId}`);
+              if (!existing) {
+                return [...prev, {
+                  roomId: `missed_${roomId}`,
+                  otherUid,
+                  isGlobal: false,
+                  count: 1,
+                  senderName: 'Missed Call',
+                  senderPhoto: '',
+                  isMissedCall: true,
+                  callTypeIcon: data.lastMessageText.includes('video') ? '📹' : '🎙️'
+                }].slice(-3);
+              }
+              return prev;
+            });
+          }
+        }
+        
+        // Regular message detection
         if (
           !isFirst &&
           data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
-          data.lastMessageSenderId && data.lastMessageSenderId !== currentUid
+          data.lastMessageSenderId && data.lastMessageSenderId !== currentUid &&
+          data.lastMessageSenderId !== 'system'
         ) {
           const otherUid = (data.participants || []).find((id) => id !== currentUid);
           const onThisChatPage = otherUid && locationRef.current.pathname.startsWith(`/chat/${otherUid}/`);
@@ -336,8 +372,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Personal call listener — missed call localStorage-এ save + live bubble + sound
-  // 🔥 Global-এর মতো করে: document delete না করে status update detect করে
+  // Personal call listener — incoming call detection
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-connections"), where("participants", "array-contains", currentUid));
@@ -345,52 +380,8 @@ export default function GlobalAlerts() {
       let found = null;
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        const callId = docSnap.id;
-        
-        // Incoming ringing call
         if (data.status === "ringing" && data.hostId !== currentUid) {
-          found = { roomId: callId, hostId: data.hostId, hostName: data.hostName, hostPhoto: data.hostPhoto };
-        }
-        
-        // 🔥 Missed call detection (Global-এর মতো)
-        // status "missed" বা "ended" কিন্তু answer নেই = missed call
-        if ((data.status === "missed" || data.status === "ended") && data.hostId !== currentUid && !data.answer) {
-          const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
-          const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
-          
-          if (!alreadySaved) {
-            missedCallsStorage.push({
-              callId: callId,
-              hostId: data.hostId,
-              hostName: data.hostName || 'Unknown',
-              hostPhoto: data.hostPhoto || '',
-              callType: data.callType || 'video',
-              missedAt: Date.now(),
-              isGlobal: false
-            });
-            localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
-            
-            playMessageSound();
-            
-            const missedBubble = {
-              roomId: `missed_${callId}`,
-              otherUid: data.hostId,
-              isGlobal: false,
-              count: 1,
-              senderName: data.hostName || 'Unknown',
-              senderPhoto: data.hostPhoto || '',
-              isMissedCall: true,
-              callTypeIcon: data.callType === 'audio' ? '🎙️' : '📹'
-            };
-            
-            setMessageBubbles((prev) => {
-              const existing = prev.find((b) => b.roomId === missedBubble.roomId);
-              if (!existing) {
-                return [...prev, missedBubble].slice(-3);
-              }
-              return prev;
-            });
-          }
+          found = { roomId: docSnap.id, hostId: data.hostId, hostName: data.hostName, hostPhoto: data.hostPhoto };
         }
       });
       setIncomingPersonalCall(found);
@@ -493,14 +484,29 @@ export default function GlobalAlerts() {
           
           if (data.lastMessageAt && data.lastMessageAt > lastRead && data.lastMessageSenderId !== currentUid) {
             const otherUid = (data.participants || []).find((id) => id !== currentUid);
-            unreadBubbles.push({
-              roomId,
-              otherUid,
-              isGlobal: false,
-              count: 1,
-              senderName: data.lastMessageSenderName || 'Unknown',
-              senderPhoto: data.lastMessageSenderPhoto || '',
-            });
+            
+            // 🔥 Missed call bubble
+            if (data.lastMessageText && data.lastMessageText.includes('missed')) {
+              unreadBubbles.push({
+                roomId: `missed_${roomId}`,
+                otherUid,
+                isGlobal: false,
+                count: 1,
+                senderName: 'Missed Call',
+                senderPhoto: '',
+                isMissedCall: true,
+                callTypeIcon: data.lastMessageText.includes('video') ? '📹' : '🎙️'
+              });
+            } else {
+              unreadBubbles.push({
+                roomId,
+                otherUid,
+                isGlobal: false,
+                count: 1,
+                senderName: data.lastMessageSenderName || 'Unknown',
+                senderPhoto: data.lastMessageSenderPhoto || '',
+              });
+            }
           }
         });
         

@@ -338,6 +338,7 @@ export default function PersonalChat() {
     scrollToBottom();
   }, [messages]);
 
+  // 🔥 Global-এর মতো করে saveCallHistory — personal-rooms document-এ lastMessageText update করে
   const saveCallHistory = async (callType, startedAt, endedAt, wasMissed = false) => {
     try {
       const callTypeIcon = callType === 'audio' ? '🎙️' : '📹';
@@ -351,6 +352,20 @@ export default function PersonalChat() {
         callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(startedAt)} - ${formatTimeDisplay(endedAt)}\n📞 Call • ${formatDuration(duration)} min`;
       }
       
+      // 🔥 personal-rooms document-এ lastMessageText update করুন (Global-এর মতো)
+      const roomRef = doc(db, "personal-rooms", chatRoomId);
+      await setDoc(roomRef, {
+        roomId: chatRoomId,
+        participants: [currentUid, targetUid],
+        lastActive: new Date().getTime(),
+        lastMessageText: callSummaryText,
+        lastMessageSenderId: 'system',
+        lastMessageSenderName: 'System',
+        lastMessageSenderPhoto: '',
+        lastMessageAt: new Date().getTime()
+      }, { merge: true });
+      
+      // Message save করুন
       await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
         text: callSummaryText,
         senderId: 'system',
@@ -946,7 +961,7 @@ export default function PersonalChat() {
           ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
         ]);
         
-        // UPDATE status, DON'T delete immediately
+        // 🔥 Global-এর মতো: message save + status update + document delete
         if (wasAnswered) {
           await saveCallHistory(callType, startedAt, endedAt, false);
           await updateDoc(callRef, { status: "ended" }).catch(() => {});
@@ -955,12 +970,8 @@ export default function PersonalChat() {
           await updateDoc(callRef, { status: "missed", answer: false }).catch(() => {});
         }
         
-        // Delete after 5 seconds
-        setTimeout(async () => {
-          try {
-            await deleteDoc(callRef).catch(() => {});
-          } catch (err) {}
-        }, 5000);
+        // সাথে সাথে delete
+        await deleteDoc(callRef).catch(() => {});
       }
     } catch (err) {
       console.error("Error ending call:", err);
