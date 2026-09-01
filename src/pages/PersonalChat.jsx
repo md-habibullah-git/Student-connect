@@ -193,7 +193,6 @@ export default function PersonalChat() {
   const unsubscribeCallSignalRef = useRef(null);
   const unsubscribeCandidatesRef = useRef(null);
   const callStartTimeRef = useRef(null);
-  const callDocRef = useRef(null);
 
   const initialMessagesLoadedRef = useRef(false);
 
@@ -769,9 +768,19 @@ export default function PersonalChat() {
         event.streams[0].getTracks().forEach(track => remoteStreamRef.current.addTrack(track));
       });
 
-      // 🔥 NEW: Use "personal-connections" collection like global
-      const connectionsRef = collection(db, "personal-connections");
-      const callRef = await addDoc(connectionsRef, {
+      const callRef = doc(db, "personal-connections", chatRoomId);
+      const callerCandidatesRef = collection(callRef, "callerCandidates");
+      pc.addEventListener('icecandidate', (event) => {
+        if (event.candidate) addDoc(callerCandidatesRef, event.candidate.toJSON());
+      });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const startedAt = new Date().getTime();
+      callStartTimeRef.current = startedAt;
+
+      await setDoc(callRef, {
         status: "ringing",
         callType,
         hostName: currentUserName,
@@ -781,29 +790,13 @@ export default function PersonalChat() {
         receiverName: receiverName,
         participants: [currentUid, targetUid],
         roomId: chatRoomId,
-        callStartedAt: new Date().getTime()
-      });
-      
-      callDocRef.current = callRef;
-      const startedAt = new Date().getTime();
-      callStartTimeRef.current = startedAt;
-
-      const callerCandidatesRef = collection(callRef, "callerCandidates");
-      pc.addEventListener('icecandidate', (event) => {
-        if (event.candidate) addDoc(callerCandidatesRef, event.candidate.toJSON());
-      });
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      await updateDoc(callRef, {
+        callStartedAt: startedAt,
         offer: { type: offer.type, sdp: offer.sdp }
       });
 
       unsubscribeCallSignalRef.current = onSnapshot(callRef, async (snap) => {
         const data = snap.data();
         if (!snap.exists()) {
-          // Document deleted - call ended
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
@@ -812,10 +805,16 @@ export default function PersonalChat() {
         if (data.answer && pc.signalingState !== 'closed' && !pc.currentRemoteDescription) {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         }
-        if (data.status === 'ended' || data.status === 'missed') {
+        if (data.status === 'ended') {
           const endedAt = new Date().getTime();
-          const wasMissed = data.status === 'missed';
-          await saveCallHistory(callType, startedAt, endedAt, wasMissed);
+          await saveCallHistory(callType, startedAt, endedAt, false);
+          cleanupCallLocally();
+          setInCall(false);
+          setActiveCallType('video');
+        }
+        if (data.status === 'missed') {
+          const endedAt = new Date().getTime();
+          await saveCallHistory(callType, startedAt, endedAt, true);
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
@@ -848,15 +847,7 @@ export default function PersonalChat() {
   const answerIncomingCall = async () => {
     try {
       cleanupCallLocally();
-      if (!callDocRef.current) {
-        // Find the call document for this chatRoom
-        const q = query(collection(db, "personal-connections"), where("roomId", "==", chatRoomId), where("status", "==", "ringing"));
-        const snap = await getDocs(q);
-        if (snap.empty) return;
-        callDocRef.current = snap.docs[0].ref;
-      }
-      
-      const callRef = callDocRef.current;
+      const callRef = doc(db, "personal-connections", chatRoomId);
       const callSnap = await getDoc(callRef);
       if (!callSnap.exists() || !callSnap.data().offer) {
         return;
@@ -934,37 +925,42 @@ export default function PersonalChat() {
   };
 
   const endCall = async () => {
-    const callRef = callDocRef.current;
+    const callRef = doc(db, "personal-connections", chatRoomId);
     const startedAt = callStartTimeRef.current || new Date().getTime();
     const endedAt = new Date().getTime();
     const callType = activeCallType;
     
     try {
-      if (callRef) {
-        const callSnap = await getDoc(callRef);
-        if (callSnap.exists()) {
-          const callData = callSnap.data();
-          const wasAnswered = callData.answer ? true : false;
-          
-          // Delete candidates
-          const [callerCandidates, calleeCandidates] = await Promise.all([
-            getDocs(collection(callRef, "callerCandidates")),
-            getDocs(collection(callRef, "calleeCandidates"))
-          ]);
-          await Promise.all([
-            ...callerCandidates.docs.map(c => deleteDoc(c.ref)),
-            ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
-          ]);
-          
-          if (wasAnswered) {
-            await saveCallHistory(callType, startedAt, endedAt, false);
-          } else {
-            await saveCallHistory(callType, startedAt, endedAt, true);
-          }
-          
-          // Delete the document
-          await deleteDoc(callRef).catch(() => {});
+      const callSnap = await getDoc(callRef);
+      if (callSnap.exists()) {
+        const callData = callSnap.data();
+        const wasAnswered = callData.answer ? true : false;
+        
+        // Delete candidates
+        const [callerCandidates, calleeCandidates] = await Promise.all([
+          getDocs(collection(callRef, "callerCandidates")),
+          getDocs(collection(callRef, "calleeCandidates"))
+        ]);
+        await Promise.all([
+          ...callerCandidates.docs.map(c => deleteDoc(c.ref)),
+          ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
+        ]);
+        
+        // UPDATE status, DON'T delete immediately
+        if (wasAnswered) {
+          await saveCallHistory(callType, startedAt, endedAt, false);
+          await updateDoc(callRef, { status: "ended" }).catch(() => {});
+        } else {
+          await saveCallHistory(callType, startedAt, endedAt, true);
+          await updateDoc(callRef, { status: "missed", answer: false }).catch(() => {});
         }
+        
+        // Delete after 5 seconds
+        setTimeout(async () => {
+          try {
+            await deleteDoc(callRef).catch(() => {});
+          } catch (err) {}
+        }, 5000);
       }
     } catch (err) {
       console.error("Error ending call:", err);
@@ -973,7 +969,6 @@ export default function PersonalChat() {
     cleanupCallLocally();
     setInCall(false);
     setActiveCallType('video');
-    callDocRef.current = null;
   };
 
   const toggleMenu = (e, msgId) => {

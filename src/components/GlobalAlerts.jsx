@@ -129,8 +129,8 @@ export default function GlobalAlerts() {
 
   useEffect(() => {
     if (!activeSession || activeSession.type !== 'personal') return;
-    if (!activeSession.callDocId) return;
-    const unsubscribe = onSnapshot(doc(db, "personal-connections", activeSession.callDocId), (snap) => {
+    if (!activeSession.chatRoomId) return;
+    const unsubscribe = onSnapshot(doc(db, "personal-connections", activeSession.chatRoomId), (snap) => {
       const data = snap.data();
       if (!snap.exists() || data?.status === 'ended' || data?.status === 'missed') {
         const current = getActiveCallSession();
@@ -143,7 +143,7 @@ export default function GlobalAlerts() {
       }
     });
     return unsubscribe;
-  }, [activeSession?.chatRoomId, activeSession?.callDocId]);
+  }, [activeSession?.chatRoomId]);
 
   const [bubblePos, setBubblePos] = useState(() => {
     try {
@@ -337,6 +337,7 @@ export default function GlobalAlerts() {
   }, [currentUid]);
 
   // Personal call listener — missed call localStorage-এ save + live bubble + sound
+  // 🔥 Global-এর মতো করে: document delete না করে status update detect করে
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-connections"), where("participants", "array-contains", currentUid));
@@ -344,44 +345,42 @@ export default function GlobalAlerts() {
       let found = null;
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        const callId = docSnap.id;
+        
+        // Incoming ringing call
         if (data.status === "ringing" && data.hostId !== currentUid) {
-          found = { roomId: docSnap.id, callDocId: docSnap.id, hostId: data.hostId, hostName: data.hostName, hostPhoto: data.hostPhoto };
+          found = { roomId: callId, hostId: data.hostId, hostName: data.hostName, hostPhoto: data.hostPhoto };
         }
-      });
-      setIncomingPersonalCall(found);
-      
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'removed') {
-          const oldData = change.doc.data();
-          if (oldData && oldData.hostId !== currentUid && !oldData.answer) {
-            const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
-            const callId = change.doc.id;
-            const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
-            
-            if (!alreadySaved) {
-              missedCallsStorage.push({
-                callId: callId,
-                hostId: oldData.hostId,
-                hostName: oldData.hostName || 'Unknown',
-                hostPhoto: oldData.hostPhoto || '',
-                callType: oldData.callType || 'video',
-                missedAt: Date.now(),
-                isGlobal: false
-              });
-              localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
-            }
+        
+        // 🔥 Missed call detection (Global-এর মতো)
+        // status "missed" বা "ended" কিন্তু answer নেই = missed call
+        if ((data.status === "missed" || data.status === "ended") && data.hostId !== currentUid && !data.answer) {
+          const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
+          const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
+          
+          if (!alreadySaved) {
+            missedCallsStorage.push({
+              callId: callId,
+              hostId: data.hostId,
+              hostName: data.hostName || 'Unknown',
+              hostPhoto: data.hostPhoto || '',
+              callType: data.callType || 'video',
+              missedAt: Date.now(),
+              isGlobal: false
+            });
+            localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
             
             playMessageSound();
             
             const missedBubble = {
               roomId: `missed_${callId}`,
-              otherUid: oldData.hostId,
+              otherUid: data.hostId,
               isGlobal: false,
               count: 1,
-              senderName: oldData.hostName || 'Unknown',
-              senderPhoto: oldData.hostPhoto || '',
+              senderName: data.hostName || 'Unknown',
+              senderPhoto: data.hostPhoto || '',
               isMissedCall: true,
-              callTypeIcon: oldData.callType === 'audio' ? '🎙️' : '📹'
+              callTypeIcon: data.callType === 'audio' ? '🎙️' : '📹'
             };
             
             setMessageBubbles((prev) => {
@@ -394,6 +393,7 @@ export default function GlobalAlerts() {
           }
         }
       });
+      setIncomingPersonalCall(found);
     });
     return () => unsubscribe();
   }, [currentUid]);
@@ -573,7 +573,7 @@ export default function GlobalAlerts() {
     if (!activeCall) return;
     stopRingtone();
     if (activeCall.type === 'personal') {
-      navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true, callDocId: activeCall.callDocId } });
+      navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
       if (activeCall.callId) {
         const updatedList = [...dismissedGlobalCalls, activeCall.callId];
@@ -590,7 +590,7 @@ export default function GlobalAlerts() {
     stopRingtone();
     if (activeCall.type === 'personal') {
       try { 
-        await updateDoc(doc(db, "personal-connections", activeCall.callDocId), { status: "ended" }); 
+        await updateDoc(doc(db, "personal-connections", activeCall.roomId), { status: "ended" }); 
       } catch (err) { 
         console.error("Error declining personal call:", err);
       }
