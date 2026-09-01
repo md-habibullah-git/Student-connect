@@ -179,25 +179,6 @@ export default function Home({ isAdmin }) {
     }
   };
 
-  // 🔥 Fullscreen function
-  const enterFullscreen = async (postId) => {
-    const video = videoElementsRef.current[postId];
-    if (!video) return;
-    
-    try {
-      if (video.requestFullscreen) {
-        await video.requestFullscreen();
-      } else if (video.webkitRequestFullscreen) {
-        video.webkitRequestFullscreen();
-      } else if (video.webkitEnterFullscreen) {
-        // iOS Safari
-        video.webkitEnterFullscreen();
-      }
-    } catch (err) {
-      console.error("Fullscreen error:", err);
-    }
-  };
-
   // Lightbox
   useEffect(() => {
     if (expandedImage) {
@@ -790,68 +771,42 @@ export default function Home({ isAdmin }) {
             {post.text && <p style={{ margin: '0 0 12px 0', fontSize: '14px', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{post.text}</p>}
             
             {post.mediaUrl && (
-              <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px', position: 'relative' }}>
+              <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px' }}>
                 {post.mediaResourceType === 'video' || post.mediaUrl.includes('/video/') || post.mediaUrl.endsWith('.mp4') ? (
-                  <>
-                    <video
-                      ref={(el) => {
-                        if (el) {
-                          videoElementsRef.current[post.id] = el;
-                          el.muted = globalMutedRef.current;
-                          el.dataset.postId = post.id;
-                        } else {
-                          delete videoElementsRef.current[post.id];
-                        }
-                      }}
-                      src={post.mediaUrl}
-                      controls
-                      playsInline
-                      onPlay={(e) => {
-                        if (internalActionRef.current) return;
-                        const postId = e.target.dataset.postId;
-                        if (postId && activeVideoIdRef.current !== postId) {
-                          playVideo(postId);
-                        }
-                      }}
-                      onPause={(e) => {
-                        if (internalActionRef.current) return;
-                        const postId = e.target.dataset.postId;
-                        if (postId && activeVideoIdRef.current === postId) {
-                          activeVideoIdRef.current = null;
-                        }
-                      }}
-                      onVolumeChange={(e) => {
-                        globalMutedRef.current = e.target.muted;
-                        applyMuteToAll(globalMutedRef.current);
-                      }}
-                      onError={(e) => handleMediaError(e, post)}
-                      style={{ maxWidth: '100%', maxHeight: '400px', width: '100%' }}
-                    />
-                    {/* 🔥 Fullscreen button */}
-                    <button
-                      onClick={() => enterFullscreen(post.id)}
-                      style={{
-                        position: 'absolute',
-                        bottom: '10px',
-                        right: '10px',
-                        background: 'rgba(0,0,0,0.6)',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: '50%',
-                        width: '32px',
-                        height: '32px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '14px',
-                        zIndex: 10
-                      }}
-                      title="Fullscreen"
-                    >
-                      ⛶
-                    </button>
-                  </>
+                  <video
+                    ref={(el) => {
+                      if (el) {
+                        videoElementsRef.current[post.id] = el;
+                        el.muted = globalMutedRef.current;
+                        el.dataset.postId = post.id;
+                      } else {
+                        delete videoElementsRef.current[post.id];
+                      }
+                    }}
+                    src={post.mediaUrl}
+                    controls
+                    playsInline
+                    onPlay={(e) => {
+                      if (internalActionRef.current) return;
+                      const postId = e.target.dataset.postId;
+                      if (postId && activeVideoIdRef.current !== postId) {
+                        playVideo(postId);
+                      }
+                    }}
+                    onPause={(e) => {
+                      if (internalActionRef.current) return;
+                      const postId = e.target.dataset.postId;
+                      if (postId && activeVideoIdRef.current === postId) {
+                        activeVideoIdRef.current = null;
+                      }
+                    }}
+                    onVolumeChange={(e) => {
+                      globalMutedRef.current = e.target.muted;
+                      applyMuteToAll(globalMutedRef.current);
+                    }}
+                    onError={(e) => handleMediaError(e, post)}
+                    style={{ maxWidth: '100%', maxHeight: '400px', width: '100%' }}
+                  />
                 ) : (
                   <img
                     src={post.mediaUrl}
