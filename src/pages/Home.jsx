@@ -372,23 +372,25 @@ export default function Home({ isAdmin }) {
       try {
         const result = await FilePicker.pickFiles({
           types: ['image/*', 'video/*'],
-          readData: false,
+          readData: true,
         });
         
         if (result && result.files && result.files.length > 0) {
           const pickedFile = result.files[0];
           
           let blob = null;
-          let fileType = pickedFile.mimeType || 'image/jpeg';
-          let fileName = pickedFile.name || `file-${Date.now()}.jpg`;
+          const fileType = pickedFile.mimeType || 'image/jpeg';
+          const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
           
           if (pickedFile.data) {
-            blob = pickedFile.data;
-          } else if (pickedFile.path || pickedFile.uri || pickedFile.webPath) {
-            const filePath = pickedFile.path || pickedFile.uri || pickedFile.webPath;
-            const response = await fetch(filePath);
-            blob = await response.blob();
-            fileType = blob.type || pickedFile.mimeType || 'image/jpeg';
+            const base64Data = pickedFile.data.replace(/^data:.*;base64,/, '');
+            const byteCharacters = atob(base64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            blob = new Blob([byteArray], { type: fileType });
           }
           
           if (!blob) return;
