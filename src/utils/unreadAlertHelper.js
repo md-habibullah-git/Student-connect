@@ -1,7 +1,7 @@
 // File Name: src/utils/unreadAlertHelper.js
 
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, orderBy, limit } from 'firebase/firestore';
 
 // Sound function for unread alerts
 export const playUnreadAlertSound = () => {
@@ -24,11 +24,12 @@ export const playUnreadAlertSound = () => {
 };
 
 // Check unread personal messages on app load
-export const checkUnreadPersonalMessages = (currentUid, callback) => {
-  const personalRoomsRef = collection(db, "personal-rooms");
-  const q = query(personalRoomsRef, where("participants", "array-contains", currentUid));
-  
-  const unsubscribe = onSnapshot(q, (snap) => {
+export const checkUnreadPersonalMessages = async (currentUid, callback) => {
+  try {
+    const personalRoomsRef = collection(db, "personal-rooms");
+    const q = query(personalRoomsRef, where("participants", "array-contains", currentUid));
+    const snap = await getDocs(q);
+    
     const unreadBubbles = [];
     
     snap.docs.forEach((docSnap) => {
@@ -54,52 +55,50 @@ export const checkUnreadPersonalMessages = (currentUid, callback) => {
       callback(unreadBubbles);
       playUnreadAlertSound();
     }
-    
-    unsubscribe();
-  });
-  
-  return unsubscribe;
+  } catch (err) {
+    console.error("Error checking unread personal messages:", err);
+  }
 };
 
 // Check unread global messages on app load
-export const checkUnreadGlobalMessages = (currentUid, callback) => {
-  const globalMsgRef = collection(db, "global-room-messages");
-  const lastReadKey = 'lastRead_global';
-  const lastRead = Number(localStorage.getItem(lastReadKey)) || 0;
-  
-  const q = query(
-    globalMsgRef,
-    where("createdAt", ">", lastRead),
-    where("senderUid", "!=", currentUid)
-  );
-  
-  const unsubscribe = onSnapshot(q, (snap) => {
-    if (!snap.empty) {
-      const lastMsg = snapshot.docs[snapshot.docs.length - 1].data();
-      const unreadBubble = {
-        roomId: 'global',
-        isGlobal: true,
-        count: snapshot.docs.length,
-        senderName: lastMsg.senderName || 'Unknown',
-        senderPhoto: lastMsg.senderPhoto || '',
-      };
-      
-      callback([unreadBubble]);
-      playUnreadAlertSound();
-    }
+export const checkUnreadGlobalMessages = async (currentUid, callback) => {
+  try {
+    const globalMsgRef = collection(db, "global-room-messages");
+    const lastReadKey = 'lastRead_global';
+    const lastRead = Number(localStorage.getItem(lastReadKey)) || 0;
     
-    unsubscribe();
-  });
-  
-  return unsubscribe;
+    const q = query(globalMsgRef, orderBy("createdAt", "desc"), limit(1));
+    const snap = await getDocs(q);
+    
+    if (!snap.empty) {
+      const data = snap.docs[0].data();
+      const msgTime = data.createdAt?.seconds ? data.createdAt.seconds * 1000 : data.createdAt;
+      
+      if (msgTime > lastRead && data.senderUid !== currentUid) {
+        const unreadBubble = {
+          roomId: 'global',
+          isGlobal: true,
+          count: 1,
+          senderName: data.senderName || 'Unknown',
+          senderPhoto: data.senderPhoto || '',
+        };
+        
+        callback([unreadBubble]);
+        playUnreadAlertSound();
+      }
+    }
+  } catch (err) {
+    console.error("Error checking unread global messages:", err);
+  }
 };
 
 // Check missed calls on app load
-export const checkMissedCalls = (currentUid, callback) => {
-  const missedCallsRef = collection(db, "personal-calls");
-  const q = query(missedCallsRef, where("participants", "array-contains", currentUid));
-  
-  const unsubscribe = onSnapshot(q, (snap) => {
+export const checkMissedCalls = async (currentUid, callback) => {
+  try {
+    const missedCallsRef = collection(db, "personal-calls");
+    const q = query(missedCallsRef, where("participants", "array-contains", currentUid));
+    const snap = await getDocs(q);
+    
     const missedBubbles = [];
     
     snap.docs.forEach((docSnap) => {
@@ -131,9 +130,7 @@ export const checkMissedCalls = (currentUid, callback) => {
       callback(missedBubbles);
       playUnreadAlertSound();
     }
-    
-    unsubscribe();
-  });
-  
-  return unsubscribe;
+  } catch (err) {
+    console.error("Error checking missed calls:", err);
+  }
 };
