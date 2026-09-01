@@ -928,9 +928,19 @@ export default function GlobalChat() {
           if (data.callStartedAt) {
             callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
           }
+          
+          // Missed call check: শুধু host থাকলে এবং আর কেউ join না করলে
           const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
           const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
-          const callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call • ${formatDuration(callHistory.totalDuration)} min`;
+          const memberCount = Object.keys(callHistory).filter(k => k !== 'totalDuration').length;
+          
+          let callSummaryText;
+          if (memberCount <= 1) {
+            // কেউ join করেনি — missed call
+            callSummaryText = `❌ You missed a group ${callTypeLabel.toLowerCase()} • ${formatTimeDisplay(data.callStartedAt)}`;
+          } else {
+            callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call • ${formatDuration(callHistory.totalDuration)} min`;
+          }
           
           await addDoc(collection(db, "global-room-messages"), {
             text: callSummaryText,
