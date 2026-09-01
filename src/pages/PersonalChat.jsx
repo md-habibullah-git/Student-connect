@@ -802,8 +802,6 @@ export default function PersonalChat() {
       unsubscribeCallSignalRef.current = onSnapshot(callRef, async (snap) => {
         const data = snap.data();
         if (!data) {
-          const endedAt = new Date().getTime();
-          await saveCallHistory(callType, startedAt, endedAt, false);
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
@@ -812,10 +810,16 @@ export default function PersonalChat() {
         if (data.answer && pc.signalingState !== 'closed' && !pc.currentRemoteDescription) {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         }
-        if (data.status === 'ended' || data.status === 'missed') {
+        if (data.status === 'ended') {
           const endedAt = new Date().getTime();
-          const wasMissed = data.status === 'missed' || !data.answer;
-          await saveCallHistory(callType, startedAt, endedAt, wasMissed);
+          await saveCallHistory(callType, startedAt, endedAt, false);
+          cleanupCallLocally();
+          setInCall(false);
+          setActiveCallType('video');
+        }
+        if (data.status === 'missed') {
+          const endedAt = new Date().getTime();
+          await saveCallHistory(callType, startedAt, endedAt, true);
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
@@ -913,8 +917,6 @@ export default function PersonalChat() {
 
       unsubscribeCallSignalRef.current = onSnapshot(callRef, (snap) => {
         if (!snap.exists()) {
-          const endedAt = new Date().getTime();
-          saveCallHistory(callType, startedAt, endedAt, false);
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
@@ -955,6 +957,7 @@ export default function PersonalChat() {
         const callData = callSnap.data();
         const wasAnswered = callData.answer ? true : false;
         
+        // Delete candidates
         const [callerCandidates, calleeCandidates] = await Promise.all([
           getDocs(collection(callRef, "callerCandidates")),
           getDocs(collection(callRef, "calleeCandidates"))
@@ -964,23 +967,25 @@ export default function PersonalChat() {
           ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
         ]);
         
-        if (!wasAnswered) {
-          await updateDoc(callRef, { status: "ended", answer: false }).catch(() => {});
-        } else {
+        if (wasAnswered) {
+          // Answered call - update status
           await updateDoc(callRef, { status: "ended" }).catch(() => {});
+        } else {
+          // Not answered - missed call
+          await updateDoc(callRef, { status: "missed" }).catch(() => {});
         }
         
+        // Delete after delay to let listener catch
         setTimeout(async () => {
           try {
             await deleteDoc(callRef).catch(() => {});
           } catch (err) {}
-        }, 3000);
+        }, 5000);
       }
     } catch (err) {
       console.error("Error ending call:", err);
     }
     
-    await saveCallHistory(callType, startedAt, endedAt, false);
     cleanupCallLocally();
     setInCall(false);
     setActiveCallType('video');
