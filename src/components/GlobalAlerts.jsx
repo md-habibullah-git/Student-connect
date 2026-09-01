@@ -82,7 +82,7 @@ const playMessageSound = () => {
     gainNode.connect(audioCtx.destination);
     oscillator.frequency.value = 1200;
     oscillator.type = 'sine';
-    gainNode.gain.setValueAtTime(3.2, audioCtx.currentTime); // 4x louder (আগে 0.8 ছিল, এখন 3.2)
+    gainNode.gain.setValueAtTime(12.8, audioCtx.currentTime); // 4x louder (আগে 3.2 ছিল, এখন 12.8)
     gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
     oscillator.start(audioCtx.currentTime);
     oscillator.stop(audioCtx.currentTime + 0.4);
