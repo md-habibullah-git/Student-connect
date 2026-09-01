@@ -31,12 +31,12 @@ let ringtoneIntervalRef = null;
 
 const startRingtone = () => {
   try {
-    if (ringtoneAudioCtx) return; // Already playing
+    if (ringtoneAudioCtx) return;
     
     ringtoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     ringtoneGainNode = ringtoneAudioCtx.createGain();
     ringtoneGainNode.connect(ringtoneAudioCtx.destination);
-    ringtoneGainNode.gain.value = 2.0; // 4x louder (আগে 0.5 ছিল, এখন 2.0)
+    ringtoneGainNode.gain.value = 2.0;
     
     const playBeep = () => {
       try {
@@ -53,7 +53,7 @@ const startRingtone = () => {
     };
     
     playBeep();
-    ringtoneIntervalRef = setInterval(playBeep, 1000); // Beep every 1 second
+    ringtoneIntervalRef = setInterval(playBeep, 1000);
   } catch (err) {}
 };
 
@@ -82,7 +82,7 @@ const playMessageSound = () => {
     gainNode.connect(audioCtx.destination);
     oscillator.frequency.value = 1200;
     oscillator.type = 'sine';
-    gainNode.gain.setValueAtTime(0.8, audioCtx.currentTime); // 4x louder (আগে 0.4 ছিল, এখন 0.8)
+    gainNode.gain.setValueAtTime(3.2, audioCtx.currentTime); // 4x louder (আগে 0.8 ছিল, এখন 3.2)
     gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
     oscillator.start(audioCtx.currentTime);
     oscillator.stop(audioCtx.currentTime + 0.4);
@@ -115,7 +115,6 @@ export default function GlobalAlerts() {
     return unsubscribe;
   }, []);
 
-  // Ringtone start/stop based on activeCall
   useEffect(() => {
     if (incomingPersonalCall || incomingGlobalCall) {
       startRingtone();
