@@ -390,7 +390,7 @@ export default function GlobalAlerts() {
             setMessageBubbles((prev) => {
               const existing = prev.find((b) => b.roomId === missedBubble.roomId);
               if (!existing) {
-                return [...prev, missedBubble].slice(-3);
+                return [...prev, missedBubble].slice(-5);
               }
               return prev;
             });
@@ -436,6 +436,28 @@ export default function GlobalAlerts() {
                 isGlobal: true
               });
               localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
+              
+              // Show missed call bubble for global
+              const missedBubble = {
+                roomId: `missed_global_${callId}`,
+                otherUid: data.hostId,
+                isGlobal: true,
+                count: 1,
+                senderName: data.hostName || 'Unknown',
+                senderPhoto: '',
+                isMissedCall: true,
+                callTypeIcon: data.callType === 'audio' ? '🎙️' : '📹'
+              };
+              
+              setMessageBubbles((prev) => {
+                const existing = prev.find((b) => b.roomId === missedBubble.roomId);
+                if (!existing) {
+                  return [...prev, missedBubble].slice(-5);
+                }
+                return prev;
+              });
+              
+              playMessageSound();
             }
           }
         }
@@ -776,7 +798,7 @@ export default function GlobalAlerts() {
         </button>
       )}
 
-      {/* Delete Zone - appears when dragging a bubble */}
+      {/* Delete Zone - only trash icon, no text */}
       {showDeleteZone && (
         <div style={{
           position: 'fixed',
@@ -784,21 +806,19 @@ export default function GlobalAlerts() {
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 2000,
-          backgroundColor: isDeleteZoneHover ? '#dc3545' : 'rgba(0,0,0,0.6)',
-          color: '#fff',
-          padding: '12px 24px',
-          borderRadius: '12px',
+          backgroundColor: isDeleteZoneHover ? '#dc3545' : 'rgba(0,0,0,0.5)',
+          width: '70px',
+          height: '70px',
+          borderRadius: '50%',
           display: 'flex',
           alignItems: 'center',
-          gap: '10px',
-          transition: 'background-color 0.2s',
-          border: isDeleteZoneHover ? '2px solid #ff6b6b' : '2px solid transparent',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+          justifyContent: 'center',
+          transition: 'all 0.2s',
+          border: isDeleteZoneHover ? '3px solid #ff6b6b' : '2px solid rgba(255,255,255,0.3)',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+          fontSize: '32px'
         }}>
-          <span style={{ fontSize: '24px' }}>🗑️</span>
-          <span style={{ fontWeight: 'bold', fontSize: '14px' }}>
-            {isDeleteZoneHover ? 'Drop to delete' : 'Drag here to delete'}
-          </span>
+          <span>🗑️</span>
         </div>
       )}
 
