@@ -155,9 +155,6 @@ export default function GlobalAlerts() {
   const draggingRef = useRef(false);
   const dragMovedRef = useRef(false);
   const dragOffsetRef = useRef({ x: 0, y: 0 });
-  const [showDeleteZone, setShowDeleteZone] = useState(false);
-  const [isDeleteZoneHover, setIsDeleteZoneHover] = useState(false);
-  const draggedBubbleRef = useRef(null);
 
   const locationRef = useRef(location);
   useEffect(() => { locationRef.current = location; }, [location]);
@@ -293,7 +290,7 @@ export default function GlobalAlerts() {
                 roomId, otherUid, isGlobal: false, count: 1,
                 senderName: data.lastMessageSenderName, senderPhoto: data.lastMessageSenderPhoto
               }];
-              return next.slice(-5);
+              return next.slice(-3);
             });
           }
         }
@@ -327,7 +324,7 @@ export default function GlobalAlerts() {
                   : b);
               }
               const next = [...prev, { roomId: 'global', isGlobal: true, count: 1, senderName: data.senderName, senderPhoto: data.senderPhoto }];
-              return next.slice(-5);
+              return next.slice(-3);
             });
           }
         }
@@ -355,8 +352,8 @@ export default function GlobalAlerts() {
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'removed') {
           const oldData = change.doc.data();
-          if (oldData && oldData.hostId !== currentUid) {
-            // Save missed call to localStorage regardless of answer
+          if (oldData && oldData.hostId !== currentUid && !oldData.answer) {
+            // Save missed call to localStorage
             const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
             const callId = change.doc.id;
             const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
@@ -374,29 +371,26 @@ export default function GlobalAlerts() {
               localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
             }
             
-            // Check if not answered
-            if (!oldData.answer) {
-              playMessageSound();
-              
-              const missedBubble = {
-                roomId: `missed_${change.doc.id}`,
-                otherUid: oldData.hostId,
-                isGlobal: false,
-                count: 1,
-                senderName: oldData.hostName || 'Unknown',
-                senderPhoto: oldData.hostPhoto || '',
-                isMissedCall: true,
-                callTypeIcon: oldData.callType === 'audio' ? '🎙️' : '📹'
-              };
-              
-              setMessageBubbles((prev) => {
-                const existing = prev.find((b) => b.roomId === missedBubble.roomId);
-                if (!existing) {
-                  return [...prev, missedBubble].slice(-5);
-                }
-                return prev;
-              });
-            }
+            playMessageSound();
+            
+            const missedBubble = {
+              roomId: `missed_${change.doc.id}`,
+              otherUid: oldData.hostId,
+              isGlobal: false,
+              count: 1,
+              senderName: oldData.hostName || 'Unknown',
+              senderPhoto: oldData.hostPhoto || '',
+              isMissedCall: true,
+              callTypeIcon: oldData.callType === 'audio' ? '🎙️' : '📹'
+            };
+            
+            setMessageBubbles((prev) => {
+              const existing = prev.find((b) => b.roomId === missedBubble.roomId);
+              if (!existing) {
+                return [...prev, missedBubble].slice(-3);
+              }
+              return prev;
+            });
           }
         }
       });
@@ -420,8 +414,8 @@ export default function GlobalAlerts() {
           }
         }
         
-        // Global missed call detection - check if call ended without answering
-        if (data.status === "ended" && data.hostId !== currentUid) {
+        // Global missed call detection
+        if (data.status !== "ringing" && data.callStartedAt && data.hostId !== currentUid) {
           const memberCount = Object.keys(data.callHistory || {}).filter(k => k !== 'totalDuration').length;
           if (memberCount <= 1) {
             const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
@@ -439,28 +433,6 @@ export default function GlobalAlerts() {
                 isGlobal: true
               });
               localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
-              
-              // Show missed call bubble for global
-              const missedBubble = {
-                roomId: `missed_global_${callId}`,
-                otherUid: data.hostId,
-                isGlobal: true,
-                count: 1,
-                senderName: data.hostName || 'Unknown',
-                senderPhoto: '',
-                isMissedCall: true,
-                callTypeIcon: data.callType === 'audio' ? '🎙️' : '📹'
-              };
-              
-              setMessageBubbles((prev) => {
-                const existing = prev.find((b) => b.roomId === missedBubble.roomId);
-                if (!existing) {
-                  return [...prev, missedBubble].slice(-5);
-                }
-                return prev;
-              });
-              
-              playMessageSound();
             }
           }
         }
@@ -577,6 +549,61 @@ export default function GlobalAlerts() {
           }
         }
       }).catch(err => console.error("Error checking global unread:", err));
+      
+      // Check missed personal calls from Firestore
+      const personalCallsRef = collection(db, "personal-calls");
+      const personalCallsQ = query(personalCallsRef, where("participants", "array-contains", currentUid));
+      
+      getDocs(personalCallsQ).then(snapshot => {
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data();
+          const callId = docSnap.id;
+          
+          // Check if this call was missed (not answered, not by current user)
+          if (data.hostId !== currentUid && !data.answer) {
+            const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
+            const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
+            const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
+            const alreadySeen = seenCallsStorage.includes(callId);
+            
+            if (!alreadySaved) {
+              missedCallsStorage.push({
+                callId: callId,
+                hostId: data.hostId,
+                hostName: data.hostName || 'Unknown',
+                hostPhoto: data.hostPhoto || '',
+                callType: data.callType || 'video',
+                missedAt: Date.now(),
+                isGlobal: false
+              });
+              localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
+            }
+            
+            if (!alreadySeen) {
+              const missedBubble = {
+                roomId: `missed_${callId}`,
+                otherUid: data.hostId,
+                isGlobal: false,
+                count: 1,
+                senderName: data.hostName || 'Unknown',
+                senderPhoto: data.hostPhoto || '',
+                isMissedCall: true,
+                callTypeIcon: data.callType === 'audio' ? '🎙️' : '📹'
+              };
+              
+              setMessageBubbles(prev => {
+                const existing = prev.find(b => b.roomId === missedBubble.roomId);
+                if (!existing) {
+                  return [...prev, missedBubble].slice(-5);
+                }
+                return prev;
+              });
+              
+              playMessageSound();
+            }
+          }
+        });
+      }).catch(err => console.error("Error checking personal missed calls:", err));
     };
     
     checkAllAlerts();
@@ -662,14 +689,12 @@ export default function GlobalAlerts() {
     setMessageBubbles((prev) => prev.filter((b) => b !== bubble));
   };
 
-  const handleDragStart = (e, bubble) => {
-    draggedBubbleRef.current = bubble;
+  const handleDragStart = (e) => {
     draggingRef.current = true;
     dragMovedRef.current = false;
     const rect = e.currentTarget.getBoundingClientRect();
     dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     e.currentTarget.setPointerCapture(e.pointerId);
-    setShowDeleteZone(true);
   };
 
   const handleDragMove = (e) => {
@@ -682,37 +707,15 @@ export default function GlobalAlerts() {
     newX = Math.max(4, Math.min(window.innerWidth - stackWidth - 4, newX));
     newY = Math.max(4, Math.min(window.innerHeight - stackHeight - 4, newY));
     setBubblePos({ x: newX, y: newY });
-    
-    // Check if near bottom center (delete zone)
-    const windowHeight = window.innerHeight;
-    const isNearBottom = e.clientY > windowHeight - 80 && e.clientX > window.innerWidth / 2 - 60 && e.clientX < window.innerWidth / 2 + 60;
-    setIsDeleteZoneHover(isNearBottom);
   };
 
-  const handleDragEnd = (e) => {
+  const handleDragEnd = () => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
-    
-    // Check if dropped on delete zone
-    const windowHeight = window.innerHeight;
-    const isNearBottom = e.clientY > windowHeight - 80 && e.clientX > window.innerWidth / 2 - 60 && e.clientX < window.innerWidth / 2 + 60;
-    
-    if (isNearBottom && draggedBubbleRef.current) {
-      // Remove the bubble
-      setMessageBubbles((prev) => {
-        const filtered = prev.filter((b) => b !== draggedBubbleRef.current);
-        return filtered;
-      });
-      draggedBubbleRef.current = null;
-    }
-    
     setBubblePos((pos) => {
       if (pos) localStorage.setItem('floatingBubblePos', JSON.stringify(pos));
       return pos;
     });
-    setShowDeleteZone(false);
-    setIsDeleteZoneHover(false);
-    draggedBubbleRef.current = null;
     setTimeout(() => {
       dragMovedRef.current = false;
     }, 150);
@@ -804,40 +807,16 @@ export default function GlobalAlerts() {
         </button>
       )}
 
-      {/* Delete Zone - only trash icon */}
-      {showDeleteZone && (
-        <div style={{
-          position: 'fixed',
-          bottom: '20px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 2000,
-          backgroundColor: isDeleteZoneHover ? '#dc3545' : 'rgba(0,0,0,0.5)',
-          width: '70px',
-          height: '70px',
-          borderRadius: '50%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          transition: 'all 0.2s',
-          border: isDeleteZoneHover ? '3px solid #ff6b6b' : '2px solid rgba(255,255,255,0.3)',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-          fontSize: '32px'
-        }}>
-          <span>🗑️</span>
-        </div>
-      )}
-
       {messageBubbles.length > 0 && (
         <div style={bubbleContainerStyle}>
           {messageBubbles.map((bubble) => (
             <button
               key={bubble.roomId}
-              onPointerDown={(e) => handleDragStart(e, bubble)}
+              onPointerDown={handleDragStart}
               onPointerMove={handleDragMove}
               onPointerUp={handleDragEnd}
               onClick={() => handleBubbleClick(bubble)}
-              title={`${bubble.senderName || 'Student'} — ${bubble.count} new message${bubble.count > 1 ? 's' : ''} (drag to delete)`}
+              title={`${bubble.senderName || 'Student'} — ${bubble.count} new message${bubble.count > 1 ? 's' : ''} (drag to move)`}
               style={{
                 position: 'relative', width: '52px', height: '52px', borderRadius: '50%',
                 border: 'none', padding: 0, cursor: 'grab', boxShadow: '0 4px 14px rgba(0,0,0,0.3)', touchAction: 'none'
