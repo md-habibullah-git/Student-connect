@@ -349,56 +349,12 @@ export default function GlobalAlerts() {
       });
       setIncomingPersonalCall(found);
       
-      // Personal missed call detection (like global call logic)
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        const callId = docSnap.id;
-        
-        if (data.status !== "ringing" && data.hostId !== currentUid && !data.answer) {
-          const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
-          const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
-          
-          if (!alreadySaved) {
-            missedCallsStorage.push({
-              callId: callId,
-              hostId: data.hostId,
-              hostName: data.hostName || 'Unknown',
-              hostPhoto: data.hostPhoto || '',
-              callType: data.callType || 'video',
-              missedAt: Date.now(),
-              isGlobal: false
-            });
-            localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
-            
-            playMessageSound();
-            
-            const missedBubble = {
-              roomId: `missed_${callId}`,
-              otherUid: data.hostId,
-              isGlobal: false,
-              count: 1,
-              senderName: data.hostName || 'Unknown',
-              senderPhoto: data.hostPhoto || '',
-              isMissedCall: true,
-              callTypeIcon: data.callType === 'audio' ? '🎙️' : '📹'
-            };
-            
-            setMessageBubbles((prev) => {
-              const existing = prev.find((b) => b.roomId === missedBubble.roomId);
-              if (!existing) {
-                return [...prev, missedBubble].slice(-3);
-              }
-              return prev;
-            });
-          }
-        }
-      });
-      
       snapshot.docChanges().forEach((change) => {
+        // Document removed মানে কল শেষ হয়ে গেছে (delete হয়ে গেছে)
         if (change.type === 'removed') {
           const oldData = change.doc.data();
+          // answer না থাকলে missed call
           if (oldData && oldData.hostId !== currentUid && !oldData.answer) {
-            // Save missed call to localStorage
             const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
             const callId = change.doc.id;
             const alreadySaved = missedCallsStorage.some(call => call.callId === callId);
@@ -419,7 +375,7 @@ export default function GlobalAlerts() {
             playMessageSound();
             
             const missedBubble = {
-              roomId: `missed_${change.doc.id}`,
+              roomId: `missed_${callId}`,
               otherUid: oldData.hostId,
               isGlobal: false,
               count: 1,
