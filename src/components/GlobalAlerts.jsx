@@ -109,6 +109,15 @@ export default function GlobalAlerts() {
     }
   });
 
+  // Drag to delete state
+  const [dragDeleteState, setDragDeleteState] = useState({
+    isDragging: false,
+    bubbleId: null,
+    startY: 0,
+    currentY: 0,
+    showDeleteZone: false
+  });
+
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
     const unsubscribe = subscribeActiveCallSession(setActiveSession);
@@ -610,6 +619,78 @@ export default function GlobalAlerts() {
     navigate(`/chat/${activeSession.otherUid}/${encodeURIComponent(activeSession.otherName || 'Student')}`);
   };
 
+  // Drag to delete handlers
+  const handleBubbleDragStart = (e, bubbleId) => {
+    draggingRef.current = true;
+    dragMovedRef.current = false;
+    const rect = e.currentTarget.getBoundingClientRect();
+    dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    
+    setDragDeleteState({
+      isDragging: true,
+      bubbleId: bubbleId,
+      startY: e.clientY,
+      currentY: e.clientY,
+      showDeleteZone: false
+    });
+    
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleBubbleDragMove = (e) => {
+    if (!draggingRef.current) return;
+    dragMovedRef.current = true;
+    
+    const deltaY = e.clientY - dragDeleteState.startY;
+    const isNearBottom = deltaY > 150; // স্ক্রিনের নিচে টেনে আনার থ্রেশহোল্ড
+    
+    setDragDeleteState(prev => ({
+      ...prev,
+      currentY: e.clientY,
+      showDeleteZone: isNearBottom
+    }));
+    
+    const stackWidth = 56;
+    const stackHeight = 56 * (messageBubbles.length || 1) + 10 * (messageBubbles.length - 1);
+    let newX = e.clientX - dragOffsetRef.current.x;
+    let newY = e.clientY - dragOffsetRef.current.y;
+    newX = Math.max(4, Math.min(window.innerWidth - stackWidth - 4, newX));
+    newY = Math.max(4, Math.min(window.innerHeight - stackHeight - 4, newY));
+    setBubblePos({ x: newX, y: newY });
+  };
+
+  const handleBubbleDragEnd = (e) => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    
+    const deltaY = e.clientY - dragDeleteState.startY;
+    const shouldDelete = deltaY > 150 && dragDeleteState.bubbleId;
+    
+    if (shouldDelete) {
+      // বাবল ডিলিট করা
+      setMessageBubbles(prev => prev.filter(b => b.roomId !== dragDeleteState.bubbleId));
+      
+      // ডিলিট অ্যানিমেশন/ইফেক্ট এর জন্য সাউন্ড
+      playMessageSound();
+    }
+    
+    setDragDeleteState({
+      isDragging: false,
+      bubbleId: null,
+      startY: 0,
+      currentY: 0,
+      showDeleteZone: false
+    });
+    
+    setBubblePos((pos) => {
+      if (pos) localStorage.setItem('floatingBubblePos', JSON.stringify(pos));
+      return pos;
+    });
+    setTimeout(() => {
+      dragMovedRef.current = false;
+    }, 150);
+  };
+
   const handleBubbleClick = (bubble) => {
     if (dragMovedRef.current) { dragMovedRef.current = false; return; }
     
@@ -632,38 +713,6 @@ export default function GlobalAlerts() {
     if (bubble.isGlobal) navigate('/chat/global/Global-Chatroom');
     else navigate(`/chat/${bubble.otherUid}/${encodeURIComponent(bubble.senderName || 'Student')}`);
     setMessageBubbles((prev) => prev.filter((b) => b !== bubble));
-  };
-
-  const handleDragStart = (e) => {
-    draggingRef.current = true;
-    dragMovedRef.current = false;
-    const rect = e.currentTarget.getBoundingClientRect();
-    dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-
-  const handleDragMove = (e) => {
-    if (!draggingRef.current) return;
-    dragMovedRef.current = true;
-    const stackWidth = 56;
-    const stackHeight = 56 * (messageBubbles.length || 1) + 10 * (messageBubbles.length - 1);
-    let newX = e.clientX - dragOffsetRef.current.x;
-    let newY = e.clientY - dragOffsetRef.current.y;
-    newX = Math.max(4, Math.min(window.innerWidth - stackWidth - 4, newX));
-    newY = Math.max(4, Math.min(window.innerHeight - stackHeight - 4, newY));
-    setBubblePos({ x: newX, y: newY });
-  };
-
-  const handleDragEnd = () => {
-    if (!draggingRef.current) return;
-    draggingRef.current = false;
-    setBubblePos((pos) => {
-      if (pos) localStorage.setItem('floatingBubblePos', JSON.stringify(pos));
-      return pos;
-    });
-    setTimeout(() => {
-      dragMovedRef.current = false;
-    }, 150);
   };
 
   const fallbackAvatar = (name) => `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name || 'Student')}`;
@@ -757,14 +806,17 @@ export default function GlobalAlerts() {
           {messageBubbles.map((bubble) => (
             <button
               key={bubble.roomId}
-              onPointerDown={handleDragStart}
-              onPointerMove={handleDragMove}
-              onPointerUp={handleDragEnd}
+              onPointerDown={(e) => handleBubbleDragStart(e, bubble.roomId)}
+              onPointerMove={handleBubbleDragMove}
+              onPointerUp={handleBubbleDragEnd}
+              onPointerCancel={handleBubbleDragEnd}
               onClick={() => handleBubbleClick(bubble)}
-              title={`${bubble.senderName || 'Student'} — ${bubble.count} new message${bubble.count > 1 ? 's' : ''} (drag to move)`}
+              title={`${bubble.senderName || 'Student'} — ${bubble.count} new message${bubble.count > 1 ? 's' : ''} (drag to move or delete)`}
               style={{
                 position: 'relative', width: '52px', height: '52px', borderRadius: '50%',
-                border: 'none', padding: 0, cursor: 'grab', boxShadow: '0 4px 14px rgba(0,0,0,0.3)', touchAction: 'none'
+                border: 'none', padding: 0, cursor: 'grab', boxShadow: '0 4px 14px rgba(0,0,0,0.3)', touchAction: 'none',
+                opacity: dragDeleteState.isDragging && dragDeleteState.bubbleId === bubble.roomId && dragDeleteState.showDeleteZone ? '0.3' : '1',
+                transition: 'opacity 0.2s ease'
               }}
             >
               <img
@@ -782,6 +834,31 @@ export default function GlobalAlerts() {
               </span>
             </button>
           ))}
+        </div>
+      )}
+
+      {/* ডিলিট জোন - স্ক্রিনের নিচে */}
+      {dragDeleteState.isDragging && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 2000,
+          background: dragDeleteState.showDeleteZone ? '#dc3545' : 'rgba(0,0,0,0.3)',
+          color: '#fff',
+          padding: '12px 30px',
+          borderRadius: '30px',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          transition: 'all 0.3s ease',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px'
+        }}>
+          <span style={{ fontSize: '20px' }}>🗑️</span>
+          {dragDeleteState.showDeleteZone ? 'Release to delete' : 'Drag here to delete'}
         </div>
       )}
     </>
