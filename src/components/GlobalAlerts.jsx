@@ -349,12 +349,12 @@ export default function GlobalAlerts() {
       });
       setIncomingPersonalCall(found);
       
-      // Missed call bubble detection
+      // Missed call bubble detection with sound
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'removed') {
           const oldData = change.doc.data();
           if (oldData && oldData.hostId !== currentUid && !oldData.answer) {
-            // Play message sound for missed call
+            // Play message sound for personal missed call
             playMessageSound();
             
             const missedBubble = {
