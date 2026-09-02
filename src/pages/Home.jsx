@@ -671,10 +671,13 @@ export default function Home({ isAdmin }) {
           background-color: #ffffff; 
           border: 1px solid #eee; 
           color: #333333; 
-          padding: 15px; 
+          padding: 0; 
           border-radius: 0; 
           margin-bottom: 0; 
-          min-height: 75vh;
+          min-height: 50vh;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
         }
         :root[data-theme='dark'] .dynamic-post-card { background-color: #111111; border: 1px solid #222; color: #ffffff; }
         .dynamic-post-card p { color: inherit; }
@@ -772,7 +775,9 @@ export default function Home({ isAdmin }) {
         const postAvatarFallback = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(post.userName || 'Student')}`;
         return (
           <div key={post.id} id={`post-${post.id}`} className={`dynamic-post-card${highlightedPostId === post.id ? ' shared-highlight' : ''}`}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+            
+            {/* Header — উপরে */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '15px 15px 10px 15px' }}>
               <img src={usersCache[post.userId]?.photo || postAvatarFallback} alt="" style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', cursor: 'pointer' }} onClick={() => { if (post.userId) window.location.href = `/profile/${post.userId}`; }} />
               <div>
                 <strong style={{ display: 'block', fontSize: '14px', cursor: 'pointer' }} onClick={() => { if (post.userId) window.location.href = `/profile/${post.userId}`; }}>{post.userName}</strong>
@@ -785,142 +790,148 @@ export default function Home({ isAdmin }) {
               )}
             </div>
 
-            {post.text && <p style={{ margin: '0 0 12px 0', fontSize: '14px', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{post.text}</p>}
-            
-            {post.mediaUrl && (
-              <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px' }}>
-                {post.mediaResourceType === 'video' || post.mediaUrl.includes('/video/') || post.mediaUrl.endsWith('.mp4') ? (
-                  <video
-                    ref={(el) => {
-                      if (el) {
-                        videoElementsRef.current[post.id] = el;
-                        el.muted = globalMutedRef.current;
-                        el.dataset.postId = post.id;
-                      } else {
-                        delete videoElementsRef.current[post.id];
-                      }
-                    }}
-                    src={post.mediaUrl}
-                    controls
-                    playsInline
-                    onPlay={(e) => {
-                      if (internalActionRef.current) return;
-                      const postId = e.target.dataset.postId;
-                      if (postId && activeVideoIdRef.current !== postId) {
-                        playVideo(postId);
-                      }
-                    }}
-                    onPause={(e) => {
-                      if (internalActionRef.current) return;
-                      const postId = e.target.dataset.postId;
-                      if (postId && activeVideoIdRef.current === postId) {
-                        activeVideoIdRef.current = null;
-                      }
-                    }}
-                    onVolumeChange={(e) => {
-                      globalMutedRef.current = e.target.muted;
-                      applyMuteToAll(globalMutedRef.current);
-                    }}
-                    onError={(e) => handleMediaError(e, post)}
-                    style={{ maxWidth: '100%', maxHeight: '50vh', width: '100%', objectFit: 'contain' }}
-                  />
-                ) : (
-                  <img
-                    src={post.mediaUrl}
-                    alt="Post Content"
-                    onClick={() => setExpandedImage(post.mediaUrl)}
-                    onError={(e) => handleMediaError(e, post)}
-                    style={{ maxWidth: '100%', maxHeight: '50vh', objectFit: 'contain', cursor: 'zoom-in' }}
-                  />
-                )}
+            {/* Content — মাঝে */}
+            <div style={{ flex: 1, padding: '0 15px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+              {post.text && <p style={{ margin: '0 0 12px 0', fontSize: '14px', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{post.text}</p>}
+              
+              {post.mediaUrl && (
+                <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px' }}>
+                  {post.mediaResourceType === 'video' || post.mediaUrl.includes('/video/') || post.mediaUrl.endsWith('.mp4') ? (
+                    <video
+                      ref={(el) => {
+                        if (el) {
+                          videoElementsRef.current[post.id] = el;
+                          el.muted = globalMutedRef.current;
+                          el.dataset.postId = post.id;
+                        } else {
+                          delete videoElementsRef.current[post.id];
+                        }
+                      }}
+                      src={post.mediaUrl}
+                      controls
+                      playsInline
+                      onPlay={(e) => {
+                        if (internalActionRef.current) return;
+                        const postId = e.target.dataset.postId;
+                        if (postId && activeVideoIdRef.current !== postId) {
+                          playVideo(postId);
+                        }
+                      }}
+                      onPause={(e) => {
+                        if (internalActionRef.current) return;
+                        const postId = e.target.dataset.postId;
+                        if (postId && activeVideoIdRef.current === postId) {
+                          activeVideoIdRef.current = null;
+                        }
+                      }}
+                      onVolumeChange={(e) => {
+                        globalMutedRef.current = e.target.muted;
+                        applyMuteToAll(globalMutedRef.current);
+                      }}
+                      onError={(e) => handleMediaError(e, post)}
+                      style={{ maxWidth: '100%', maxHeight: '40vh', width: '100%', objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <img
+                      src={post.mediaUrl}
+                      alt="Post Content"
+                      onClick={() => setExpandedImage(post.mediaUrl)}
+                      onError={(e) => handleMediaError(e, post)}
+                      style={{ maxWidth: '100%', maxHeight: '40vh', objectFit: 'contain', cursor: 'zoom-in' }}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer — নিচে */}
+            <div style={{ padding: '0 15px 15px 15px' }}>
+              <div style={{ display: 'flex', gap: '20px', fontSize: '12px', opacity: 0.8, borderBottom: '1px solid var(--border, #eee)', paddingBottom: '8px', marginBottom: '8px', position: 'relative' }}>
+                <span onClick={(e) => toggleReactionPopup(e, post.id, "Like")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
+                  👍 {(post.likes || []).length}
+                  {activeReactionPopup?.postId === post.id && activeReactionPopup?.type === "Like" && (
+                    <div className="inline-reaction-popup" onClick={(e) => e.stopPropagation()}>
+                      <strong style={{ borderBottom: '1px solid #ddd', display: 'block', paddingBottom: '4px', color: '#0056b3' }}>👍 Likes:</strong>
+                      <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
+                        {(post.likes || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.likes.map(uid => {
+                          const userPhoto = usersCache[uid]?.photo || "";
+                          const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
+                          return (
+                            <div key={uid} className="popup-user-row">
+                              <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
+                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }}>{usersCache[uid]?.name || "Approved Student"}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </span>
+
+                <span onClick={(e) => toggleReactionPopup(e, post.id, "Love")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
+                  ❤️ {(post.loves || []).length}
+                  {activeReactionPopup?.postId === post.id && activeReactionPopup?.type === "Love" && (
+                    <div className="inline-reaction-popup" onClick={(e) => e.stopPropagation()}>
+                      <strong style={{ borderBottom: '1px solid #ddd', display: 'block', paddingBottom: '4px', color: '#ff3366' }}>❤️ Loves:</strong>
+                      <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
+                        {(post.loves || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.loves.map(uid => {
+                          const userPhoto = usersCache[uid]?.photo || "";
+                          const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
+                          return (
+                            <div key={uid} className="popup-user-row">
+                              <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
+                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }}>{usersCache[uid]?.name || "Approved Student"}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </span>
+
+                <span onClick={(e) => toggleReactionPopup(e, post.id, "Wow")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
+                  😍 {(post.wows || []).length}
+                  {activeReactionPopup?.postId === post.id && activeReactionPopup?.type === "Wow" && (
+                    <div className="inline-reaction-popup" onClick={(e) => e.stopPropagation()}>
+                      <strong style={{ borderBottom: '1px solid #ddd', display: 'block', paddingBottom: '4px', color: '#ffcc00' }}>😍 Wows:</strong>
+                      <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
+                        {(post.wows || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.wows.map(uid => {
+                          const userPhoto = usersCache[uid]?.photo || "";
+                          const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
+                          return (
+                            <div key={uid} className="popup-user-row">
+                              <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
+                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }}>{usersCache[uid]?.name || "Approved Student"}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </span>
+
+                <span onClick={() => toggleCommentVisibility(post.id)} style={{ marginLeft: 'auto', cursor: 'pointer', userSelect: 'none', fontWeight: 'bold', color: '#0056b3' }}>
+                  {(post.comments || []).length} comments 💬
+                </span>
               </div>
-            )}
 
-            <div style={{ display: 'flex', gap: '20px', fontSize: '12px', opacity: 0.8, borderBottom: '1px solid var(--border, #eee)', paddingBottom: '8px', marginBottom: '8px', position: 'relative' }}>
-              <span onClick={(e) => toggleReactionPopup(e, post.id, "Like")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
-                👍 {(post.likes || []).length}
-                {activeReactionPopup?.postId === post.id && activeReactionPopup?.type === "Like" && (
-                  <div className="inline-reaction-popup" onClick={(e) => e.stopPropagation()}>
-                    <strong style={{ borderBottom: '1px solid #ddd', display: 'block', paddingBottom: '4px', color: '#0056b3' }}>👍 Likes:</strong>
-                    <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
-                      {(post.likes || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.likes.map(uid => {
-                        const userPhoto = usersCache[uid]?.photo || "";
-                        const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
-                        return (
-                          <div key={uid} className="popup-user-row">
-                            <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
-                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }}>{usersCache[uid]?.name || "Approved Student"}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border, #eee)', paddingBottom: '5px' }}>
+                <button onClick={() => handleLike(post.id, post.likes)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.likes || []).includes(auth.currentUser?.uid) ? '#0088ff' : 'inherit', opacity: (post.likes || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>👍 Like</button>
+                <button onClick={() => handleLove(post.id, post.loves)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.loves || []).includes(auth.currentUser?.uid) ? '#ff3366' : 'inherit', opacity: (post.loves || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>❤️ Love</button>
+                <button onClick={() => handleWow(post.id, post.wows)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.wows || []).includes(auth.currentUser?.uid) ? '#ffcc00' : 'inherit', opacity: (post.wows || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>😍 Wow</button>
+                <button onClick={() => handleShare(post.id)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: 'inherit', opacity: 0.7, fontSize: '13px' }}>🔗 Copy Link</button>
+              </div>
 
-              <span onClick={(e) => toggleReactionPopup(e, post.id, "Love")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
-                ❤️ {(post.loves || []).length}
-                {activeReactionPopup?.postId === post.id && activeReactionPopup?.type === "Love" && (
-                  <div className="inline-reaction-popup" onClick={(e) => e.stopPropagation()}>
-                    <strong style={{ borderBottom: '1px solid #ddd', display: 'block', paddingBottom: '4px', color: '#ff3366' }}>❤️ Loves:</strong>
-                    <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
-                      {(post.loves || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.loves.map(uid => {
-                        const userPhoto = usersCache[uid]?.photo || "";
-                        const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
-                        return (
-                          <div key={uid} className="popup-user-row">
-                            <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
-                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }}>{usersCache[uid]?.name || "Approved Student"}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </span>
-
-              <span onClick={(e) => toggleReactionPopup(e, post.id, "Wow")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
-                😍 {(post.wows || []).length}
-                {activeReactionPopup?.postId === post.id && activeReactionPopup?.type === "Wow" && (
-                  <div className="inline-reaction-popup" onClick={(e) => e.stopPropagation()}>
-                    <strong style={{ borderBottom: '1px solid #ddd', display: 'block', paddingBottom: '4px', color: '#ffcc00' }}>😍 Wows:</strong>
-                    <div style={{ marginTop: '5px', maxHeight: '120px', overflowY: 'auto' }}>
-                      {(post.wows || []).length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No reactions yet</div> : post.wows.map(uid => {
-                        const userPhoto = usersCache[uid]?.photo || "";
-                        const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(usersCache[uid]?.name || 'Student')}`;
-                        return (
-                          <div key={uid} className="popup-user-row">
-                            <img src={userPhoto.trim() !== "" ? userPhoto : defaultAvatar} alt="" className="popup-avatar" onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }} onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatar; }} />
-                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => { if (uid) window.location.href = `/profile/${uid}`; }}>{usersCache[uid]?.name || "Approved Student"}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </span>
-
-              <span onClick={() => toggleCommentVisibility(post.id)} style={{ marginLeft: 'auto', cursor: 'pointer', userSelect: 'none', fontWeight: 'bold', color: '#0056b3' }}>
-                {(post.comments || []).length} comments 💬
-              </span>
+              <form onSubmit={(e) => handleComment(e, post.id)} style={commentFormStyle}>
+                <input type="text" placeholder="Write a comment..." value={commentInput[post.id] || ''} onChange={(e) => setCommentInput({ ...commentInput, [post.id]: e.target.value })} style={commentInputStyle} />
+                <button type="submit" style={commentIconBtnStyle}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                </button>
+              </form>
             </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border, #eee)', paddingBottom: '5px' }}>
-              <button onClick={() => handleLike(post.id, post.likes)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.likes || []).includes(auth.currentUser?.uid) ? '#0088ff' : 'inherit', opacity: (post.likes || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>👍 Like</button>
-              <button onClick={() => handleLove(post.id, post.loves)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.loves || []).includes(auth.currentUser?.uid) ? '#ff3366' : 'inherit', opacity: (post.loves || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>❤️ Love</button>
-              <button onClick={() => handleWow(post.id, post.wows)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: (post.wows || []).includes(auth.currentUser?.uid) ? '#ffcc00' : 'inherit', opacity: (post.wows || []).includes(auth.currentUser?.uid) ? 1 : 0.7, fontSize: '13px' }}>😍 Wow</button>
-              <button onClick={() => handleShare(post.id)} style={{ flex: 1, background: 'none', border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold', color: 'inherit', opacity: 0.7, fontSize: '13px' }}>🔗 Copy Link</button>
-            </div>
-
-            <form onSubmit={(e) => handleComment(e, post.id)} style={commentFormStyle}>
-              <input type="text" placeholder="Write a comment..." value={commentInput[post.id] || ''} onChange={(e) => setCommentInput({ ...commentInput, [post.id]: e.target.value })} style={commentInputStyle} />
-              <button type="submit" style={commentIconBtnStyle}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-              </button>
-            </form>
 
             {visibleComments[post.id] && (
-              <div style={{ marginTop: '12px', transition: 'all 0.3s ease' }}>
+              <div style={{ marginTop: '12px', padding: '0 15px 15px 15px', transition: 'all 0.3s ease' }}>
                 {(post.comments || []).map((comment, index) => {
                   const commentUid = comment.commentUserId || "";
                   const fallbackKey = comment.userNameRaw || comment.userName || "Student";
@@ -966,7 +977,7 @@ export default function Home({ isAdmin }) {
       })}
 
       {posts.length === 0 && (
-        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', minHeight: '75vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', minHeight: '50vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           No posts available on the feed.
         </div>
       )}
