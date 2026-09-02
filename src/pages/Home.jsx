@@ -118,6 +118,7 @@ export default function Home({ isAdmin }) {
 
   const [highlightedPostId, setHighlightedPostId] = useState(null);
   const hasScrolledRef = useRef(false);
+  const containerRef = useRef(null);
 
   const resetFileInput = () => {
     setSelectedFile(null);
@@ -172,6 +173,79 @@ export default function Home({ isAdmin }) {
     if (activeVideoIdRef.current === postId) {
       activeVideoIdRef.current = null;
     }
+  };
+
+  // 🔥 TikTok-style scroll snap
+  const handleScroll = () => {
+    if (!containerRef.current) return;
+    const container = containerRef.current;
+    const cards = container.querySelectorAll('.dynamic-post-card');
+    const containerCenter = container.scrollTop + container.clientHeight / 2;
+    
+    let closestCard = null;
+    let closestDistance = Infinity;
+    
+    cards.forEach(card => {
+      const cardCenter = card.offsetTop + card.offsetHeight / 2;
+      const distance = Math.abs(cardCenter - containerCenter);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestCard = card;
+      }
+    });
+    
+    if (closestCard) {
+      // Video play/pause
+      const video = closestCard.querySelector('video');
+      if (video) {
+        const postId = video.dataset.postId;
+        if (postId) {
+          playVideo(postId);
+        }
+      }
+      
+      // Pause other videos
+      cards.forEach(card => {
+        if (card !== closestCard) {
+          const otherVideo = card.querySelector('video');
+          if (otherVideo) {
+            const otherPostId = otherVideo.dataset.postId;
+            if (otherPostId && activeVideoIdRef.current === otherPostId) {
+              pauseVideo(otherPostId);
+            }
+          }
+        }
+      });
+    }
+  };
+
+  // Debounce scroll
+  let scrollTimeout;
+  const handleScrollEnd = () => {
+    clearTimeout(scrollTimeout);
+    scrollTimeout = setTimeout(() => {
+      if (!containerRef.current) return;
+      const container = containerRef.current;
+      const cards = container.querySelectorAll('.dynamic-post-card');
+      const containerCenter = container.scrollTop + container.clientHeight / 2;
+      
+      let closestCard = null;
+      let closestDistance = Infinity;
+      
+      cards.forEach(card => {
+        const cardCenter = card.offsetTop + card.offsetHeight / 2;
+        const distance = Math.abs(cardCenter - containerCenter);
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          closestCard = card;
+        }
+      });
+      
+      if (closestCard) {
+        const targetScroll = closestCard.offsetTop;
+        container.scrollTo({ top: targetScroll, behavior: 'smooth' });
+      }
+    }, 150);
   };
 
   useEffect(() => {
@@ -643,16 +717,22 @@ export default function Home({ isAdmin }) {
   };
 
   return (
-    <div style={{ 
-      maxWidth: '500px', 
-      margin: 'auto', 
-      fontFamily: 'Arial', 
-      padding: '0', 
-      height: '100vh',
-      overflowY: 'scroll',
-      WebkitOverflowScrolling: 'touch',
-      scrollbarWidth: 'none'
-    }}>
+    <div 
+      ref={containerRef}
+      onScroll={handleScroll}
+      onTouchEnd={handleScrollEnd}
+      style={{ 
+        maxWidth: '500px', 
+        margin: 'auto', 
+        fontFamily: 'Arial', 
+        padding: '0', 
+        height: '100vh',
+        overflowY: 'scroll',
+        WebkitOverflowScrolling: 'touch',
+        scrollbarWidth: 'none',
+        scrollSnapType: 'y mandatory'
+      }}
+    >
       
       <style>{`
         .dynamic-post-card { 
@@ -662,10 +742,12 @@ export default function Home({ isAdmin }) {
           padding: 0; 
           border-radius: 0; 
           margin-bottom: 0; 
-          height: 75vh;
+          height: 70vh;
           overflow: hidden;
           display: flex;
           flex-direction: column;
+          scroll-snap-align: start;
+          scroll-snap-stop: always;
         }
         :root[data-theme='dark'] .dynamic-post-card { background-color: #111111; border: 1px solid #222; color: #ffffff; }
         .dynamic-post-card p { color: inherit; }
@@ -816,7 +898,7 @@ export default function Home({ isAdmin }) {
                         applyMuteToAll(globalMutedRef.current);
                       }}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ maxWidth: '100%', maxHeight: '40vh', width: '100%', objectFit: 'contain' }}
+                      style={{ maxWidth: '100%', maxHeight: '35vh', width: '100%', objectFit: 'contain' }}
                     />
                   ) : (
                     <img
@@ -824,7 +906,7 @@ export default function Home({ isAdmin }) {
                       alt="Post Content"
                       onClick={() => setExpandedImage(post.mediaUrl)}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ maxWidth: '100%', maxHeight: '40vh', objectFit: 'contain', cursor: 'zoom-in' }}
+                      style={{ maxWidth: '100%', maxHeight: '35vh', objectFit: 'contain', cursor: 'zoom-in' }}
                     />
                   )}
                 </div>
@@ -964,7 +1046,7 @@ export default function Home({ isAdmin }) {
       })}
 
       {posts.length === 0 && (
-        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', height: '75vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', height: '70vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           No posts available on the feed.
         </div>
       )}
