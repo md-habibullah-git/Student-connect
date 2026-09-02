@@ -674,7 +674,8 @@ export default function Home({ isAdmin }) {
           padding: 0; 
           border-radius: 0; 
           margin-bottom: 0; 
-          min-height: 50vh;
+          height: 50vh;
+          overflow: hidden;
           display: flex;
           flex-direction: column;
         }
@@ -776,7 +777,7 @@ export default function Home({ isAdmin }) {
           <div key={post.id} id={`post-${post.id}`} className={`dynamic-post-card${highlightedPostId === post.id ? ' shared-highlight' : ''}`}>
             
             {/* Header — উপরে */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '15px 15px 10px 15px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '15px 15px 10px 15px', flexShrink: 0 }}>
               <img src={usersCache[post.userId]?.photo || postAvatarFallback} alt="" style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', cursor: 'pointer' }} onClick={() => { if (post.userId) window.location.href = `/profile/${post.userId}`; }} />
               <div>
                 <strong style={{ display: 'block', fontSize: '14px', cursor: 'pointer' }} onClick={() => { if (post.userId) window.location.href = `/profile/${post.userId}`; }}>{post.userName}</strong>
@@ -789,8 +790,8 @@ export default function Home({ isAdmin }) {
               )}
             </div>
 
-            {/* Content — মাঝে centered */}
-            <div style={{ flex: 1, padding: '0 15px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            {/* Content — মাঝে scrollable */}
+            <div style={{ flex: 1, padding: '0 15px', overflowY: 'auto', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
               {post.text && <p style={{ margin: '0 0 12px 0', fontSize: '14px', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{post.text}</p>}
               
               {post.mediaUrl && (
@@ -828,7 +829,7 @@ export default function Home({ isAdmin }) {
                         applyMuteToAll(globalMutedRef.current);
                       }}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ maxWidth: '100%', maxHeight: '30vh', width: '100%', objectFit: 'contain' }}
+                      style={{ maxWidth: '100%', maxHeight: '25vh', width: '100%', objectFit: 'contain' }}
                     />
                   ) : (
                     <img
@@ -836,7 +837,7 @@ export default function Home({ isAdmin }) {
                       alt="Post Content"
                       onClick={() => setExpandedImage(post.mediaUrl)}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ maxWidth: '100%', maxHeight: '30vh', objectFit: 'contain', cursor: 'zoom-in' }}
+                      style={{ maxWidth: '100%', maxHeight: '25vh', objectFit: 'contain', cursor: 'zoom-in' }}
                     />
                   )}
                 </div>
@@ -844,7 +845,7 @@ export default function Home({ isAdmin }) {
             </div>
 
             {/* Footer — নিচে */}
-            <div style={{ padding: '0 15px 15px 15px' }}>
+            <div style={{ padding: '0 15px 15px 15px', flexShrink: 0 }}>
               <div style={{ display: 'flex', gap: '20px', fontSize: '12px', opacity: 0.8, borderBottom: '1px solid var(--border, #eee)', paddingBottom: '8px', marginBottom: '8px', position: 'relative' }}>
                 <span onClick={(e) => toggleReactionPopup(e, post.id, "Like")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
                   👍 {(post.likes || []).length}
@@ -976,7 +977,7 @@ export default function Home({ isAdmin }) {
       })}
 
       {posts.length === 0 && (
-        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', minHeight: '50vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', height: '50vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           No posts available on the feed.
         </div>
       )}
