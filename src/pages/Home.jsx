@@ -254,7 +254,7 @@ export default function Home({ isAdmin }) {
           }
         }
       });
-    }, { threshold: [0, 0.6, 1] });
+    }, { threshold: [0.6] });
 
     Object.values(videoElementsRef.current).forEach(v => {
       if (v) observer.observe(v);
