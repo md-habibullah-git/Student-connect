@@ -677,7 +677,6 @@ export default function Home({ isAdmin }) {
           min-height: 50vh;
           display: flex;
           flex-direction: column;
-          justify-content: center;
         }
         :root[data-theme='dark'] .dynamic-post-card { background-color: #111111; border: 1px solid #222; color: #ffffff; }
         .dynamic-post-card p { color: inherit; }
@@ -790,7 +789,7 @@ export default function Home({ isAdmin }) {
               )}
             </div>
 
-            {/* Content — মাঝে */}
+            {/* Content — মাঝে centered */}
             <div style={{ flex: 1, padding: '0 15px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
               {post.text && <p style={{ margin: '0 0 12px 0', fontSize: '14px', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{post.text}</p>}
               
@@ -829,7 +828,7 @@ export default function Home({ isAdmin }) {
                         applyMuteToAll(globalMutedRef.current);
                       }}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ maxWidth: '100%', maxHeight: '40vh', width: '100%', objectFit: 'contain' }}
+                      style={{ maxWidth: '100%', maxHeight: '30vh', width: '100%', objectFit: 'contain' }}
                     />
                   ) : (
                     <img
@@ -837,7 +836,7 @@ export default function Home({ isAdmin }) {
                       alt="Post Content"
                       onClick={() => setExpandedImage(post.mediaUrl)}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ maxWidth: '100%', maxHeight: '40vh', objectFit: 'contain', cursor: 'zoom-in' }}
+                      style={{ maxWidth: '100%', maxHeight: '30vh', objectFit: 'contain', cursor: 'zoom-in' }}
                     />
                   )}
                 </div>
