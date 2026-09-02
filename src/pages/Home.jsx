@@ -655,7 +655,17 @@ export default function Home({ isAdmin }) {
   };
 
   return (
-    <div style={{ maxWidth: '500px', margin: 'auto', fontFamily: 'Arial', padding: '0', minHeight: '100vh' }}>
+    <div style={{ 
+      maxWidth: '500px', 
+      margin: 'auto', 
+      fontFamily: 'Arial', 
+      padding: '0', 
+      height: '100vh',
+      overflowY: 'scroll',
+      scrollSnapType: 'y mandatory',
+      WebkitOverflowScrolling: 'touch',
+      scrollbarWidth: 'none'
+    }}>
       
       <style>{`
         .dynamic-post-card { 
@@ -666,9 +676,8 @@ export default function Home({ isAdmin }) {
           border-radius: 0; 
           margin-bottom: 0; 
           min-height: 100vh; 
-          display: flex; 
-          flex-direction: column; 
-          justify-content: center; 
+          scroll-snap-align: start;
+          scroll-snap-stop: always;
         }
         :root[data-theme='dark'] .dynamic-post-card { background-color: #111111; border: 1px solid #222; color: #ffffff; }
         .dynamic-post-card p { color: inherit; }
@@ -816,7 +825,7 @@ export default function Home({ isAdmin }) {
                       applyMuteToAll(globalMutedRef.current);
                     }}
                     onError={(e) => handleMediaError(e, post)}
-                    style={{ maxWidth: '100%', maxHeight: '70vh', width: '100%', objectFit: 'contain' }}
+                    style={{ maxWidth: '100%', maxHeight: '60vh', width: '100%', objectFit: 'contain' }}
                   />
                 ) : (
                   <img
@@ -824,7 +833,7 @@ export default function Home({ isAdmin }) {
                     alt="Post Content"
                     onClick={() => setExpandedImage(post.mediaUrl)}
                     onError={(e) => handleMediaError(e, post)}
-                    style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', cursor: 'zoom-in' }}
+                    style={{ maxWidth: '100%', maxHeight: '60vh', objectFit: 'contain', cursor: 'zoom-in' }}
                   />
                 )}
               </div>
