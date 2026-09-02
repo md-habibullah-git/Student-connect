@@ -675,7 +675,7 @@ export default function Home({ isAdmin }) {
           padding: 15px; 
           border-radius: 0; 
           margin-bottom: 0; 
-          min-height: 100vh; 
+          min-height: 75vh;
           scroll-snap-align: start;
           scroll-snap-stop: always;
         }
@@ -825,7 +825,7 @@ export default function Home({ isAdmin }) {
                       applyMuteToAll(globalMutedRef.current);
                     }}
                     onError={(e) => handleMediaError(e, post)}
-                    style={{ maxWidth: '100%', maxHeight: '60vh', width: '100%', objectFit: 'contain' }}
+                    style={{ maxWidth: '100%', maxHeight: '50vh', width: '100%', objectFit: 'contain' }}
                   />
                 ) : (
                   <img
@@ -833,7 +833,7 @@ export default function Home({ isAdmin }) {
                     alt="Post Content"
                     onClick={() => setExpandedImage(post.mediaUrl)}
                     onError={(e) => handleMediaError(e, post)}
-                    style={{ maxWidth: '100%', maxHeight: '60vh', objectFit: 'contain', cursor: 'zoom-in' }}
+                    style={{ maxWidth: '100%', maxHeight: '50vh', objectFit: 'contain', cursor: 'zoom-in' }}
                   />
                 )}
               </div>
@@ -969,7 +969,7 @@ export default function Home({ isAdmin }) {
       })}
 
       {posts.length === 0 && (
-        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', minHeight: '75vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           No posts available on the feed.
         </div>
       )}
