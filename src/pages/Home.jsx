@@ -655,10 +655,21 @@ export default function Home({ isAdmin }) {
   };
 
   return (
-    <div style={{ maxWidth: '500px', margin: 'auto', fontFamily: 'Arial', padding: '10px', minHeight: '80vh' }}>
+    <div style={{ maxWidth: '500px', margin: 'auto', fontFamily: 'Arial', padding: '0', minHeight: '100vh' }}>
       
       <style>{`
-        .dynamic-post-card { background-color: #ffffff; border: 1px solid #eee; color: #333333; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+        .dynamic-post-card { 
+          background-color: #ffffff; 
+          border: 1px solid #eee; 
+          color: #333333; 
+          padding: 15px; 
+          border-radius: 0; 
+          margin-bottom: 0; 
+          min-height: 100vh; 
+          display: flex; 
+          flex-direction: column; 
+          justify-content: center; 
+        }
         :root[data-theme='dark'] .dynamic-post-card { background-color: #111111; border: 1px solid #222; color: #ffffff; }
         .dynamic-post-card p { color: inherit; }
         :root[data-theme='dark'] .dynamic-post-card p { color: #f3f4f6; }
@@ -805,7 +816,7 @@ export default function Home({ isAdmin }) {
                       applyMuteToAll(globalMutedRef.current);
                     }}
                     onError={(e) => handleMediaError(e, post)}
-                    style={{ maxWidth: '100%', maxHeight: '400px', width: '100%' }}
+                    style={{ maxWidth: '100%', maxHeight: '70vh', width: '100%', objectFit: 'contain' }}
                   />
                 ) : (
                   <img
@@ -813,7 +824,7 @@ export default function Home({ isAdmin }) {
                     alt="Post Content"
                     onClick={() => setExpandedImage(post.mediaUrl)}
                     onError={(e) => handleMediaError(e, post)}
-                    style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain', cursor: 'zoom-in' }}
+                    style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', cursor: 'zoom-in' }}
                   />
                 )}
               </div>
@@ -949,7 +960,7 @@ export default function Home({ isAdmin }) {
       })}
 
       {posts.length === 0 && (
-        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic' }}>
+        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           No posts available on the feed.
         </div>
       )}
