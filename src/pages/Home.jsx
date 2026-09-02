@@ -106,7 +106,6 @@ export default function Home({ isAdmin }) {
   const lightboxHistoryPushed = useRef(false);
   const fileInputRef = useRef(null);
 
-  // Updated video refs and management
   const videoElementsRef = useRef({});
   const activeVideoIdRef = useRef(null);
   const globalMutedRef = useRef(true);
@@ -125,14 +124,12 @@ export default function Home({ isAdmin }) {
     setFileInputKey(Date.now());
   };
 
-  // Helper: apply mute state to all videos
   const applyMuteToAll = (muted) => {
     Object.values(videoElementsRef.current).forEach(v => {
       if (v) v.muted = muted;
     });
   };
 
-  // Helper: pause all videos except the given id
   const pauseAllExcept = (exceptId) => {
     Object.entries(videoElementsRef.current).forEach(([id, video]) => {
       if (id !== exceptId && video && !video.paused) {
@@ -143,7 +140,6 @@ export default function Home({ isAdmin }) {
     });
   };
 
-  // Play a specific video as the active one
   const playVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (!video) return;
@@ -166,7 +162,6 @@ export default function Home({ isAdmin }) {
     internalActionRef.current = false;
   };
 
-  // Pause a specific video
   const pauseVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (video && !video.paused) {
@@ -179,7 +174,6 @@ export default function Home({ isAdmin }) {
     }
   };
 
-  // Lightbox
   useEffect(() => {
     if (expandedImage) {
       window.history.pushState({ lightboxOpen: true }, '');
@@ -241,7 +235,6 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
-  // IntersectionObserver for video playback
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -270,7 +263,6 @@ export default function Home({ isAdmin }) {
     return () => observer.disconnect();
   }, [posts]);
 
-  // Fullscreen handling
   useEffect(() => {
     const handleFullscreenChange = () => {
       const fsElement = document.fullscreenElement;
@@ -293,7 +285,6 @@ export default function Home({ isAdmin }) {
   }, []);
 
   useEffect(() => {
-    // ৭ দিন পর অটো ডিলিট
     const cleanupOldPosts = async () => {
       try {
         const sevenDaysAgo = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
@@ -365,9 +356,7 @@ export default function Home({ isAdmin }) {
     };
   }, []);
 
-  // 🔥 File Picker দিয়ে gallery + file manager access (Native platform)
   const handleFileChange = async (e) => {
-    // Native platform-এ File Picker ব্যবহার
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
         const result = await FilePicker.pickFiles({
@@ -422,7 +411,6 @@ export default function Home({ isAdmin }) {
       return;
     }
     
-    // Web browser-এ file input
     const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
@@ -674,7 +662,7 @@ export default function Home({ isAdmin }) {
           padding: 0; 
           border-radius: 0; 
           margin-bottom: 0; 
-          height: 50vh;
+          height: 75vh;
           overflow: hidden;
           display: flex;
           flex-direction: column;
@@ -716,7 +704,6 @@ export default function Home({ isAdmin }) {
               <div style={{ marginTop: '12px', width: '95%' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: 'var(--text, #555)', marginBottom: '5px' }}>Upload from Device:</label>
                 
-                {/* 🔥 Native-এ button, Web-এ file input */}
                 {window.Capacitor?.isNativePlatform?.() ? (
                   <button
                     type="button"
@@ -776,7 +763,7 @@ export default function Home({ isAdmin }) {
         return (
           <div key={post.id} id={`post-${post.id}`} className={`dynamic-post-card${highlightedPostId === post.id ? ' shared-highlight' : ''}`}>
             
-            {/* Header — উপরে */}
+            {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '15px 15px 10px 15px', flexShrink: 0 }}>
               <img src={usersCache[post.userId]?.photo || postAvatarFallback} alt="" style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', cursor: 'pointer' }} onClick={() => { if (post.userId) window.location.href = `/profile/${post.userId}`; }} />
               <div>
@@ -790,7 +777,7 @@ export default function Home({ isAdmin }) {
               )}
             </div>
 
-            {/* Content — মাঝে scrollable */}
+            {/* Content — scrollable */}
             <div style={{ flex: 1, padding: '0 15px', overflowY: 'auto', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
               {post.text && <p style={{ margin: '0 0 12px 0', fontSize: '14px', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{post.text}</p>}
               
@@ -829,7 +816,7 @@ export default function Home({ isAdmin }) {
                         applyMuteToAll(globalMutedRef.current);
                       }}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ maxWidth: '100%', maxHeight: '25vh', width: '100%', objectFit: 'contain' }}
+                      style={{ maxWidth: '100%', maxHeight: '40vh', width: '100%', objectFit: 'contain' }}
                     />
                   ) : (
                     <img
@@ -837,14 +824,14 @@ export default function Home({ isAdmin }) {
                       alt="Post Content"
                       onClick={() => setExpandedImage(post.mediaUrl)}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ maxWidth: '100%', maxHeight: '25vh', objectFit: 'contain', cursor: 'zoom-in' }}
+                      style={{ maxWidth: '100%', maxHeight: '40vh', objectFit: 'contain', cursor: 'zoom-in' }}
                     />
                   )}
                 </div>
               )}
             </div>
 
-            {/* Footer — নিচে */}
+            {/* Footer */}
             <div style={{ padding: '0 15px 15px 15px', flexShrink: 0 }}>
               <div style={{ display: 'flex', gap: '20px', fontSize: '12px', opacity: 0.8, borderBottom: '1px solid var(--border, #eee)', paddingBottom: '8px', marginBottom: '8px', position: 'relative' }}>
                 <span onClick={(e) => toggleReactionPopup(e, post.id, "Like")} style={{ cursor: 'pointer', userSelect: 'none', position: 'relative' }}>
@@ -977,7 +964,7 @@ export default function Home({ isAdmin }) {
       })}
 
       {posts.length === 0 && (
-        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', height: '50vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', height: '75vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           No posts available on the feed.
         </div>
       )}
