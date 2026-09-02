@@ -6,14 +6,21 @@ import android.os.Bundle;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
+import android.view.View;
+import android.widget.FrameLayout;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    
+    private View customView;
+    private WebChromeClient.CustomViewCallback customViewCallback;
+    private FrameLayout fullscreenContainer;
+    
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
-        // ১. ওএস লেভেলে সরাসরি ক্যামেরা ও মাইকের পারমিশন পপ-আপ চাওয়া
+        // ১. ওএস লেভেলে সরাসরি ক্যামেরা ও মাইকের পারমিশন পপ-আপ চাওয়া
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             requestPermissions(new String[]{
                 Manifest.permission.CAMERA,
@@ -22,7 +29,7 @@ public class MainActivity extends BridgeActivity {
             }, 101);
         }
 
-        // ২. ক্যাপাসিটর ব্রিজ লোড হওয়ার পর WebView-এর কড়া সিকিউরিটি বাইপাস করা
+        // ২. ক্যাপাসিটর ব্রিজ লোড হওয়ার পর WebView-এর কড়া সিকিউরিটি বাইপাস করা
         this.bridge.getWebView().post(new Runnable() {
             @Override
             public void run() {
@@ -37,6 +44,39 @@ public class MainActivity extends BridgeActivity {
                                 request.grant(request.getResources());
                             }
                         });
+                    }
+                    
+                    // 🔥 Fullscreen support
+                    @Override
+                    public void onShowCustomView(View view, CustomViewCallback callback) {
+                        if (customView != null) {
+                            callback.onCustomViewHidden();
+                            return;
+                        }
+                        customView = view;
+                        customViewCallback = callback;
+                        
+                        fullscreenContainer = new FrameLayout(MainActivity.this);
+                        fullscreenContainer.setBackgroundColor(android.graphics.Color.BLACK);
+                        fullscreenContainer.addView(view);
+                        
+                        ((FrameLayout) getWindow().getDecorView()).addView(fullscreenContainer, 
+                            new FrameLayout.LayoutParams(
+                                FrameLayout.LayoutParams.MATCH_PARENT, 
+                                FrameLayout.LayoutParams.MATCH_PARENT
+                            ));
+                    }
+
+                    @Override
+                    public void onHideCustomView() {
+                        if (customView == null) return;
+                        
+                        ((FrameLayout) getWindow().getDecorView()).removeView(fullscreenContainer);
+                        customView = null;
+                        fullscreenContainer = null;
+                        if (customViewCallback != null) {
+                            customViewCallback.onCustomViewHidden();
+                        }
                     }
                 });
             }
