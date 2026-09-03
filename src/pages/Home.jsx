@@ -497,6 +497,7 @@ export default function Home({ isAdmin }) {
   }, []);
 
   const handleFileChange = async (e) => {
+    // 🔥 Native App-এ File Picker ব্যবহার
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
         const result = await FilePicker.pickFiles({
@@ -551,6 +552,7 @@ export default function Home({ isAdmin }) {
       return;
     }
     
+    // 🔥 Web-এ file input ব্যবহার — native file picker automatically
     const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
@@ -868,7 +870,7 @@ export default function Home({ isAdmin }) {
                     type="file" 
                     accept="image/*,video/*" 
                     onChange={handleFileChange} 
-                    style={{ fontSize: '13px' }}
+                    style={{ fontSize: '13px', cursor: 'pointer' }}
                   />
                 )}
 
