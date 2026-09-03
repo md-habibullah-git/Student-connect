@@ -360,6 +360,7 @@ export default function Home({ isAdmin }) {
     // 📱 Native App (Capacitor)
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
+        // ✅ types বাদ - File Manager + Gallery দুটোই খুলবে
         const result = await FilePicker.pickFiles({
           readData: true,
         });
@@ -416,7 +417,7 @@ export default function Home({ isAdmin }) {
       return;
     }
     
-    // 🌐 Web Version - File Manager খোলার জন্য
+    // 🌐 Web Version - ✅ accept বাদ - File Manager খুলবে
     const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
