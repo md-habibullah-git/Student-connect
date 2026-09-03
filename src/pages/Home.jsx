@@ -105,8 +105,6 @@ export default function Home({ isAdmin }) {
   
   const lightboxHistoryPushed = useRef(false);
   const fileInputRef = useRef(null);
-  const galleryInputRef = useRef(null);
-  const fileManagerInputRef = useRef(null);
 
   const videoElementsRef = useRef({});
   const activeVideoIdRef = useRef(null);
@@ -419,7 +417,7 @@ export default function Home({ isAdmin }) {
       return;
     }
     
-    // 🌐 Web Version
+    // 🌐 Web Version - ✅ accept বাদ - File Manager খুলবে
     const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
@@ -738,26 +736,9 @@ export default function Home({ isAdmin }) {
                     📁 Choose File
                   </button>
                 ) : (
-                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      onClick={() => galleryInputRef.current?.click()}
-                      style={{ 
-                        padding: '10px 15px', 
-                        backgroundColor: '#28a745', 
-                        color: '#fff', 
-                        border: 'none', 
-                        borderRadius: '5px', 
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      📸 Gallery
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => fileManagerInputRef.current?.click()}
+                  <>
+                    <label
+                      htmlFor="file-upload-web"
                       style={{ 
                         padding: '10px 15px', 
                         backgroundColor: '#0056b3', 
@@ -766,29 +747,21 @@ export default function Home({ isAdmin }) {
                         borderRadius: '5px', 
                         cursor: 'pointer',
                         fontSize: '13px',
-                        fontWeight: 'bold'
+                        fontWeight: 'bold',
+                        display: 'inline-block'
                       }}
                     >
-                      📁 File Manager
-                    </button>
-                    
-                    {/* Gallery input - শুধু image/video */}
+                      📁 Choose File
+                    </label>
                     <input 
-                      ref={galleryInputRef}
-                      type="file" 
-                      accept="image/*,video/*"
-                      onChange={handleFileChange} 
-                      style={{ display: 'none' }}
-                    />
-                    
-                    {/* File Manager input - সব ফাইল */}
-                    <input 
-                      ref={fileManagerInputRef}
+                      id="file-upload-web"
+                      key={fileInputKey}
+                      ref={fileInputRef}
                       type="file" 
                       onChange={handleFileChange} 
                       style={{ display: 'none' }}
                     />
-                  </div>
+                  </>
                 )}
 
                 {selectedFile?.kind === 'video' && selectedFile.previewUrl && (
