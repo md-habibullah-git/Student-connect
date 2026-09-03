@@ -102,6 +102,7 @@ export default function Home({ isAdmin }) {
   const [showPostModal, setShowPostModal] = useState(false);
   const [expandedImage, setExpandedImage] = useState(null);
   const [fileInputKey, setFileInputKey] = useState(Date.now());
+  const [showFileManager, setShowFileManager] = useState(false); // New state for File Manager
   
   const lightboxHistoryPushed = useRef(false);
   const fileInputRef = useRef(null);
@@ -710,7 +711,6 @@ export default function Home({ isAdmin }) {
               <div style={{ marginTop: '12px', width: '95%' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: 'var(--text, #555)', marginBottom: '5px' }}>Upload from Device:</label>
                 
-                {/* Native-এ button, Web-এ label + hidden input */}
                 {window.Capacitor?.isNativePlatform?.() ? (
                   <button
                     type="button"
@@ -726,7 +726,7 @@ export default function Home({ isAdmin }) {
                       fontWeight: 'bold'
                     }}
                   >
-                    📁 Choose Photo/Video
+                    📁 Choose File
                   </button>
                 ) : (
                   <>
@@ -744,14 +744,14 @@ export default function Home({ isAdmin }) {
                         display: 'inline-block'
                       }}
                     >
-                      📁 Choose Photo/Video
+                      📁 Choose File
                     </label>
                     <input 
                       id="file-upload-web"
                       key={fileInputKey}
                       ref={fileInputRef}
                       type="file" 
-                      accept="*/*"
+                      accept="image/*,video/*"
                       onChange={handleFileChange} 
                       style={{ display: 'none' }}
                     />
