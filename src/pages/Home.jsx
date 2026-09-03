@@ -356,14 +356,14 @@ export default function Home({ isAdmin }) {
     };
   }, []);
 
-  // ✅ ফিক্সড: ফাইল ম্যানেজার সাপোর্ট সহ ফাইল পিকার
+  // ✅ ফিক্সড: Web এবং Native দুটোর জন্যই ফাইল পিকার
   const handleFileChange = async (e) => {
+    // 📱 Native App (Capacitor)
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
-        // ✅ types প্রপার্টি বাদ দিন - সব ফাইল সাপোর্ট করবে
+        // types বাদ দিন - File Manager + Gallery দুটোই দেখাবে
         const result = await FilePicker.pickFiles({
           readData: true,
-          // types: ['image/*', 'video/*'], // ❌ এটা সরিয়ে দিন
         });
         
         if (result && result.files && result.files.length > 0) {
@@ -373,7 +373,7 @@ export default function Home({ isAdmin }) {
           const fileType = pickedFile.mimeType || 'image/jpeg';
           const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
           
-          // ✅ ফাইল টাইপ ভ্যালিডেশন (শুধু image/video অনুমোদিত)
+          // ফাইল টাইপ ভ্যালিডেশন
           if (!fileType.startsWith('image/') && !fileType.startsWith('video/')) {
             alert("Please select an image or video file.");
             return;
@@ -419,9 +419,16 @@ export default function Home({ isAdmin }) {
       return;
     }
     
-    // Web fallback
+    // 🌐 Web Version
     const file = e.target.files?.[0];
     if (!file) {
+      setSelectedFile(null);
+      return;
+    }
+
+    // Web-এ file.type check করুন
+    if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+      alert("Please select an image or video file.");
       setSelectedFile(null);
       return;
     }
@@ -713,7 +720,7 @@ export default function Home({ isAdmin }) {
               <div style={{ marginTop: '12px', width: '95%' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: 'var(--text, #555)', marginBottom: '5px' }}>Upload from Device:</label>
                 
-                {/* 🔥 Native-এ button, Web-এ label + hidden input */}
+                {/* 🔥 Web এবং Native দুটোর জন্যই */}
                 {window.Capacitor?.isNativePlatform?.() ? (
                   <button
                     type="button"
