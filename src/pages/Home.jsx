@@ -140,17 +140,15 @@ export default function Home({ isAdmin }) {
     });
   };
 
-  // ✅ FIXED: playVideo - সবসময় আগের ভিডিও পজ করে নতুন ভিডিও প্লে করে
+  // ✅ FIXED: playVideo
   const playVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (!video) return;
 
-    // আগের সব ভিডিও পজ করুন
     pauseAllExcept(postId);
     applyMuteToAll(globalMutedRef.current);
     activeVideoIdRef.current = postId;
 
-    // নতুন ভিডিও প্লে করুন
     if (video.paused) {
       internalActionRef.current = true;
       video.play().catch(() => {});
@@ -239,11 +237,9 @@ export default function Home({ isAdmin }) {
         const postId = videoEl.dataset.postId;
         if (!postId) return;
 
-        // ✅ ভিডিও ৫০% বা বেশি দৃশ্যমান হলে সবসময় প্লে হবে
         if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
           playVideo(postId);
         } else {
-          // ❌ ভিডিও ৫০% এর কম দৃশ্যমান হলে পজ হবে (শুধু active ভিডিও)
           if (activeVideoIdRef.current === postId) {
             pauseVideo(postId);
           }
