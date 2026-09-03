@@ -140,26 +140,20 @@ export default function Home({ isAdmin }) {
     });
   };
 
+  // ✅ FIXED: playVideo - সবসময় আগের ভিডিও পজ করে নতুন ভিডিও প্লে করে
   const playVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (!video) return;
-
-    if (activeVideoIdRef.current === postId) {
-      if (video.paused) {
-        internalActionRef.current = true;
-        video.play().catch(() => {});
-        internalActionRef.current = false;
-      }
-      return;
-    }
 
     pauseAllExcept(postId);
     applyMuteToAll(globalMutedRef.current);
     activeVideoIdRef.current = postId;
 
-    internalActionRef.current = true;
-    video.play().catch(() => {});
-    internalActionRef.current = false;
+    if (video.paused) {
+      internalActionRef.current = true;
+      video.play().catch(() => {});
+      internalActionRef.current = false;
+    }
   };
 
   const pauseVideo = (postId) => {
@@ -235,6 +229,7 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
+  // ✅ FIXED: IntersectionObserver - ৫০% threshold, সবসময় playVideo
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -242,19 +237,15 @@ export default function Home({ isAdmin }) {
         const postId = videoEl.dataset.postId;
         if (!postId) return;
 
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-          if (!activeVideoIdRef.current) {
-            playVideo(postId);
-          } else if (activeVideoIdRef.current === postId) {
-            if (videoEl.paused) playVideo(postId);
-          }
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+          playVideo(postId);
         } else {
           if (activeVideoIdRef.current === postId) {
             pauseVideo(postId);
           }
         }
       });
-    }, { threshold: [0.6] });
+    }, { threshold: [0.3, 0.5, 0.7, 0.9, 1.0] });
 
     Object.values(videoElementsRef.current).forEach(v => {
       if (v) observer.observe(v);
