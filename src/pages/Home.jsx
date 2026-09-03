@@ -356,12 +356,14 @@ export default function Home({ isAdmin }) {
     };
   }, []);
 
+  // ✅ ফিক্সড: ফাইল ম্যানেজার সাপোর্ট সহ ফাইল পিকার
   const handleFileChange = async (e) => {
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
+        // ✅ types প্রপার্টি বাদ দিন - সব ফাইল সাপোর্ট করবে
         const result = await FilePicker.pickFiles({
-          types: ['image/*', 'video/*'],
           readData: true,
+          // types: ['image/*', 'video/*'], // ❌ এটা সরিয়ে দিন
         });
         
         if (result && result.files && result.files.length > 0) {
@@ -370,6 +372,12 @@ export default function Home({ isAdmin }) {
           let blob = null;
           const fileType = pickedFile.mimeType || 'image/jpeg';
           const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
+          
+          // ✅ ফাইল টাইপ ভ্যালিডেশন (শুধু image/video অনুমোদিত)
+          if (!fileType.startsWith('image/') && !fileType.startsWith('video/')) {
+            alert("Please select an image or video file.");
+            return;
+          }
           
           if (pickedFile.data) {
             const base64Data = pickedFile.data.replace(/^data:.*;base64,/, '');
@@ -411,6 +419,7 @@ export default function Home({ isAdmin }) {
       return;
     }
     
+    // Web fallback
     const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
