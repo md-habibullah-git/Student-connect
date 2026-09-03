@@ -124,6 +124,16 @@ export default function Home({ isAdmin }) {
     setFileInputKey(Date.now());
   };
 
+  // ✅ সব ভিডিও mute/unmute করার ফাংশন
+  const applyMuteToAll = (muted) => {
+    Object.values(videoElementsRef.current).forEach(v => {
+      if (v) {
+        v.muted = muted;
+      }
+    });
+  };
+
+  // ✅ পজ করা ভিডিও mute হবে
   const pauseAllExcept = (exceptId) => {
     Object.entries(videoElementsRef.current).forEach(([id, video]) => {
       if (id !== exceptId && video) {
@@ -135,17 +145,14 @@ export default function Home({ isAdmin }) {
     });
   };
 
-  // ✅ FIXED: playVideo - আগের ভিডিও mute+পজ, নতুন ভিডিও প্লে
+  // ✅ playVideo
   const playVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (!video) return;
 
-    // আগের সব ভিডিও পজ এবং mute করুন
     pauseAllExcept(postId);
-    
     activeVideoIdRef.current = postId;
 
-    // নতুন ভিডিও প্লে করুন
     if (video.paused) {
       internalActionRef.current = true;
       video.play().catch(() => {});
@@ -153,11 +160,13 @@ export default function Home({ isAdmin }) {
     }
   };
 
+  // ✅ pauseVideo - পজ করা ভিডিও mute হবে
   const pauseVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (video && !video.paused) {
       internalActionRef.current = true;
       video.pause();
+      video.muted = true; // ✅ পজ করা ভিডিও mute
       internalActionRef.current = false;
     }
     if (activeVideoIdRef.current === postId) {
@@ -226,7 +235,7 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
-  // ✅ FIXED: IntersectionObserver - ৫০% threshold
+  // ✅ IntersectionObserver - ৫০% threshold
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -235,7 +244,10 @@ export default function Home({ isAdmin }) {
         if (!postId) return;
 
         if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
-          playVideo(postId);
+          // ✅ শুধু তখনই play করবে যদি active video null হয় বা ভিন্ন হয়
+          if (activeVideoIdRef.current !== postId) {
+            playVideo(postId);
+          }
         } else {
           if (activeVideoIdRef.current === postId) {
             pauseVideo(postId);
@@ -817,6 +829,7 @@ export default function Home({ isAdmin }) {
                       }}
                       onVolumeChange={(e) => {
                         globalMutedRef.current = e.target.muted;
+                        applyMuteToAll(globalMutedRef.current);
                       }}
                       onError={(e) => handleMediaError(e, post)}
                       style={{ width: '100%', maxHeight: '35vh', objectFit: 'contain', display: 'block' }}
