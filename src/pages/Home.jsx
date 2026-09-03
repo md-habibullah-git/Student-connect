@@ -105,6 +105,8 @@ export default function Home({ isAdmin }) {
   
   const lightboxHistoryPushed = useRef(false);
   const fileInputRef = useRef(null);
+  const galleryInputRef = useRef(null);
+  const fileManagerInputRef = useRef(null);
 
   const videoElementsRef = useRef({});
   const activeVideoIdRef = useRef(null);
@@ -417,7 +419,7 @@ export default function Home({ isAdmin }) {
       return;
     }
     
-    // 🌐 Web Version - ✅ accept বাদ - File Manager খুলবে
+    // 🌐 Web Version
     const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
@@ -736,9 +738,35 @@ export default function Home({ isAdmin }) {
                     📁 Choose File
                   </button>
                 ) : (
-                  <>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    {/* Gallery - label ব্যবহার করে */}
                     <label
-                      htmlFor="file-upload-web"
+                      htmlFor="gallery-input"
+                      style={{ 
+                        padding: '10px 15px', 
+                        backgroundColor: '#28a745', 
+                        color: '#fff', 
+                        border: 'none', 
+                        borderRadius: '5px', 
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        fontWeight: 'bold',
+                        display: 'inline-block'
+                      }}
+                    >
+                      📸 Gallery
+                    </label>
+                    <input 
+                      id="gallery-input"
+                      type="file" 
+                      accept="image/*,video/*"
+                      onChange={handleFileChange} 
+                      style={{ display: 'none' }}
+                    />
+                    
+                    {/* File Manager - label ব্যবহার করে */}
+                    <label
+                      htmlFor="filemanager-input"
                       style={{ 
                         padding: '10px 15px', 
                         backgroundColor: '#0056b3', 
@@ -751,17 +779,15 @@ export default function Home({ isAdmin }) {
                         display: 'inline-block'
                       }}
                     >
-                      📁 Choose File
+                      📁 File Manager
                     </label>
                     <input 
-                      id="file-upload-web"
-                      key={fileInputKey}
-                      ref={fileInputRef}
+                      id="filemanager-input"
                       type="file" 
                       onChange={handleFileChange} 
                       style={{ display: 'none' }}
                     />
-                  </>
+                  </div>
                 )}
 
                 {selectedFile?.kind === 'video' && selectedFile.previewUrl && (
