@@ -140,22 +140,26 @@ export default function Home({ isAdmin }) {
     });
   };
 
-  // ✅ FIXED: playVideo - কোনো condition ছাড়া সবসময় প্লে করবে
   const playVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (!video) return;
 
-    // আগের সব ভিডিও পজ করুন
+    if (activeVideoIdRef.current === postId) {
+      if (video.paused) {
+        internalActionRef.current = true;
+        video.play().catch(() => {});
+        internalActionRef.current = false;
+      }
+      return;
+    }
+
     pauseAllExcept(postId);
     applyMuteToAll(globalMutedRef.current);
     activeVideoIdRef.current = postId;
 
-    // নতুন ভিডিও প্লে করুন — সবসময়
-    if (video.paused) {
-      internalActionRef.current = true;
-      video.play().catch(() => {});
-      internalActionRef.current = false;
-    }
+    internalActionRef.current = true;
+    video.play().catch(() => {});
+    internalActionRef.current = false;
   };
 
   const pauseVideo = (postId) => {
@@ -231,7 +235,6 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
-  // ✅ FIXED: IntersectionObserver - সবসময় playVideo কল করে
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -239,19 +242,19 @@ export default function Home({ isAdmin }) {
         const postId = videoEl.dataset.postId;
         if (!postId) return;
 
-        // ✅ ভিডিও ৫০% এর বেশি দৃশ্যমান হলে সবসময় প্লে হবে
-        if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
-          playVideo(postId);
-        }
-        // ❌ ভিডিও ২০% এর কম দৃশ্যমান হলে পজ হবে
-        else if (entry.intersectionRatio < 0.2) {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+          if (!activeVideoIdRef.current) {
+            playVideo(postId);
+          } else if (activeVideoIdRef.current === postId) {
+            if (videoEl.paused) playVideo(postId);
+          }
+        } else {
           if (activeVideoIdRef.current === postId) {
             pauseVideo(postId);
           }
         }
-        // ⚠️ ২০%-৫০% এর মধ্যে → কিছু হবে না
       });
-    }, { threshold: [0.2, 0.3, 0.5, 0.7, 0.9, 1.0] });
+    }, { threshold: [0.6] });
 
     Object.values(videoElementsRef.current).forEach(v => {
       if (v) observer.observe(v);
@@ -812,14 +815,6 @@ export default function Home({ isAdmin }) {
                       src={post.mediaUrl}
                       controls
                       playsInline
-                      onClick={(e) => {
-                        const video = e.currentTarget;
-                        if (video.paused) {
-                          playVideo(post.id);
-                        } else {
-                          pauseVideo(post.id);
-                        }
-                      }}
                       onPlay={(e) => {
                         if (internalActionRef.current) return;
                         const postId = e.target.dataset.postId;
@@ -839,7 +834,7 @@ export default function Home({ isAdmin }) {
                         applyMuteToAll(globalMutedRef.current);
                       }}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ width: '100%', maxHeight: '35vh', objectFit: 'contain', display: 'block', cursor: 'pointer' }}
+                      style={{ width: '100%', maxHeight: '35vh', objectFit: 'contain', display: 'block' }}
                     />
                   ) : (
                     <img
