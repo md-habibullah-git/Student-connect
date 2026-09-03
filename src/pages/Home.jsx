@@ -140,26 +140,22 @@ export default function Home({ isAdmin }) {
     });
   };
 
+  // ✅ FIXED: playVideo - কোনো condition ছাড়া সবসময় প্লে করবে
   const playVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (!video) return;
 
-    if (activeVideoIdRef.current === postId) {
-      if (video.paused) {
-        internalActionRef.current = true;
-        video.play().catch(() => {});
-        internalActionRef.current = false;
-      }
-      return;
-    }
-
+    // আগের সব ভিডিও পজ করুন
     pauseAllExcept(postId);
     applyMuteToAll(globalMutedRef.current);
     activeVideoIdRef.current = postId;
 
-    internalActionRef.current = true;
-    video.play().catch(() => {});
-    internalActionRef.current = false;
+    // নতুন ভিডিও প্লে করুন — সবসময়
+    if (video.paused) {
+      internalActionRef.current = true;
+      video.play().catch(() => {});
+      internalActionRef.current = false;
+    }
   };
 
   const pauseVideo = (postId) => {
@@ -235,6 +231,7 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
+  // ✅ FIXED: IntersectionObserver - সবসময় playVideo কল করে
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -242,13 +239,9 @@ export default function Home({ isAdmin }) {
         const postId = videoEl.dataset.postId;
         if (!postId) return;
 
-        // ✅ ভিডিও ৫০% এর বেশি দৃশ্যমান হলে প্লে হবে
+        // ✅ ভিডিও ৫০% এর বেশি দৃশ্যমান হলে সবসময় প্লে হবে
         if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
-          if (!activeVideoIdRef.current) {
-            playVideo(postId);
-          } else if (activeVideoIdRef.current === postId) {
-            if (videoEl.paused) playVideo(postId);
-          }
+          playVideo(postId);
         }
         // ❌ ভিডিও ২০% এর কম দৃশ্যমান হলে পজ হবে
         else if (entry.intersectionRatio < 0.2) {
@@ -256,7 +249,7 @@ export default function Home({ isAdmin }) {
             pauseVideo(postId);
           }
         }
-        // ⚠️ ২০%-৫০% এর মধ্যে → কিছু হবে না (চলতে থাকবে)
+        // ⚠️ ২০%-৫০% এর মধ্যে → কিছু হবে না
       });
     }, { threshold: [0.2, 0.3, 0.5, 0.7, 0.9, 1.0] });
 
