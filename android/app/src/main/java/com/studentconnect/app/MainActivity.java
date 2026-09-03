@@ -8,6 +8,7 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 import android.view.View;
 import android.widget.FrameLayout;
+import android.content.pm.ActivityInfo;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -65,6 +66,9 @@ public class MainActivity extends BridgeActivity {
                                 FrameLayout.LayoutParams.MATCH_PARENT, 
                                 FrameLayout.LayoutParams.MATCH_PARENT
                             ));
+                        
+                        // 🔥 Fullscreen-এ auto-rotate allow — video landscape/portrait যেকোনোভাবে ফিট হবে
+                        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
                     }
 
                     @Override
@@ -77,6 +81,9 @@ public class MainActivity extends BridgeActivity {
                         if (customViewCallback != null) {
                             customViewCallback.onCustomViewHidden();
                         }
+                        
+                        // 🔥 Fullscreen বন্ধ হলে app portrait-এ ফিরে আসবে
+                        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
                     }
                 });
             }
