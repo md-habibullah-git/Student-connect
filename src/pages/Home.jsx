@@ -124,49 +124,49 @@ export default function Home({ isAdmin }) {
     setFileInputKey(Date.now());
   };
 
-  // ✅ সব ভিডিও mute/unmute করার ফাংশন
   const applyMuteToAll = (muted) => {
     Object.values(videoElementsRef.current).forEach(v => {
-      if (v) {
-        v.muted = muted;
-      }
+      if (v) v.muted = muted;
     });
   };
 
-  // ✅ পজ করা ভিডিও mute হবে
   const pauseAllExcept = (exceptId) => {
     Object.entries(videoElementsRef.current).forEach(([id, video]) => {
-      if (id !== exceptId && video) {
+      if (id !== exceptId && video && !video.paused) {
         internalActionRef.current = true;
         video.pause();
-        video.muted = true; // ✅ পজ করা ভিডিও mute
         internalActionRef.current = false;
       }
     });
   };
 
-  // ✅ playVideo
   const playVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (!video) return;
 
+    if (activeVideoIdRef.current === postId) {
+      if (video.paused) {
+        internalActionRef.current = true;
+        video.play().catch(() => {});
+        internalActionRef.current = false;
+      }
+      return;
+    }
+
     pauseAllExcept(postId);
+    applyMuteToAll(globalMutedRef.current);
     activeVideoIdRef.current = postId;
 
-    if (video.paused) {
-      internalActionRef.current = true;
-      video.play().catch(() => {});
-      internalActionRef.current = false;
-    }
+    internalActionRef.current = true;
+    video.play().catch(() => {});
+    internalActionRef.current = false;
   };
 
-  // ✅ pauseVideo - পজ করা ভিডিও mute হবে
   const pauseVideo = (postId) => {
     const video = videoElementsRef.current[postId];
     if (video && !video.paused) {
       internalActionRef.current = true;
       video.pause();
-      video.muted = true; // ✅ পজ করা ভিডিও mute
       internalActionRef.current = false;
     }
     if (activeVideoIdRef.current === postId) {
@@ -235,7 +235,6 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
-  // ✅ IntersectionObserver - ৫০% threshold
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -243,10 +242,11 @@ export default function Home({ isAdmin }) {
         const postId = videoEl.dataset.postId;
         if (!postId) return;
 
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
-          // ✅ শুধু তখনই play করবে যদি active video null হয় বা ভিন্ন হয়
-          if (activeVideoIdRef.current !== postId) {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+          if (!activeVideoIdRef.current) {
             playVideo(postId);
+          } else if (activeVideoIdRef.current === postId) {
+            if (videoEl.paused) playVideo(postId);
           }
         } else {
           if (activeVideoIdRef.current === postId) {
@@ -254,7 +254,7 @@ export default function Home({ isAdmin }) {
           }
         }
       });
-    }, { threshold: [0.3, 0.5, 0.7, 0.9, 1.0] });
+    }, { threshold: [0.6] });
 
     Object.values(videoElementsRef.current).forEach(v => {
       if (v) observer.observe(v);
@@ -491,6 +491,8 @@ export default function Home({ isAdmin }) {
       resetFileInput();
       setUploadProgress(0);
       setShowPostModal(false);
+      
+      applyMuteToAll(false);
       
       setTimeout(() => {
         window.scrollTo({ top: 0, behavior: 'smooth' });
