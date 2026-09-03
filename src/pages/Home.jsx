@@ -110,6 +110,7 @@ function CustomVideoPlayer({ src, postId, videoElementsRef, globalMutedRef, inte
         style={{ width: '100%', maxHeight: '35vh', objectFit: 'contain', display: 'block', cursor: 'pointer' }}
       />
       
+      {/* Custom Controls */}
       <div style={{
         position: 'absolute',
         bottom: '5px',
@@ -123,6 +124,7 @@ function CustomVideoPlayer({ src, postId, videoElementsRef, globalMutedRef, inte
         borderRadius: '20px',
         zIndex: 10
       }}>
+        {/* Play/Pause */}
         <button
           onClick={togglePlay}
           style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '14px', padding: 0 }}
@@ -130,10 +132,12 @@ function CustomVideoPlayer({ src, postId, videoElementsRef, globalMutedRef, inte
           {isPlaying ? '⏸️' : '▶️'}
         </button>
         
+        {/* Time */}
         <span style={{ color: '#fff', fontSize: '11px' }}>
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
         
+        {/* Mute */}
         <button
           onClick={toggleMute}
           style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '14px', padding: 0 }}
@@ -141,6 +145,7 @@ function CustomVideoPlayer({ src, postId, videoElementsRef, globalMutedRef, inte
           {isMuted ? '🔇' : '🔊'}
         </button>
         
+        {/* Fullscreen */}
         <button
           onClick={enterFullscreen}
           style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '14px', padding: 0 }}
@@ -491,7 +496,6 @@ export default function Home({ isAdmin }) {
     };
   }, []);
 
-  // 🔥 Web-এ file input click করলে file manager open হবে
   const handleFileChange = async (e) => {
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
@@ -547,7 +551,6 @@ export default function Home({ isAdmin }) {
       return;
     }
     
-    // 🔥 Web-এ file input থেকে file read
     const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
@@ -841,7 +844,6 @@ export default function Home({ isAdmin }) {
               <div style={{ marginTop: '12px', width: '95%' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: 'var(--text, #555)', marginBottom: '5px' }}>Upload from Device:</label>
                 
-                {/* 🔥 Native-এ button, Web-এ label + hidden input */}
                 {window.Capacitor?.isNativePlatform?.() ? (
                   <button
                     type="button"
@@ -860,33 +862,14 @@ export default function Home({ isAdmin }) {
                     📁 Choose Photo/Video
                   </button>
                 ) : (
-                  <>
-                    <label
-                      htmlFor="file-upload-web"
-                      style={{ 
-                        padding: '10px 15px', 
-                        backgroundColor: '#0056b3', 
-                        color: '#fff', 
-                        border: 'none', 
-                        borderRadius: '5px', 
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        fontWeight: 'bold',
-                        display: 'inline-block'
-                      }}
-                    >
-                      📁 Choose Photo/Video
-                    </label>
-                    <input 
-                      id="file-upload-web"
-                      key={fileInputKey}
-                      ref={fileInputRef}
-                      type="file" 
-                      accept="image/*,video/*" 
-                      onChange={handleFileChange} 
-                      style={{ display: 'none' }}
-                    />
-                  </>
+                  <input 
+                    key={fileInputKey}
+                    ref={fileInputRef}
+                    type="file" 
+                    accept="image/*,video/*" 
+                    onChange={handleFileChange} 
+                    style={{ fontSize: '13px' }}
+                  />
                 )}
 
                 {selectedFile?.kind === 'video' && selectedFile.previewUrl && (
