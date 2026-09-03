@@ -102,7 +102,6 @@ export default function Home({ isAdmin }) {
   const [showPostModal, setShowPostModal] = useState(false);
   const [expandedImage, setExpandedImage] = useState(null);
   const [fileInputKey, setFileInputKey] = useState(Date.now());
-  const [showFileManager, setShowFileManager] = useState(false); // New state for File Manager
   
   const lightboxHistoryPushed = useRef(false);
   const fileInputRef = useRef(null);
@@ -358,10 +357,10 @@ export default function Home({ isAdmin }) {
   }, []);
 
   const handleFileChange = async (e) => {
-    // 📱 Native App (Capacitor)
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
         const result = await FilePicker.pickFiles({
+          types: ['image/*', 'video/*'],
           readData: true,
         });
         
@@ -371,11 +370,6 @@ export default function Home({ isAdmin }) {
           let blob = null;
           const fileType = pickedFile.mimeType || 'image/jpeg';
           const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
-          
-          if (!fileType.startsWith('image/') && !fileType.startsWith('video/')) {
-            alert("Please select an image or video file.");
-            return;
-          }
           
           if (pickedFile.data) {
             const base64Data = pickedFile.data.replace(/^data:.*;base64,/, '');
@@ -417,7 +411,6 @@ export default function Home({ isAdmin }) {
       return;
     }
     
-    // 🌐 Web Version
     const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
@@ -726,7 +719,7 @@ export default function Home({ isAdmin }) {
                       fontWeight: 'bold'
                     }}
                   >
-                    📁 Choose File
+                    📁 Choose Photo/Video
                   </button>
                 ) : (
                   <>
@@ -751,7 +744,6 @@ export default function Home({ isAdmin }) {
                       key={fileInputKey}
                       ref={fileInputRef}
                       type="file" 
-                      accept="image/*,video/*"
                       onChange={handleFileChange} 
                       style={{ display: 'none' }}
                     />
