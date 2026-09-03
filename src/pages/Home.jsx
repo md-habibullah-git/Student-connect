@@ -235,6 +235,7 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
+  // ✅ FIXED: প্রতিটি ভিডিওর জন্য playVideo কল হবে
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -243,11 +244,7 @@ export default function Home({ isAdmin }) {
         if (!postId) return;
 
         if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-          if (!activeVideoIdRef.current) {
-            playVideo(postId);
-          } else if (activeVideoIdRef.current === postId) {
-            if (videoEl.paused) playVideo(postId);
-          }
+          playVideo(postId);
         } else {
           if (activeVideoIdRef.current === postId) {
             pauseVideo(postId);
