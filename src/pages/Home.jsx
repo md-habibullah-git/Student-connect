@@ -235,7 +235,6 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
-  // ✅ FIXED: IntersectionObserver - ৩০% threshold
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -243,7 +242,7 @@ export default function Home({ isAdmin }) {
         const postId = videoEl.dataset.postId;
         if (!postId) return;
 
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.3) {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
           if (!activeVideoIdRef.current) {
             playVideo(postId);
           } else if (activeVideoIdRef.current === postId) {
@@ -255,7 +254,7 @@ export default function Home({ isAdmin }) {
           }
         }
       });
-    }, { threshold: [0.3] });
+    }, { threshold: [0.6] });
 
     Object.values(videoElementsRef.current).forEach(v => {
       if (v) observer.observe(v);
