@@ -800,7 +800,7 @@ export default function Home({ isAdmin }) {
               {post.text && <p style={{ margin: '0 0 12px 0', fontSize: '14px', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{post.text}</p>}
               
               {post.mediaUrl && (
-                <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px' }}>
+                <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px', transform: 'translateZ(0)' }}>
                   {post.mediaResourceType === 'video' || post.mediaUrl.includes('/video/') || post.mediaUrl.endsWith('.mp4') ? (
                     <video
                       ref={(el) => {
@@ -814,8 +814,6 @@ export default function Home({ isAdmin }) {
                       }}
                       src={post.mediaUrl}
                       controls
-                      controlsList="noplaybackrate"
-                      disablePictureInPicture
                       playsInline
                       onPlay={(e) => {
                         if (internalActionRef.current) return;
