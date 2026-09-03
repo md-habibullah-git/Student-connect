@@ -242,22 +242,19 @@ export default function Home({ isAdmin }) {
         const postId = videoEl.dataset.postId;
         if (!postId) return;
 
-        // ✅ ভিডিও ৫০% এর বেশি দৃশ্যমান হলে প্লে হবে
-        if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
           if (!activeVideoIdRef.current) {
             playVideo(postId);
           } else if (activeVideoIdRef.current === postId) {
             if (videoEl.paused) playVideo(postId);
           }
-        }
-        // ❌ ভিডিও ৫০% এর কম দৃশ্যমান হলে পজ হবে
-        else if (entry.intersectionRatio < 0.5) {
+        } else {
           if (activeVideoIdRef.current === postId) {
             pauseVideo(postId);
           }
         }
       });
-    }, { threshold: [0.3, 0.5, 0.7, 0.9, 1.0] });
+    }, { threshold: [0.6] });
 
     Object.values(videoElementsRef.current).forEach(v => {
       if (v) observer.observe(v);
@@ -818,14 +815,6 @@ export default function Home({ isAdmin }) {
                       src={post.mediaUrl}
                       controls
                       playsInline
-                      onClick={(e) => {
-                        const video = e.currentTarget;
-                        if (video.paused) {
-                          playVideo(post.id);
-                        } else {
-                          pauseVideo(post.id);
-                        }
-                      }}
                       onPlay={(e) => {
                         if (internalActionRef.current) return;
                         const postId = e.target.dataset.postId;
@@ -845,7 +834,7 @@ export default function Home({ isAdmin }) {
                         applyMuteToAll(globalMutedRef.current);
                       }}
                       onError={(e) => handleMediaError(e, post)}
-                      style={{ width: '100%', maxHeight: '35vh', objectFit: 'contain', display: 'block', cursor: 'pointer' }}
+                      style={{ width: '100%', maxHeight: '35vh', objectFit: 'contain', display: 'block' }}
                     />
                   ) : (
                     <img
