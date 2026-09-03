@@ -734,7 +734,7 @@ export default function Home({ isAdmin }) {
 
                 {selectedFile?.kind === 'video' && selectedFile.previewUrl && (
                   <div style={{ marginTop: '10px', textAlign: 'center' }}>
-                    <video src={selectedFile.previewUrl} controls style={{ width: '160px', maxHeight: '120px', borderRadius: '4px', border: '1px solid #ddd' }} />
+                    <video src={selectedFile.previewUrl} controls controlsList="noplaybackrate nodownload" style={{ width: '160px', maxHeight: '120px', borderRadius: '4px', border: '1px solid #ddd' }} />
                     <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ {selectedFile.fileName} ready to post</small>
                   </div>
                 )}
@@ -796,6 +796,7 @@ export default function Home({ isAdmin }) {
                       }}
                       src={post.mediaUrl}
                       controls
+                      controlsList="noplaybackrate nodownload"
                       playsInline
                       onPlay={(e) => {
                         if (internalActionRef.current) return;
