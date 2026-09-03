@@ -866,7 +866,6 @@ export default function Home({ isAdmin }) {
                     key={fileInputKey}
                     ref={fileInputRef}
                     type="file" 
-                    accept="image/*,video/*" 
                     onChange={handleFileChange} 
                     style={{ fontSize: '13px' }}
                   />
