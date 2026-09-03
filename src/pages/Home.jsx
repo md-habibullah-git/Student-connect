@@ -17,146 +17,6 @@ const commentFormStyle = { display: 'flex', marginTop: '8px', position: 'relativ
 const commentInputStyle = { width: '100%', padding: '8px 40px 8px 10px', fontSize: '13px', borderRadius: '20px', border: '1px solid var(--border, #ccc)', backgroundColor: 'transparent', outline: 'none', boxSizing: 'border-box' };
 const commentIconBtnStyle = { position: 'absolute', right: '10px', background: 'none', border: 'none', color: '#0056b3', cursor: 'pointer', fontSize: '16px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' };
 
-// 🔥 Custom Video Player — native controls বাদ, "1.00" tooltip fix
-function CustomVideoPlayer({ src, postId, videoElementsRef, globalMutedRef, internalActionRef, activeVideoIdRef, playVideo, pauseVideo, applyMuteToAll, onError, handleMediaError }) {
-  const videoRef = useRef(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(true);
-  const [duration, setDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    const onEnded = () => { setIsPlaying(false); setCurrentTime(0); };
-    const onLoaded = () => setDuration(video.duration || 0);
-    const onTimeUpdate = () => setCurrentTime(video.currentTime || 0);
-    const onVolumeChange = () => setIsMuted(video.muted);
-    
-    video.addEventListener('play', onPlay);
-    video.addEventListener('pause', onPause);
-    video.addEventListener('ended', onEnded);
-    video.addEventListener('loadedmetadata', onLoaded);
-    video.addEventListener('timeupdate', onTimeUpdate);
-    video.addEventListener('volumechange', onVolumeChange);
-    
-    return () => {
-      video.removeEventListener('play', onPlay);
-      video.removeEventListener('pause', onPause);
-      video.removeEventListener('ended', onEnded);
-      video.removeEventListener('loadedmetadata', onLoaded);
-      video.removeEventListener('timeupdate', onTimeUpdate);
-      video.removeEventListener('volumechange', onVolumeChange);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (videoRef.current) {
-      videoElementsRef.current[postId] = videoRef.current;
-      videoRef.current.muted = globalMutedRef.current;
-      videoRef.current.dataset.postId = postId;
-    }
-    return () => {
-      delete videoElementsRef.current[postId];
-    };
-  }, [postId]);
-
-  const togglePlay = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      playVideo(postId);
-    } else {
-      pauseVideo(postId);
-    }
-  };
-
-  const toggleMute = (e) => {
-    e.stopPropagation();
-    const video = videoRef.current;
-    if (!video) return;
-    video.muted = !video.muted;
-    globalMutedRef.current = video.muted;
-    applyMuteToAll(video.muted);
-  };
-
-  const enterFullscreen = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.requestFullscreen) {
-      video.requestFullscreen();
-    } else if (video.webkitRequestFullscreen) {
-      video.webkitRequestFullscreen();
-    } else if (video.webkitEnterFullscreen) {
-      video.webkitEnterFullscreen();
-    }
-  };
-
-  const formatTime = (secs) => {
-    if (!isFinite(secs) || secs < 0) return '0:00';
-    return `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`;
-  };
-
-  return (
-    <div style={{ position: 'relative', width: '100%', display: 'inline-block' }}>
-      <video
-        ref={videoRef}
-        src={src}
-        playsInline
-        onClick={togglePlay}
-        onError={(e) => handleMediaError(e, { id: postId, mediaUrl: src })}
-        style={{ width: '100%', maxHeight: '35vh', objectFit: 'contain', display: 'block', cursor: 'pointer' }}
-      />
-      
-      {/* Custom Controls */}
-      <div style={{
-        position: 'absolute',
-        bottom: '5px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        background: 'rgba(0,0,0,0.5)',
-        padding: '6px 12px',
-        borderRadius: '20px',
-        zIndex: 10
-      }}>
-        {/* Play/Pause */}
-        <button
-          onClick={togglePlay}
-          style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '14px', padding: 0 }}
-        >
-          {isPlaying ? '⏸️' : '▶️'}
-        </button>
-        
-        {/* Time */}
-        <span style={{ color: '#fff', fontSize: '11px' }}>
-          {formatTime(currentTime)} / {formatTime(duration)}
-        </span>
-        
-        {/* Mute */}
-        <button
-          onClick={toggleMute}
-          style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '14px', padding: 0 }}
-        >
-          {isMuted ? '🔇' : '🔊'}
-        </button>
-        
-        {/* Fullscreen */}
-        <button
-          onClick={enterFullscreen}
-          style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '14px', padding: 0 }}
-        >
-          ⛶
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // Cloudinary আপলোড ফাংশন
 function uploadMediaToCloudinary(fileOrBlob, resourceType, onProgress, fileName) {
   return new Promise((resolve, reject) => {
@@ -242,6 +102,7 @@ export default function Home({ isAdmin }) {
   const [showPostModal, setShowPostModal] = useState(false);
   const [expandedImage, setExpandedImage] = useState(null);
   const [fileInputKey, setFileInputKey] = useState(Date.now());
+  const [showFileManager, setShowFileManager] = useState(false); // New state for File Manager
   
   const lightboxHistoryPushed = useRef(false);
   const fileInputRef = useRef(null);
@@ -497,10 +358,10 @@ export default function Home({ isAdmin }) {
   }, []);
 
   const handleFileChange = async (e) => {
+    // 📱 Native App (Capacitor)
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
         const result = await FilePicker.pickFiles({
-          types: ['image/*', 'video/*'],
           readData: true,
         });
         
@@ -510,6 +371,11 @@ export default function Home({ isAdmin }) {
           let blob = null;
           const fileType = pickedFile.mimeType || 'image/jpeg';
           const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
+          
+          if (!fileType.startsWith('image/') && !fileType.startsWith('video/')) {
+            alert("Please select an image or video file.");
+            return;
+          }
           
           if (pickedFile.data) {
             const base64Data = pickedFile.data.replace(/^data:.*;base64,/, '');
@@ -551,6 +417,7 @@ export default function Home({ isAdmin }) {
       return;
     }
     
+    // 🌐 Web Version
     const file = e.target.files?.[0];
     if (!file) {
       setSelectedFile(null);
@@ -859,22 +726,41 @@ export default function Home({ isAdmin }) {
                       fontWeight: 'bold'
                     }}
                   >
-                    📁 Choose Photo/Video
+                    📁 Choose File
                   </button>
                 ) : (
-                  <input 
-                    key={fileInputKey}
-                    ref={fileInputRef}
-                    type="file" 
-                    accept="image/*,video/*" 
-                    onChange={handleFileChange} 
-                    style={{ fontSize: '13px' }}
-                  />
+                  <>
+                    <label
+                      htmlFor="file-upload-web"
+                      style={{ 
+                        padding: '10px 15px', 
+                        backgroundColor: '#0056b3', 
+                        color: '#fff', 
+                        border: 'none', 
+                        borderRadius: '5px', 
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        fontWeight: 'bold',
+                        display: 'inline-block'
+                      }}
+                    >
+                      📁 Choose File
+                    </label>
+                    <input 
+                      id="file-upload-web"
+                      key={fileInputKey}
+                      ref={fileInputRef}
+                      type="file" 
+                      accept="image/*,video/*"
+                      onChange={handleFileChange} 
+                      style={{ display: 'none' }}
+                    />
+                  </>
                 )}
 
                 {selectedFile?.kind === 'video' && selectedFile.previewUrl && (
                   <div style={{ marginTop: '10px', textAlign: 'center' }}>
-                    <video src={selectedFile.previewUrl} style={{ width: '160px', maxHeight: '120px', borderRadius: '4px', border: '1px solid #ddd' }} />
+                    <video src={selectedFile.previewUrl} controls style={{ width: '160px', maxHeight: '120px', borderRadius: '4px', border: '1px solid #ddd' }} />
                     <small style={{ display: 'block', color: '#28a745', fontSize: '11px', marginTop: '2px' }}>✓ {selectedFile.fileName} ready to post</small>
                   </div>
                 )}
@@ -924,17 +810,39 @@ export default function Home({ isAdmin }) {
               {post.mediaUrl && (
                 <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border, #eee)', backgroundColor: 'rgba(0,0,0,0.02)', textAlign: 'center', marginBottom: '12px' }}>
                   {post.mediaResourceType === 'video' || post.mediaUrl.includes('/video/') || post.mediaUrl.endsWith('.mp4') ? (
-                    <CustomVideoPlayer
+                    <video
+                      ref={(el) => {
+                        if (el) {
+                          videoElementsRef.current[post.id] = el;
+                          el.muted = globalMutedRef.current;
+                          el.dataset.postId = post.id;
+                        } else {
+                          delete videoElementsRef.current[post.id];
+                        }
+                      }}
                       src={post.mediaUrl}
-                      postId={post.id}
-                      videoElementsRef={videoElementsRef}
-                      globalMutedRef={globalMutedRef}
-                      internalActionRef={internalActionRef}
-                      activeVideoIdRef={activeVideoIdRef}
-                      playVideo={playVideo}
-                      pauseVideo={pauseVideo}
-                      applyMuteToAll={applyMuteToAll}
-                      handleMediaError={handleMediaError}
+                      controls
+                      playsInline
+                      onPlay={(e) => {
+                        if (internalActionRef.current) return;
+                        const postId = e.target.dataset.postId;
+                        if (postId && activeVideoIdRef.current !== postId) {
+                          playVideo(postId);
+                        }
+                      }}
+                      onPause={(e) => {
+                        if (internalActionRef.current) return;
+                        const postId = e.target.dataset.postId;
+                        if (postId && activeVideoIdRef.current === postId) {
+                          activeVideoIdRef.current = null;
+                        }
+                      }}
+                      onVolumeChange={(e) => {
+                        globalMutedRef.current = e.target.muted;
+                        applyMuteToAll(globalMutedRef.current);
+                      }}
+                      onError={(e) => handleMediaError(e, post)}
+                      style={{ width: '100%', maxHeight: '35vh', objectFit: 'contain', display: 'block' }}
                     />
                   ) : (
                     <img
