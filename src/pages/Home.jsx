@@ -250,14 +250,15 @@ export default function Home({ isAdmin }) {
             if (videoEl.paused) playVideo(postId);
           }
         }
-        // ❌ ভিডিও ৫০% এর কম দৃশ্যমান হলে পজ হবে
-        else if (entry.intersectionRatio < 0.5) {
+        // ❌ ভিডিও ২০% এর কম দৃশ্যমান হলে পজ হবে
+        else if (entry.intersectionRatio < 0.2) {
           if (activeVideoIdRef.current === postId) {
             pauseVideo(postId);
           }
         }
+        // ⚠️ ২০%-৫০% এর মধ্যে → কিছু হবে না (চলতে থাকবে)
       });
-    }, { threshold: [0.3, 0.5, 0.7, 0.9, 1.0] });
+    }, { threshold: [0.2, 0.3, 0.5, 0.7, 0.9, 1.0] });
 
     Object.values(videoElementsRef.current).forEach(v => {
       if (v) observer.observe(v);
