@@ -25,6 +25,8 @@ export default async function handler(req, res) {
   }
 
   try {
+    const isCall = data?.type === 'incoming_call' || data?.type === 'global_call';
+    
     const message = {
       token: token,
       notification: {
@@ -35,9 +37,10 @@ export default async function handler(req, res) {
       android: {
         priority: 'high',
         notification: {
-          sound: 'default',
-          channelId: 'call_channel',
+          sound: isCall ? 'default' : 'default',
+          channelId: isCall ? 'call_channel' : 'message_channel',
           priority: 'high',
+          visibility: 'public',
         },
       },
       apns: {
@@ -45,6 +48,7 @@ export default async function handler(req, res) {
           aps: {
             sound: 'default',
             badge: 1,
+            'content-available': 1,
           },
         },
       },

@@ -2,11 +2,33 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { Capacitor } from '@capacitor/core';
 import { db, auth } from './firebase';
 import { doc, updateDoc } from 'firebase/firestore';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 export async function initPushNotifications() {
   if (!Capacitor.isNativePlatform()) return;
   
   try {
+    // ✅ Android Notification Channel তৈরি করুন
+    await PushNotifications.createChannel({
+      id: 'call_channel',
+      name: 'Call Notifications',
+      description: 'Incoming call notifications',
+      importance: 5, // MAX importance
+      visibility: 1, // PUBLIC
+      sound: 'default',
+      vibration: true,
+    });
+    
+    await PushNotifications.createChannel({
+      id: 'message_channel',
+      name: 'Message Notifications',
+      description: 'New message notifications',
+      importance: 4,
+      visibility: 1,
+      sound: 'default',
+      vibration: true,
+    });
+
     const permStatus = await PushNotifications.requestPermissions();
     
     if (permStatus.receive === 'granted') {
@@ -30,6 +52,9 @@ export async function initPushNotifications() {
         const data = notification.notification.data;
         if (data && data.type === 'incoming_call' && data.roomId) {
           window.location.href = `/chat/${data.roomId}/${encodeURIComponent(data.callerName || 'Student')}`;
+        }
+        if (data && data.type === 'global_call') {
+          window.location.href = '/chat/global/Global-Chatroom';
         }
       });
     }
