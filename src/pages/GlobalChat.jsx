@@ -9,6 +9,7 @@ import {
   serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where, Timestamp 
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
+import { sendPushNotification } from '../pushNotifications'; // ✅ নতুন import
 
 const rtcConfiguration = {
   iceServers: [
@@ -827,6 +828,25 @@ export default function GlobalChat() {
           }
         }
       });
+
+      // 🔥 সব approved users-কে push notification পাঠান
+      try {
+        const usersSnapshot = await getDocs(query(collection(db, "users"), where("approved", "==", true)));
+        const pushPromises = usersSnapshot.docs
+          .filter(doc => doc.data().uid !== currentUid && doc.data().pushToken)
+          .map(doc => 
+            sendPushNotification(
+              doc.data().pushToken,
+              '📞 Group Call',
+              `${currentUserName} started a ${callType === 'audio' ? 'audio' : 'video'} conference`,
+              { type: 'global_call', roomId: globalRoomId, callerName: currentUserName }
+            )
+          );
+        await Promise.all(pushPromises);
+      } catch (pushErr) {
+        console.error("Push notification error:", pushErr);
+      }
+
       callStartTimeRef.current = startedAt;
       setActiveCallType(callType);
       setInCall(true);
@@ -929,14 +949,12 @@ export default function GlobalChat() {
             callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
           }
           
-          // Missed call check: শুধু host থাকলে এবং আর কেউ join না করলে
           const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
           const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
           const memberCount = Object.keys(callHistory).filter(k => k !== 'totalDuration').length;
           
           let callSummaryText;
           if (memberCount <= 1) {
-            // কেউ join করেনি — missed call
             callSummaryText = `❌ You missed a group ${callTypeLabel.toLowerCase()} • ${formatTimeDisplay(data.callStartedAt)}`;
           } else {
             callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call • ${formatDuration(callHistory.totalDuration)} min`;

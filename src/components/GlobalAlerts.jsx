@@ -10,6 +10,7 @@ import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSessio
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { initPushNotifications } from '../pushNotifications'; // ✅ নতুন import
 
 const GLOBAL_ROOM_ID = "campus_global_conference_room";
 
@@ -137,6 +138,13 @@ export default function GlobalAlerts() {
     const unsubscribe = subscribeActiveCallSession(setActiveSession);
     return unsubscribe;
   }, []);
+
+  // ✅ Push Notification Initialize
+  useEffect(() => {
+    if (currentUid) {
+      initPushNotifications();
+    }
+  }, [currentUid]);
 
   useEffect(() => {
     if (incomingPersonalCall || incomingGlobalCall) {

@@ -9,6 +9,7 @@ import {
   setDoc, updateDoc, getDoc, getDocs, where, deleteDoc, serverTimestamp 
 } from 'firebase/firestore';
 import { getActiveCallSession, setActiveCallSession, clearActiveCallSession, subscribeActiveCallSession } from '../callSession';
+import { sendPushNotification, sendCallNotification } from '../pushNotifications'; // ✅ নতুন import
 
 const rtcConfiguration = {
   iceServers: [
@@ -338,7 +339,6 @@ export default function PersonalChat() {
     scrollToBottom();
   }, [messages]);
 
-  // 🔥 Global-এর মতো করে saveCallHistory — personal-rooms document-এ lastMessageText update করে
   const saveCallHistory = async (callType, startedAt, endedAt, wasMissed = false) => {
     try {
       const callTypeIcon = callType === 'audio' ? '🎙️' : '📹';
@@ -352,7 +352,6 @@ export default function PersonalChat() {
         callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(startedAt)} - ${formatTimeDisplay(endedAt)}\n📞 Call • ${formatDuration(duration)} min`;
       }
       
-      // 🔥 personal-rooms document-এ lastMessageText update করুন (Global-এর মতো)
       const roomRef = doc(db, "personal-rooms", chatRoomId);
       await setDoc(roomRef, {
         roomId: chatRoomId,
@@ -365,7 +364,6 @@ export default function PersonalChat() {
         lastMessageAt: new Date().getTime()
       }, { merge: true });
       
-      // Message save করুন
       await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
         text: callSummaryText,
         senderId: 'system',
@@ -419,6 +417,25 @@ export default function PersonalChat() {
           isDeleted: false,
           replyTo: replyData
         });
+        
+        // 🔥 Push notification পাঠান
+        try {
+          const receiverDoc = await getDoc(doc(db, "users", targetUid));
+          if (receiverDoc.exists()) {
+            const receiverData = receiverDoc.data();
+            if (receiverData.pushToken) {
+              await sendPushNotification(
+                receiverData.pushToken,
+                'New Message 💬',
+                `${currentUserName}: ${input.trim()}`,
+                { type: 'message', senderId: currentUid, roomId: chatRoomId }
+              );
+            }
+          }
+        } catch (pushErr) {
+          console.error("Push notification error:", pushErr);
+        }
+        
         setInput('');
       }
 
@@ -809,6 +826,24 @@ export default function PersonalChat() {
         offer: { type: offer.type, sdp: offer.sdp }
       });
 
+      // 🔥 Call push notification পাঠান
+      try {
+        const receiverDoc = await getDoc(doc(db, "users", targetUid));
+        if (receiverDoc.exists()) {
+          const receiverData = receiverDoc.data();
+          if (receiverData.pushToken) {
+            await sendCallNotification(
+              receiverData.pushToken,
+              currentUserName,
+              callType,
+              chatRoomId
+            );
+          }
+        }
+      } catch (pushErr) {
+        console.error("Call notification error:", pushErr);
+      }
+
       unsubscribeCallSignalRef.current = onSnapshot(callRef, async (snap) => {
         const data = snap.data();
         if (!snap.exists()) {
@@ -951,7 +986,6 @@ export default function PersonalChat() {
         const callData = callSnap.data();
         const wasAnswered = callData.answer ? true : false;
         
-        // Delete candidates
         const [callerCandidates, calleeCandidates] = await Promise.all([
           getDocs(collection(callRef, "callerCandidates")),
           getDocs(collection(callRef, "calleeCandidates"))
@@ -961,7 +995,6 @@ export default function PersonalChat() {
           ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
         ]);
         
-        // 🔥 Global-এর মতো: message save + status update + document delete
         if (wasAnswered) {
           await saveCallHistory(callType, startedAt, endedAt, false);
           await updateDoc(callRef, { status: "ended" }).catch(() => {});
@@ -970,7 +1003,6 @@ export default function PersonalChat() {
           await updateDoc(callRef, { status: "missed", answer: false }).catch(() => {});
         }
         
-        // সাথে সাথে delete
         await deleteDoc(callRef).catch(() => {});
       }
     } catch (err) {
