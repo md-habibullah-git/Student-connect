@@ -6,9 +6,18 @@ import { db, auth } from './firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 
 export async function initPushNotifications() {
-  if (!Capacitor.isNativePlatform()) return;
+  // ✅ Debug log
+  console.log('🔔 initPushNotifications called');
+  console.log('🔔 Is Native Platform:', Capacitor.isNativePlatform());
+  
+  if (!Capacitor.isNativePlatform()) {
+    console.log('🔔 Not native platform, returning');
+    return;
+  }
   
   try {
+    console.log('🔔 Creating notification channels...');
+    
     // Android Notification Channels
     await PushNotifications.createChannel({
       id: 'call_channel',
@@ -30,23 +39,36 @@ export async function initPushNotifications() {
       vibration: true,
     });
 
+    console.log('🔔 Requesting permissions...');
     const permStatus = await PushNotifications.requestPermissions();
+    console.log('🔔 Permission status:', JSON.stringify(permStatus));
     
     if (permStatus.receive === 'granted') {
+      console.log('🔔 Permission granted, registering...');
       await PushNotifications.register();
       
       PushNotifications.addListener('registration', async (token) => {
-        console.log('Push token:', token.value);
+        console.log('🔔 Push token received:', token.value);
         const currentUid = auth.currentUser?.uid;
+        console.log('🔔 Current UID:', currentUid);
         if (currentUid) {
-          await updateDoc(doc(db, "users", currentUid), {
-            pushToken: token.value,
-          });
+          try {
+            await updateDoc(doc(db, "users", currentUid), {
+              pushToken: token.value,
+            });
+            console.log('🔔 Push token saved to Firestore!');
+          } catch (saveErr) {
+            console.error('🔔 Error saving push token:', saveErr);
+          }
         }
       });
       
+      PushNotifications.addListener('registrationError', (err) => {
+        console.error('🔔 Registration error:', err);
+      });
+      
       PushNotifications.addListener('pushNotificationReceived', (notification) => {
-        console.log('Notification received:', notification);
+        console.log('🔔 Notification received:', notification);
       });
       
       PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
@@ -58,9 +80,11 @@ export async function initPushNotifications() {
           window.location.href = '/chat/global/Global-Chatroom';
         }
       });
+    } else {
+      console.log('🔔 Permission denied');
     }
   } catch (err) {
-    console.error('Push notification error:', err);
+    console.error('🔔 Push notification error:', err);
   }
 }
 
