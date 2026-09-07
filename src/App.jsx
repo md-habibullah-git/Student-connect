@@ -4,7 +4,6 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { auth, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
-import { initPushNotifications } from './pushNotifications'; // ✅ নতুন import
 
 import Navbar from './components/Navbar';
 import AdminPanel from './components/AdminPanel';
@@ -44,9 +43,6 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
-        
-        // ✅ Push Notification Initialize
-        initPushNotifications();
         
         const userRef = doc(db, "users", currentUser.uid);
         const unsubscribeUser = onSnapshot(userRef, (docSnap) => {
