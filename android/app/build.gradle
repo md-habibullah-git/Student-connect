@@ -40,6 +40,15 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+    
+    // ✅ Firebase Messaging
+    implementation 'com.google.firebase:firebase-messaging:23.4.0'
+    
+    // ✅ Firebase Analytics
+    implementation 'com.google.firebase:firebase-analytics:21.5.0'
+    
+    // ✅ AndroidX Core (NotificationCompat এর জন্য)
+    implementation "androidx.core:core:1.12.0"
 }
 
 apply from: 'capacitor.build.gradle'
