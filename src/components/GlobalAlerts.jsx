@@ -10,7 +10,7 @@ import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSessio
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { initPushNotifications } from '../pushNotifications'; // ✅ নতুন import
+import { initPushNotifications } from '../pushNotifications';
 
 const GLOBAL_ROOM_ID = "campus_global_conference_room";
 
@@ -94,7 +94,6 @@ const playMessageSound = () => {
   } catch (err) {}
 };
 
-// 🔥 Local Notification পাঠানোর function
 const sendLocalNotification = async (title, body) => {
   try {
     const permStatus = await LocalNotifications.requestPermissions();
@@ -139,9 +138,11 @@ export default function GlobalAlerts() {
     return unsubscribe;
   }, []);
 
-  // ✅ Push Notification Initialize
+  // ✅ Push Notification Initialize with debug logs
   useEffect(() => {
     if (currentUid) {
+      console.log('🔔 GlobalAlerts: currentUid found:', currentUid);
+      console.log('🔔 GlobalAlerts: Is Native:', Capacitor.isNativePlatform());
       initPushNotifications();
     }
   }, [currentUid]);
@@ -289,7 +290,7 @@ export default function GlobalAlerts() {
     };
   }, [currentUid]);
 
-  // 🔥 Personal rooms listener — message + missed call detection
+  // Personal rooms listener
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-rooms"), where("participants", "array-contains", currentUid));
@@ -301,7 +302,6 @@ export default function GlobalAlerts() {
         const roomId = change.doc.id;
         const prevLastMessageAt = lastKnownRoomStateRef.current[roomId] || 0;
 
-        // 🔥 Missed call detection
         if (
           !isFirst &&
           data.lastMessageText && 
@@ -314,8 +314,6 @@ export default function GlobalAlerts() {
 
           if (!onThisChatPage) {
             playMessageSound();
-            
-            // 🔥 Notification পাঠান
             sendLocalNotification(
               'Missed Call 📞',
               `You missed a ${data.lastMessageText.includes('video') ? 'video' : 'audio'} call`
@@ -340,7 +338,6 @@ export default function GlobalAlerts() {
           }
         }
         
-        // Regular message detection
         if (
           !isFirst &&
           data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
@@ -352,8 +349,6 @@ export default function GlobalAlerts() {
 
           if (!onThisChatPage) {
             playMessageSound();
-            
-            // 🔥 Notification পাঠান
             sendLocalNotification(
               'New Message 💬',
               `${data.lastMessageSenderName || 'Student'}: ${data.lastMessageText || ''}`
@@ -382,7 +377,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // 🔥 Global messages listener
+  // Global messages listener
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
@@ -397,7 +392,6 @@ export default function GlobalAlerts() {
           if (!onGlobalPage) {
             playMessageSound();
             
-            // 🔥 Notification পাঠান
             if (data.text && data.text.includes('missed')) {
               sendLocalNotification(
                 'Missed Group Call 🌐',
@@ -429,7 +423,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Personal call listener — incoming call detection
+  // Personal call listener
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-connections"), where("participants", "array-contains", currentUid));
@@ -458,8 +452,6 @@ export default function GlobalAlerts() {
           const alreadyDismissed = dismissedGlobalCalls.includes(callId);
           if (!alreadyDismissed) {
             setIncomingGlobalCall({ hostName: data.hostName, callId });
-            
-            // 🔥 Incoming call notification
             sendLocalNotification(
               'Incoming Call 📞',
               `${data.hostName || 'Student'} started a conference`
@@ -495,7 +487,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid, dismissedGlobalCalls]);
 
-  // 🔧 FIXED: Home page-এ ঢুকলে সব missed calls + unread messages check
+  // Home page alerts check
   useEffect(() => {
     if (!currentUid) return;
     if (location.pathname !== '/') return;
