@@ -1,20 +1,21 @@
+// File Name: src/pushNotifications.js
+
 import { PushNotifications } from '@capacitor/push-notifications';
 import { Capacitor } from '@capacitor/core';
 import { db, auth } from './firebase';
 import { doc, updateDoc } from 'firebase/firestore';
-import { LocalNotifications } from '@capacitor/local-notifications';
 
 export async function initPushNotifications() {
   if (!Capacitor.isNativePlatform()) return;
   
   try {
-    // ✅ Android Notification Channel তৈরি করুন
+    // Android Notification Channels
     await PushNotifications.createChannel({
       id: 'call_channel',
       name: 'Call Notifications',
       description: 'Incoming call notifications',
-      importance: 5, // MAX importance
-      visibility: 1, // PUBLIC
+      importance: 5,
+      visibility: 1,
       sound: 'default',
       vibration: true,
     });
