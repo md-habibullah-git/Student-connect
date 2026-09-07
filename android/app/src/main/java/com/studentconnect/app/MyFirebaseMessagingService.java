@@ -16,6 +16,8 @@ import androidx.core.app.NotificationCompat;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
+import java.util.Map; // ✅ এই import যোগ করুন
+
 public class MyFirebaseMessagingService extends FirebaseMessagingService {
     private static final String TAG = "FCMService";
     private static final String CHANNEL_ID = "call_channel";
@@ -68,7 +70,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setContentIntent(pendingIntent);
 
-        notificationManager.notify(0, notificationBuilder.build());
+        notificationManager.notify((int) System.currentTimeMillis(), notificationBuilder.build());
     }
 
     private void createNotificationChannel(NotificationManager notificationManager) {
@@ -80,7 +82,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             );
             channel.setDescription("Incoming call notifications");
             channel.enableVibration(true);
-            channel.setVibrationPattern(new long[]{0, 500, 250, 500});
+            channel.setVibrationPattern(new long[]{0, 500, 250, 500, 250, 500});
             channel.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), null);
             notificationManager.createNotificationChannel(channel);
         }
