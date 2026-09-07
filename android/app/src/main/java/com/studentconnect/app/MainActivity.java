@@ -1,6 +1,7 @@
 package com.studentconnect.app;
 
 import android.Manifest;
+import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.PermissionRequest;
@@ -20,6 +21,14 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        
+        // ✅ KeepAliveService start করুন — App swipe করে বন্ধ করলেও notification কাজ করবে
+        Intent serviceIntent = new Intent(this, KeepAliveService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent);
+        } else {
+            startService(serviceIntent);
+        }
         
         // ১. ওএস লেভেলে সরাসরি ক্যামেরা ও মাইকের পারমিশন পপ-আপ চাওয়া
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -41,7 +50,6 @@ public class MainActivity extends BridgeActivity {
                         MainActivity.this.runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                // ZegoCloud-এর জন্য ক্যামেরা, মাইক এবং অডিও রিসোর্স গ্র্যান্ট করা
                                 request.grant(request.getResources());
                             }
                         });
@@ -67,7 +75,6 @@ public class MainActivity extends BridgeActivity {
                                 FrameLayout.LayoutParams.MATCH_PARENT
                             ));
                         
-                        // 🔥 Fullscreen-এ auto-rotate allow — video landscape/portrait যেকোনোভাবে ফিট হবে
                         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
                     }
 
@@ -82,7 +89,6 @@ public class MainActivity extends BridgeActivity {
                             customViewCallback.onCustomViewHidden();
                         }
                         
-                        // 🔥 Fullscreen বন্ধ হলে app portrait-এ ফিরে আসবে
                         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
                     }
                 });
