@@ -2,6 +2,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getMessaging, getToken } from "firebase/messaging"; // ✅ FCM Messaging import
 
 // Your actual Firebase configuration keys
 const firebaseConfig = {
@@ -18,3 +19,24 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app); // পোস্টের ভিডিওর জন্য — Firestore-এর ১MB ডকুমেন্ট লিমিট এড়াতে
+export const messaging = getMessaging(app); // ✅ FCM Messaging export
+
+// ✅ VAPID Key — Firebase Console থেকে generate করা
+const VAPID_KEY = "BOtoloi6y3lWsPJzu0LYjrAkzwJuRxCo-ni4U0MU3BdUa2wdxbyJX34HdXYbbHsH_gd5QCd9weG-CNNAxudU5Og";
+
+// ✅ FCM Token পাওয়ার ফাংশন
+export async function getFCMToken() {
+  try {
+    const currentToken = await getToken(messaging, { vapidKey: VAPID_KEY });
+    if (currentToken) {
+      console.log('✅ FCM Token:', currentToken);
+      return currentToken;
+    } else {
+      console.log('❌ No FCM Token available');
+      return null;
+    }
+  } catch (err) {
+    console.error('❌ FCM Token error:', err);
+    return null;
+  }
+}

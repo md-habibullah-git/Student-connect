@@ -2,7 +2,7 @@
 
 import { PushNotifications } from '@capacitor/push-notifications';
 import { Capacitor } from '@capacitor/core';
-import { db, auth } from './firebase';
+import { db, auth, getFCMToken } from './firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 
 export async function initPushNotifications() {
@@ -47,6 +47,19 @@ export async function initPushNotifications() {
       console.log('🔔 Permission granted, registering...');
       await PushNotifications.register();
       
+      // ✅ FCM Token নিন এবং Firestore-এ save করুন
+      const fcmToken = await getFCMToken();
+      console.log('🔔 FCM Token:', fcmToken);
+      
+      if (fcmToken && auth.currentUser) {
+        const currentUid = auth.currentUser.uid;
+        await updateDoc(doc(db, "users", currentUid), {
+          pushToken: fcmToken,
+          pushTokenUpdatedAt: new Date().getTime(),
+        });
+        console.log('✅ FCM Token saved to Firestore!');
+      }
+      
       PushNotifications.addListener('registration', async (token) => {
         console.log('🔔 Push token received:', token.value);
         const currentUid = auth.currentUser?.uid;
@@ -55,6 +68,7 @@ export async function initPushNotifications() {
           try {
             await updateDoc(doc(db, "users", currentUid), {
               pushToken: token.value,
+              pushTokenUpdatedAt: new Date().getTime(),
             });
             console.log('🔔 Push token saved to Firestore!');
           } catch (saveErr) {
@@ -67,8 +81,33 @@ export async function initPushNotifications() {
         console.error('🔔 Registration error:', err);
       });
       
+      // ✅ Foreground notification handler
       PushNotifications.addListener('pushNotificationReceived', (notification) => {
         console.log('🔔 Notification received:', notification);
+        
+        const data = notification.data || {};
+        
+        if (data.type === 'incoming_call') {
+          const ringtoneEvent = new CustomEvent('incoming-call', {
+            detail: {
+              type: 'personal',
+              roomId: data.roomId,
+              callerName: data.callerName || 'Student',
+              callType: data.callType || 'audio'
+            }
+          });
+          window.dispatchEvent(ringtoneEvent);
+        }
+        
+        if (data.type === 'global_call') {
+          const ringtoneEvent = new CustomEvent('incoming-call', {
+            detail: {
+              type: 'global',
+              callerName: data.callerName || 'Student'
+            }
+          });
+          window.dispatchEvent(ringtoneEvent);
+        }
       });
       
       PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
