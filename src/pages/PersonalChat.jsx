@@ -186,14 +186,15 @@ export default function PersonalChat() {
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const remoteAudioRef = useRef(null); // ✅ নতুন — audio fix
+  const remoteAudioRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
   const unsubscribeCallSignalRef = useRef(null);
   const unsubscribeCandidatesRef = useRef(null);
   const callStartTimeRef = useRef(null);
-  const callHistorySavedRef = useRef(false); // ✅ নতুন — duplicate fix
+  const callHistorySavedRef = useRef(false);
+  const callAnsweredTimeRef = useRef(null); // ✅ নতুন — কবে answer হয়েছিল
 
   const initialMessagesLoadedRef = useRef(false);
 
@@ -338,8 +339,8 @@ export default function PersonalChat() {
     scrollToBottom();
   }, [messages]);
 
+  // ✅ Fixed — call history save করে শুধু একবার, answer হওয়ার পর থেকে duration count হয়
   const saveCallHistory = async (callType, startedAt, endedAt, wasMissed = false) => {
-    // ✅ Duplicate fix — একবার save হলে আর save হবে না
     if (callHistorySavedRef.current) return;
     callHistorySavedRef.current = true;
     
@@ -351,8 +352,10 @@ export default function PersonalChat() {
       if (wasMissed) {
         callSummaryText = `❌ You missed a ${callTypeLabel.toLowerCase()} • ${formatTimeDisplay(startedAt)}`;
       } else {
-        const duration = endedAt - startedAt;
-        callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(startedAt)} - ${formatTimeDisplay(endedAt)}\n📞 Call • ${formatDuration(duration)} min`;
+        // ✅ কল কবে answer হয়েছিল — সেই সময় থেকে duration count হবে
+        const answerTime = callAnsweredTimeRef.current || startedAt;
+        const duration = endedAt - answerTime;
+        callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(answerTime)} - ${formatTimeDisplay(endedAt)}\n📞 Call • ${formatDuration(duration)} min`;
       }
       
       const roomRef = doc(db, "personal-rooms", chatRoomId);
@@ -748,7 +751,7 @@ export default function PersonalChat() {
     if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach(track => track.stop()); remoteStreamRef.current = null; }
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null; // ✅ audio fix
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
     clearActiveCallSession();
   };
 
@@ -771,7 +774,7 @@ export default function PersonalChat() {
         remoteStreamRef.current = null;
         if (localVideoRef.current) localVideoRef.current.srcObject = null;
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-        if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null; // ✅ audio fix
+        if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
         setInCall(false);
         setActiveCallType('video');
       }
@@ -783,14 +786,15 @@ export default function PersonalChat() {
     if (inCall) {
       if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current;
       if (remoteVideoRef.current && remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
-      if (remoteAudioRef.current && remoteStreamRef.current) remoteAudioRef.current.srcObject = remoteStreamRef.current; // ✅ audio fix
+      if (remoteAudioRef.current && remoteStreamRef.current) remoteAudioRef.current.srcObject = remoteStreamRef.current;
     }
   }, [inCall]);
 
   const initiateCall = async (callType = 'video') => {
     try {
       cleanupCallLocally();
-      callHistorySavedRef.current = false; // ✅ reset flag
+      callHistorySavedRef.current = false;
+      callAnsweredTimeRef.current = null; // ✅ reset
       
       const pc = new RTCPeerConnection(rtcConfiguration);
       peerConnectionRef.current = pc;
@@ -858,6 +862,10 @@ export default function PersonalChat() {
         }
         if (data.answer && pc.signalingState !== 'closed' && !pc.currentRemoteDescription) {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          // ✅ Answer পেলে callAnsweredTimeRef set করুন
+          if (!callAnsweredTimeRef.current) {
+            callAnsweredTimeRef.current = new Date().getTime();
+          }
         }
         if (data.status === 'ended') {
           const endedAt = new Date().getTime();
@@ -901,7 +909,8 @@ export default function PersonalChat() {
   const answerIncomingCall = async () => {
     try {
       cleanupCallLocally();
-      callHistorySavedRef.current = false; // ✅ reset flag
+      callHistorySavedRef.current = false;
+      callAnsweredTimeRef.current = null; // ✅ reset
       
       const callRef = doc(db, "personal-connections", chatRoomId);
       const callSnap = await getDoc(callRef);
@@ -935,6 +944,9 @@ export default function PersonalChat() {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+
+      // ✅ Answer করার সময় set করুন
+      callAnsweredTimeRef.current = new Date().getTime();
 
       await updateDoc(callRef, {
         status: "accepted",
