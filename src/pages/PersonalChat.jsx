@@ -790,7 +790,8 @@ export default function PersonalChat() {
         remoteAudioRef.current.srcObject = remoteStreamRef.current;
         remoteAudioRef.current.play().catch(() => {});
         
-        if (!remoteAudioCtxRef.current) {
+        // ✅ Audio boost — শুধু audio call-এ
+        if (activeCallType === 'audio' && !remoteAudioCtxRef.current) {
           try {
             const AudioContextClass = window.AudioContext || window.webkitAudioContext;
             const audioCtx = new AudioContextClass();
@@ -806,7 +807,7 @@ export default function PersonalChat() {
         }
       }
     }
-  }, [inCall]);
+  }, [inCall, activeCallType]);
 
   const initiateCall = async (callType = 'video') => {
     try {
