@@ -26,6 +26,23 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
+// ✅ Audio Volume Boost Helper
+const createBoostedAudio = (stream, boostLevel = 10) => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = boostLevel;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    return audioCtx;
+  } catch (err) {
+    console.error('Volume boost error:', err);
+    return null;
+  }
+};
+
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -790,29 +807,18 @@ export default function PersonalChat() {
         remoteAudioRef.current.srcObject = remoteStreamRef.current;
         remoteAudioRef.current.play().catch(() => {});
         
-        // ✅ Audio boost — শুধু audio call-এ
-        if (activeCallType === 'audio' && !remoteAudioCtxRef.current) {
-          try {
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            const audioCtx = new AudioContextClass();
-            const source = audioCtx.createMediaStreamSource(remoteStreamRef.current);
-            const gainNode = audioCtx.createGain();
-            gainNode.gain.value = 10.0; // ✅ 10x boost
-            source.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            remoteAudioCtxRef.current = audioCtx;
-          } catch (err) {
-            console.error('Volume boost error:', err);
-          }
+        // ✅ Audio Volume Boost — Helper function
+        if (!remoteAudioCtxRef.current) {
+          remoteAudioCtxRef.current = createBoostedAudio(remoteStreamRef.current, 10);
         }
       }
     }
-  }, [inCall, activeCallType]);
+  }, [inCall]);
 
   const initiateCall = async (callType = 'video') => {
     try {
       cleanupCallLocally();
-      callHistorySavedRef.current = true;
+      callHistorySavedRef.current = false;
       callAnsweredTimeRef.current = null;
       
       const pc = new RTCPeerConnection(rtcConfiguration);
@@ -891,6 +897,8 @@ export default function PersonalChat() {
           setActiveCallType('video');
         }
         if (data.status === 'missed') {
+          const endedAt = new Date().getTime();
+          await saveCallHistory(callType, startedAt, endedAt, true);
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
@@ -1033,8 +1041,9 @@ export default function PersonalChat() {
           }
           await updateDoc(callRef, { status: "ended" }).catch(() => {});
         } else {
-          // ✅ Missed call — দুজনেই save করবে
-          await saveCallHistory(callType, startedAt, endedAt, true);
+          if (isCaller) {
+            await saveCallHistory(callType, startedAt, endedAt, true);
+          }
           await updateDoc(callRef, { status: "missed", answer: false }).catch(() => {});
         }
         
