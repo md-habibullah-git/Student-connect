@@ -36,7 +36,7 @@ public class KeepAliveService extends Service {
             .setContentTitle("Student Connect")
             .setContentText("Running in background")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_MIN)  // ✅ LOW থেকে MIN করলাম
             .setOngoing(true);
         return builder.build();
     }
@@ -46,8 +46,12 @@ public class KeepAliveService extends Service {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
                 "Background Service",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_MIN  // ✅ LOW থেকে MIN করলাম
             );
+            channel.setShowBadge(false);  // ✅ Badge off
+            channel.setSound(null, null);  // ✅ Sound off
+            channel.enableVibration(false);  // ✅ Vibration off
+            
             NotificationManager manager = getSystemService(NotificationManager.class);
             manager.createNotificationChannel(channel);
         }
