@@ -26,23 +26,36 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// ✅ Audio Volume Boost Helper
+// ✅ Audio Volume Boost Helper — Call stream-এর জন্য
 const createBoostedAudio = (stream, boostLevel = 10) => {
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     const audioCtx = new AudioContextClass();
     const source = audioCtx.createMediaStreamSource(stream);
     const gainNode = audioCtx.createGain();
-    
-    // Gain boost — 10x default, safe max to avoid distortion
     gainNode.gain.value = boostLevel;
-    
     source.connect(gainNode);
     gainNode.connect(audioCtx.destination);
-    
     return audioCtx;
   } catch (err) {
     console.error('Volume boost error:', err);
+    return null;
+  }
+};
+
+// ✅ Voice Message Boost Helper — Audio element (src) থেকে boost
+const createBoostedAudioFromElement = (audioElement, boostLevel = 10) => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    const source = audioCtx.createMediaElementSource(audioElement);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = boostLevel;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    return audioCtx;
+  } catch (err) {
+    console.error('Voice message boost error:', err);
     return null;
   }
 };
@@ -64,7 +77,6 @@ function RemoteVideoTile({ stream, label }) {
       audioRef.current.volume = 1.0;
       audioRef.current.play().catch(() => {});
       
-      // ✅ Web Audio API volume boost
       audioCtxRef.current = createBoostedAudio(stream, 10);
     }
     
@@ -96,7 +108,6 @@ function RemoteAudioTile({ stream }) {
       audioRef.current.volume = 1.0;
       audioRef.current.play().catch(() => {});
       
-      // ✅ Web Audio API volume boost
       audioCtxRef.current = createBoostedAudio(stream, 10);
     }
     
@@ -123,6 +134,7 @@ function LocalAudioTile({ stream }) {
   return <audio ref={audioRef} autoPlay playsInline muted style={{ display: 'none' }} />;
 }
 
+// ✅ VoiceMessageBubble — Voice message-এর audio boost
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -185,28 +197,29 @@ function VoiceMessageBubble({ src, isMe }) {
     };
   }, []);
 
-  const setupAnalyser = () => {
+  // ✅ Boosted Audio Setup — Voice Message Volume Boost
+  const setupBoostedAudio = () => {
     if (audioCtxRef.current) return;
     try {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      const audioCtx = new AudioContextClass();
-      const source = audioCtx.createMediaElementSource(audioRef.current);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 64;
-      source.connect(analyser);
-      analyser.connect(audioCtx.destination);
-      audioCtxRef.current = audioCtx;
-      analyserRef.current = analyser;
-    } catch (err) {}
+      const audioCtx = createBoostedAudioFromElement(audioRef.current, 10);
+      if (audioCtx) {
+        audioCtxRef.current = audioCtx;
+      }
+    } catch (err) {
+      console.error('Setup boosted audio error:', err);
+    }
   };
 
   const togglePlay = () => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
-    setupAnalyser();
+    
+    setupBoostedAudio();
+    
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume();
     }
+    
     if (isPlaying) audioEl.pause();
     else audioEl.play();
   };
