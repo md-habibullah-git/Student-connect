@@ -9,7 +9,7 @@ import {
   setDoc, updateDoc, getDoc, getDocs, where, deleteDoc, serverTimestamp 
 } from 'firebase/firestore';
 import { getActiveCallSession, setActiveCallSession, clearActiveCallSession, subscribeActiveCallSession } from '../callSession';
-import { sendPushNotification, sendCallNotification } from '../pushNotifications'; // ✅ নতুন import
+import { sendPushNotification, sendCallNotification } from '../pushNotifications';
 
 const rtcConfiguration = {
   iceServers: [
@@ -86,7 +86,6 @@ function VoiceMessageBubble({ src, isMe }) {
         audioCtxRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setupAnalyser = () => {
@@ -135,7 +134,6 @@ function VoiceMessageBubble({ src, isMe }) {
       audioEl.removeEventListener('loadedmetadata', onLoaded);
       audioEl.removeEventListener('timeupdate', onTimeUpdate);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const formatTime = (secs) => {
@@ -188,12 +186,14 @@ export default function PersonalChat() {
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const remoteAudioRef = useRef(null); // ✅ নতুন — audio fix
   const peerConnectionRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
   const unsubscribeCallSignalRef = useRef(null);
   const unsubscribeCandidatesRef = useRef(null);
   const callStartTimeRef = useRef(null);
+  const callHistorySavedRef = useRef(false); // ✅ নতুন — duplicate fix
 
   const initialMessagesLoadedRef = useRef(false);
 
@@ -290,7 +290,6 @@ export default function PersonalChat() {
       answerIncomingCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 
   useEffect(() => {
@@ -340,6 +339,10 @@ export default function PersonalChat() {
   }, [messages]);
 
   const saveCallHistory = async (callType, startedAt, endedAt, wasMissed = false) => {
+    // ✅ Duplicate fix — একবার save হলে আর save হবে না
+    if (callHistorySavedRef.current) return;
+    callHistorySavedRef.current = true;
+    
     try {
       const callTypeIcon = callType === 'audio' ? '🎙️' : '📹';
       const callTypeLabel = callType === 'audio' ? 'Audio call' : 'Video call';
@@ -418,7 +421,6 @@ export default function PersonalChat() {
           replyTo: replyData
         });
         
-        // 🔥 Push notification পাঠান
         try {
           const receiverDoc = await getDoc(doc(db, "users", targetUid));
           if (receiverDoc.exists()) {
@@ -746,6 +748,7 @@ export default function PersonalChat() {
     if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach(track => track.stop()); remoteStreamRef.current = null; }
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null; // ✅ audio fix
     clearActiveCallSession();
   };
 
@@ -758,7 +761,6 @@ export default function PersonalChat() {
       setActiveCallType(existing.callType);
       setInCall(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatRoomId]);
 
   useEffect(() => {
@@ -769,24 +771,27 @@ export default function PersonalChat() {
         remoteStreamRef.current = null;
         if (localVideoRef.current) localVideoRef.current.srcObject = null;
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+        if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null; // ✅ audio fix
         setInCall(false);
         setActiveCallType('video');
       }
     });
     return unsubscribe;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatRoomId]);
 
   useEffect(() => {
     if (inCall) {
       if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current;
       if (remoteVideoRef.current && remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      if (remoteAudioRef.current && remoteStreamRef.current) remoteAudioRef.current.srcObject = remoteStreamRef.current; // ✅ audio fix
     }
   }, [inCall]);
 
   const initiateCall = async (callType = 'video') => {
     try {
       cleanupCallLocally();
+      callHistorySavedRef.current = false; // ✅ reset flag
+      
       const pc = new RTCPeerConnection(rtcConfiguration);
       peerConnectionRef.current = pc;
       registerPeerConnectionListeners(pc);
@@ -826,7 +831,6 @@ export default function PersonalChat() {
         offer: { type: offer.type, sdp: offer.sdp }
       });
 
-      // 🔥 Call push notification পাঠান
       try {
         const receiverDoc = await getDoc(doc(db, "users", targetUid));
         if (receiverDoc.exists()) {
@@ -897,6 +901,8 @@ export default function PersonalChat() {
   const answerIncomingCall = async () => {
     try {
       cleanupCallLocally();
+      callHistorySavedRef.current = false; // ✅ reset flag
+      
       const callRef = doc(db, "personal-connections", chatRoomId);
       const callSnap = await getDoc(callRef);
       if (!callSnap.exists() || !callSnap.data().offer) {
@@ -1117,6 +1123,7 @@ export default function PersonalChat() {
 
       {inCall ? (
         <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+          <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
           <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }} />
           {activeCallType === 'audio' && (
             <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', color: '#fff', background: '#111' }}>

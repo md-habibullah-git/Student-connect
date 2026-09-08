@@ -9,7 +9,7 @@ import {
   serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where, Timestamp 
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
-import { sendPushNotification } from '../pushNotifications'; // ✅ নতুন import
+import { sendPushNotification } from '../pushNotifications';
 
 const rtcConfiguration = {
   iceServers: [
@@ -26,17 +26,26 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
+// ✅ Video Tile-এ Audio element যোগ করা হয়েছে
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
+  const audioRef = useRef(null); // ✅ নতুন — audio fix
+
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
       videoRef.current.play().catch(() => {});
     }
+    if (audioRef.current) {
+      audioRef.current.srcObject = stream;
+      audioRef.current.play().catch(() => {});
+    }
   }, [stream]);
+
   return (
     <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
       <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} /> {/* ✅ নতুন */}
       <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
     </div>
   );
@@ -125,7 +134,6 @@ function VoiceMessageBubble({ src, isMe }) {
         audioCtxRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setupAnalyser = () => {
@@ -174,7 +182,6 @@ function VoiceMessageBubble({ src, isMe }) {
       audioEl.removeEventListener('loadedmetadata', onLoaded);
       audioEl.removeEventListener('timeupdate', onTimeUpdate);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const formatTime = (secs) => {
@@ -286,7 +293,6 @@ export default function GlobalChat() {
       if (inCallRef.current) leaveGlobalCall();
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUid]);
 
   useEffect(() => { inCallRef.current = inCall; }, [inCall]);
@@ -305,7 +311,6 @@ export default function GlobalChat() {
       handleRejoinCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state, showRejoinBtn]);
 
   useEffect(() => {
@@ -351,7 +356,6 @@ export default function GlobalChat() {
       unsubscribeMessages(); unsubscribeUsers(); unsubscribeCall();
       window.removeEventListener('click', handleOutsideClick);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUid, inCall]);
 
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
@@ -603,7 +607,6 @@ export default function GlobalChat() {
       setRemoteStreams({ ...existing.remoteStreams });
       setInCall(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -789,7 +792,6 @@ export default function GlobalChat() {
       s.knownPeers = currentSet;
     });
     return () => unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inCall]);
 
   const initiateGlobalCall = async (callType = 'video') => {
@@ -829,7 +831,6 @@ export default function GlobalChat() {
         }
       });
 
-      // 🔥 সব approved users-কে push notification পাঠান
       try {
         const usersSnapshot = await getDocs(query(collection(db, "users"), where("approved", "==", true)));
         const pushPromises = usersSnapshot.docs
