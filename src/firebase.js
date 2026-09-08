@@ -2,9 +2,9 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
-import { getMessaging, getToken } from "firebase/messaging"; // ✅ FCM Messaging import
+import { getMessaging, getToken } from "firebase/messaging";
+import { Capacitor } from '@capacitor/core';
 
-// Your actual Firebase configuration keys
 const firebaseConfig = {
   apiKey: "AIzaSyB_kkFWUwfTzjBZsc6V9ui2dE4qHrMp9nY",
   authDomain: "student-connect-ffa4a.firebaseapp.com",
@@ -18,23 +18,36 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const storage = getStorage(app); // পোস্টের ভিডিওর জন্য — Firestore-এর ১MB ডকুমেন্ট লিমিট এড়াতে
-export const messaging = getMessaging(app); // ✅ FCM Messaging export
+export const storage = getStorage(app);
+
+// ✅ FCM Messaging — শুধু Web-এর জন্য
+let messaging = null;
+try {
+  if (!Capacitor.isNativePlatform()) {
+    messaging = getMessaging(app);
+  }
+} catch (err) {
+  console.log('FCM Messaging not available on native');
+}
+export { messaging };
 
 // ✅ VAPID Key — Firebase Console থেকে generate করা
 const VAPID_KEY = "BOtoloi6y3lWsPJzu0LYjrAkzwJuRxCo-ni4U0MU3BdUa2wdxbyJX34HdXYbbHsH_gd5QCd9weG-CNNAxudU5Og";
 
-// ✅ FCM Token পাওয়ার ফাংশন
+// ✅ FCM Token — শুধু Web-এর জন্য
 export async function getFCMToken() {
   try {
-    const currentToken = await getToken(messaging, { vapidKey: VAPID_KEY });
-    if (currentToken) {
-      console.log('✅ FCM Token:', currentToken);
-      return currentToken;
-    } else {
-      console.log('❌ No FCM Token available');
+    if (Capacitor.isNativePlatform()) {
+      console.log('🔔 Native platform — use Capacitor Push token instead');
       return null;
     }
+    
+    const currentToken = await getToken(messaging, { vapidKey: VAPID_KEY });
+    if (currentToken) {
+      console.log('✅ Web FCM Token:', currentToken);
+      return currentToken;
+    }
+    return null;
   } catch (err) {
     console.error('❌ FCM Token error:', err);
     return null;

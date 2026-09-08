@@ -1,124 +1,171 @@
-// File Name: src/pushNotifications.js
-
 import { PushNotifications } from '@capacitor/push-notifications';
 import { Capacitor } from '@capacitor/core';
-import { db, auth, getFCMToken } from './firebase';
+import { db, auth, getFCMToken, messaging } from './firebase';
 import { doc, updateDoc } from 'firebase/firestore';
+import { getToken, onMessage } from 'firebase/messaging';
 
 export async function initPushNotifications() {
-  // ✅ Debug log
   console.log('🔔 initPushNotifications called');
   console.log('🔔 Is Native Platform:', Capacitor.isNativePlatform());
   
-  if (!Capacitor.isNativePlatform()) {
-    console.log('🔔 Not native platform, returning');
-    return;
-  }
-  
   try {
-    console.log('🔔 Creating notification channels...');
+    // ✅ Native Android Notification Channels
+    if (Capacitor.isNativePlatform()) {
+      console.log('🔔 Creating notification channels...');
+      
+      await PushNotifications.createChannel({
+        id: 'call_channel',
+        name: 'Call Notifications',
+        description: 'Incoming call notifications',
+        importance: 5,
+        visibility: 1,
+        sound: 'default',
+        vibration: true,
+      });
+      
+      await PushNotifications.createChannel({
+        id: 'message_channel',
+        name: 'Message Notifications',
+        description: 'New message notifications',
+        importance: 4,
+        visibility: 1,
+        sound: 'default',
+        vibration: true,
+      });
+    }
     
-    // Android Notification Channels
-    await PushNotifications.createChannel({
-      id: 'call_channel',
-      name: 'Call Notifications',
-      description: 'Incoming call notifications',
-      importance: 5,
-      visibility: 1,
-      sound: 'default',
-      vibration: true,
-    });
+    // ✅ Web Notification Permission
+    if (!Capacitor.isNativePlatform()) {
+      console.log('🔔 Web platform — requesting notification permission...');
+      if ('Notification' in window && Notification.permission === 'default') {
+        await Notification.requestPermission();
+      }
+    }
     
-    await PushNotifications.createChannel({
-      id: 'message_channel',
-      name: 'Message Notifications',
-      description: 'New message notifications',
-      importance: 4,
-      visibility: 1,
-      sound: 'default',
-      vibration: true,
-    });
-
-    console.log('🔔 Requesting permissions...');
+    console.log('🔔 Requesting push permissions...');
     const permStatus = await PushNotifications.requestPermissions();
     console.log('🔔 Permission status:', JSON.stringify(permStatus));
     
     if (permStatus.receive === 'granted') {
       console.log('🔔 Permission granted, registering...');
-      await PushNotifications.register();
       
-      // ✅ FCM Token নিন এবং Firestore-এ save করুন
-      const fcmToken = await getFCMToken();
-      console.log('🔔 FCM Token:', fcmToken);
-      
-      if (fcmToken && auth.currentUser) {
-        const currentUid = auth.currentUser.uid;
-        await updateDoc(doc(db, "users", currentUid), {
-          pushToken: fcmToken,
-          pushTokenUpdatedAt: new Date().getTime(),
-        });
-        console.log('✅ FCM Token saved to Firestore!');
+      if (Capacitor.isNativePlatform()) {
+        await PushNotifications.register();
       }
       
-      PushNotifications.addListener('registration', async (token) => {
-        console.log('🔔 Push token received:', token.value);
+      // ✅ Token save function — দুটো platform-ই handle করবে
+      const saveToken = async (token) => {
         const currentUid = auth.currentUser?.uid;
-        console.log('🔔 Current UID:', currentUid);
-        if (currentUid) {
+        if (currentUid && token) {
           try {
             await updateDoc(doc(db, "users", currentUid), {
-              pushToken: token.value,
+              pushToken: token,
               pushTokenUpdatedAt: new Date().getTime(),
+              pushTokenPlatform: Capacitor.getPlatform(),
             });
-            console.log('🔔 Push token saved to Firestore!');
+            console.log('✅ Push token saved to Firestore!');
           } catch (saveErr) {
             console.error('🔔 Error saving push token:', saveErr);
           }
         }
-      });
+      };
       
-      PushNotifications.addListener('registrationError', (err) => {
-        console.error('🔔 Registration error:', err);
-      });
+      // ✅ Native: Capacitor Push Token listener
+      if (Capacitor.isNativePlatform()) {
+        PushNotifications.addListener('registration', async (token) => {
+          console.log('🔔 Native push token received:', token.value);
+          await saveToken(token.value);
+        });
+        
+        PushNotifications.addListener('registrationError', (err) => {
+          console.error('🔔 Registration error:', err);
+        });
+      }
       
-      // ✅ Foreground notification handler
-      PushNotifications.addListener('pushNotificationReceived', (notification) => {
-        console.log('🔔 Notification received:', notification);
+      // ✅ Web: FCM Token generate করুন
+      if (!Capacitor.isNativePlatform() && messaging) {
+        const vapidKey = "BOtoloi6y3lWsPJzu0LYjrAkzwJuRxCo-ni4U0MU3BdUa2wdxbyJX34HdXYbbHsH_gd5QCd9weG-CNNAxudU5Og";
         
-        const data = notification.data || {};
-        
-        if (data.type === 'incoming_call') {
-          const ringtoneEvent = new CustomEvent('incoming-call', {
-            detail: {
-              type: 'personal',
-              roomId: data.roomId,
-              callerName: data.callerName || 'Student',
-              callType: data.callType || 'audio'
-            }
-          });
-          window.dispatchEvent(ringtoneEvent);
+        try {
+          const webToken = await getToken(messaging, { vapidKey });
+          if (webToken) {
+            console.log('🔔 Web FCM token received:', webToken);
+            await saveToken(webToken);
+          }
+        } catch (err) {
+          console.error('🔔 Web token error:', err);
         }
         
-        if (data.type === 'global_call') {
-          const ringtoneEvent = new CustomEvent('incoming-call', {
-            detail: {
-              type: 'global',
-              callerName: data.callerName || 'Student'
-            }
-          });
-          window.dispatchEvent(ringtoneEvent);
-        }
-      });
+        // ✅ Web foreground message handler
+        onMessage(messaging, (payload) => {
+          console.log('🔔 Web foreground notification received:', payload);
+          
+          const data = payload.data || {};
+          
+          if (data.type === 'incoming_call') {
+            const ringtoneEvent = new CustomEvent('incoming-call', {
+              detail: {
+                type: 'personal',
+                roomId: data.roomId,
+                callerName: data.callerName || 'Student',
+                callType: data.callType || 'audio'
+              }
+            });
+            window.dispatchEvent(ringtoneEvent);
+          }
+          
+          if (data.type === 'global_call') {
+            const ringtoneEvent = new CustomEvent('incoming-call', {
+              detail: {
+                type: 'global',
+                callerName: data.callerName || 'Student'
+              }
+            });
+            window.dispatchEvent(ringtoneEvent);
+          }
+        });
+      }
       
-      PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
-        const data = notification.notification.data;
-        if (data && data.type === 'incoming_call' && data.roomId) {
-          window.location.href = `/chat/${data.roomId}/${encodeURIComponent(data.callerName || 'Student')}`;
-        }
-        if (data && data.type === 'global_call') {
-          window.location.href = '/chat/global/Global-Chatroom';
-        }
-      });
+      // ✅ Native foreground notification handler
+      if (Capacitor.isNativePlatform()) {
+        PushNotifications.addListener('pushNotificationReceived', (notification) => {
+          console.log('🔔 Native notification received:', notification);
+          
+          const data = notification.data || {};
+          
+          if (data.type === 'incoming_call') {
+            const ringtoneEvent = new CustomEvent('incoming-call', {
+              detail: {
+                type: 'personal',
+                roomId: data.roomId,
+                callerName: data.callerName || 'Student',
+                callType: data.callType || 'audio'
+              }
+            });
+            window.dispatchEvent(ringtoneEvent);
+          }
+          
+          if (data.type === 'global_call') {
+            const ringtoneEvent = new CustomEvent('incoming-call', {
+              detail: {
+                type: 'global',
+                callerName: data.callerName || 'Student'
+              }
+            });
+            window.dispatchEvent(ringtoneEvent);
+          }
+        });
+        
+        PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
+          const data = notification.notification.data;
+          if (data && data.type === 'incoming_call' && data.roomId) {
+            window.location.href = `/chat/${data.roomId}/${encodeURIComponent(data.callerName || 'Student')}`;
+          }
+          if (data && data.type === 'global_call') {
+            window.location.href = '/chat/global/Global-Chatroom';
+          }
+        });
+      }
     } else {
       console.log('🔔 Permission denied');
     }
