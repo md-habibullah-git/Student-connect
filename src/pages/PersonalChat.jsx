@@ -26,6 +26,27 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
+// ✅ Audio Volume Boost Helper
+const createBoostedAudio = (stream, boostLevel = 10) => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const gainNode = audioCtx.createGain();
+    
+    // Gain boost — 10x default
+    gainNode.gain.value = boostLevel;
+    
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
+    return audioCtx;
+  } catch (err) {
+    console.error('Volume boost error:', err);
+    return null;
+  }
+};
+
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -187,6 +208,7 @@ export default function PersonalChat() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const remoteAudioCtxRef = useRef(null); // ✅ Audio boost
   const peerConnectionRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
@@ -744,6 +766,7 @@ export default function PersonalChat() {
   const cleanupCallLocally = () => {
     if (unsubscribeCallSignalRef.current) { unsubscribeCallSignalRef.current(); unsubscribeCallSignalRef.current = null; }
     if (unsubscribeCandidatesRef.current) { unsubscribeCandidatesRef.current(); unsubscribeCandidatesRef.current = null; }
+    if (remoteAudioCtxRef.current) { remoteAudioCtxRef.current.close().catch(() => {}); remoteAudioCtxRef.current = null; } // ✅ audio boost cleanup
     if (peerConnectionRef.current) { peerConnectionRef.current.close(); peerConnectionRef.current = null; }
     if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
     if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach(track => track.stop()); remoteStreamRef.current = null; }
@@ -784,7 +807,15 @@ export default function PersonalChat() {
     if (inCall) {
       if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current;
       if (remoteVideoRef.current && remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
-      if (remoteAudioRef.current && remoteStreamRef.current) remoteAudioRef.current.srcObject = remoteStreamRef.current;
+      if (remoteAudioRef.current && remoteStreamRef.current) {
+        remoteAudioRef.current.srcObject = remoteStreamRef.current;
+        remoteAudioRef.current.play().catch(() => {});
+        
+        // ✅ Audio Volume Boost — Web Audio API
+        if (!remoteAudioCtxRef.current) {
+          remoteAudioCtxRef.current = createBoostedAudio(remoteStreamRef.current, 10);
+        }
+      }
     }
   }, [inCall]);
 
@@ -865,13 +896,11 @@ export default function PersonalChat() {
           }
         }
         if (data.status === 'ended') {
-          // ✅ Caller save করবে না
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
         }
         if (data.status === 'missed') {
-          // ✅ Caller save করবে না
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
@@ -997,7 +1026,7 @@ export default function PersonalChat() {
       if (callSnap.exists()) {
         const callData = callSnap.data();
         const wasAnswered = callData.answer ? true : false;
-        const isCaller = callData.hostId === currentUid; // ✅ কে caller
+        const isCaller = callData.hostId === currentUid;
         
         const [callerCandidates, calleeCandidates] = await Promise.all([
           getDocs(collection(callRef, "callerCandidates")),
@@ -1009,13 +1038,11 @@ export default function PersonalChat() {
         ]);
         
         if (wasAnswered) {
-          // ✅ শুধু Receiver save করবে
           if (!isCaller) {
             await saveCallHistory(callType, startedAt, endedAt, false);
           }
           await updateDoc(callRef, { status: "ended" }).catch(() => {});
         } else {
-          // ✅ Missed call — Receiver save করবে
           if (!isCaller) {
             await saveCallHistory(callType, startedAt, endedAt, true);
           }
