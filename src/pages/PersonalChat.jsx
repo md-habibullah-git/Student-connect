@@ -194,7 +194,7 @@ export default function PersonalChat() {
   const unsubscribeCandidatesRef = useRef(null);
   const callStartTimeRef = useRef(null);
   const callHistorySavedRef = useRef(false);
-  const callAnsweredTimeRef = useRef(null); // ✅ নতুন — কবে answer হয়েছিল
+  const callAnsweredTimeRef = useRef(null);
 
   const initialMessagesLoadedRef = useRef(false);
 
@@ -339,7 +339,6 @@ export default function PersonalChat() {
     scrollToBottom();
   }, [messages]);
 
-  // ✅ Fixed — call history save করে শুধু একবার, answer হওয়ার পর থেকে duration count হয়
   const saveCallHistory = async (callType, startedAt, endedAt, wasMissed = false) => {
     if (callHistorySavedRef.current) return;
     callHistorySavedRef.current = true;
@@ -352,7 +351,6 @@ export default function PersonalChat() {
       if (wasMissed) {
         callSummaryText = `❌ You missed a ${callTypeLabel.toLowerCase()} • ${formatTimeDisplay(startedAt)}`;
       } else {
-        // ✅ কল কবে answer হয়েছিল — সেই সময় থেকে duration count হবে
         const answerTime = callAnsweredTimeRef.current || startedAt;
         const duration = endedAt - answerTime;
         callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(answerTime)} - ${formatTimeDisplay(endedAt)}\n📞 Call • ${formatDuration(duration)} min`;
@@ -793,8 +791,8 @@ export default function PersonalChat() {
   const initiateCall = async (callType = 'video') => {
     try {
       cleanupCallLocally();
-      callHistorySavedRef.current = false;
-      callAnsweredTimeRef.current = null; // ✅ reset
+      callHistorySavedRef.current = true; // ✅ Caller save করবে না
+      callAnsweredTimeRef.current = null;
       
       const pc = new RTCPeerConnection(rtcConfiguration);
       peerConnectionRef.current = pc;
@@ -862,21 +860,18 @@ export default function PersonalChat() {
         }
         if (data.answer && pc.signalingState !== 'closed' && !pc.currentRemoteDescription) {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-          // ✅ Answer পেলে callAnsweredTimeRef set করুন
           if (!callAnsweredTimeRef.current) {
             callAnsweredTimeRef.current = new Date().getTime();
           }
         }
         if (data.status === 'ended') {
-          const endedAt = new Date().getTime();
-          await saveCallHistory(callType, startedAt, endedAt, false);
+          // ✅ Caller save করবে না
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
         }
         if (data.status === 'missed') {
-          const endedAt = new Date().getTime();
-          await saveCallHistory(callType, startedAt, endedAt, true);
+          // ✅ Caller save করবে না
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
@@ -909,8 +904,8 @@ export default function PersonalChat() {
   const answerIncomingCall = async () => {
     try {
       cleanupCallLocally();
-      callHistorySavedRef.current = false;
-      callAnsweredTimeRef.current = null; // ✅ reset
+      callHistorySavedRef.current = false; // ✅ Receiver save করবে
+      callAnsweredTimeRef.current = null;
       
       const callRef = doc(db, "personal-connections", chatRoomId);
       const callSnap = await getDoc(callRef);
@@ -945,7 +940,6 @@ export default function PersonalChat() {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      // ✅ Answer করার সময় set করুন
       callAnsweredTimeRef.current = new Date().getTime();
 
       await updateDoc(callRef, {
@@ -971,7 +965,7 @@ export default function PersonalChat() {
         }
         if (snap.data()?.status === 'ended') {
           const endedAt = new Date().getTime();
-          saveCallHistory(callType, startedAt, endedAt, false);
+          saveCallHistory(callType, startedAt, endedAt, false); // ✅ Receiver save করবে
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
@@ -1003,6 +997,7 @@ export default function PersonalChat() {
       if (callSnap.exists()) {
         const callData = callSnap.data();
         const wasAnswered = callData.answer ? true : false;
+        const isCaller = callData.hostId === currentUid; // ✅ কে caller
         
         const [callerCandidates, calleeCandidates] = await Promise.all([
           getDocs(collection(callRef, "callerCandidates")),
@@ -1014,10 +1009,16 @@ export default function PersonalChat() {
         ]);
         
         if (wasAnswered) {
-          await saveCallHistory(callType, startedAt, endedAt, false);
+          // ✅ শুধু Receiver save করবে
+          if (!isCaller) {
+            await saveCallHistory(callType, startedAt, endedAt, false);
+          }
           await updateDoc(callRef, { status: "ended" }).catch(() => {});
         } else {
-          await saveCallHistory(callType, startedAt, endedAt, true);
+          // ✅ Missed call — Receiver save করবে
+          if (!isCaller) {
+            await saveCallHistory(callType, startedAt, endedAt, true);
+          }
           await updateDoc(callRef, { status: "missed", answer: false }).catch(() => {});
         }
         
