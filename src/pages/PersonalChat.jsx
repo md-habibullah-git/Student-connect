@@ -60,6 +60,23 @@ const createBoostedAudioFromElement = (audioElement, boostLevel = 10) => {
   }
 };
 
+// ✅ Recording Boost Helper — Microphone stream boost
+const createRecordingBoost = (stream, boostLevel = 10) => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = boostLevel;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    return audioCtx;
+  } catch (err) {
+    console.error('Recording boost error:', err);
+    return null;
+  }
+};
+
 // ✅ VoiceMessageBubble — এখন voice message-এর audio boost হবে
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
@@ -216,6 +233,7 @@ export default function PersonalChat() {
   const recordingCanvasRef = useRef(null);
   const recordingAnalyserRef = useRef(null);
   const recordingAudioCtxRef = useRef(null);
+  const recordingBoostCtxRef = useRef(null); // ✅ Recording boost context
   const recordingRafRef = useRef(null);
 
   const [receiverOnline, setReceiverOnline] = useState(false);
@@ -665,6 +683,13 @@ export default function PersonalChat() {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      // ✅ Recording-এর সময় Audio Boost — অন্য জনের voice message জোরে শোনাবে
+      try {
+        recordingBoostCtxRef.current = createRecordingBoost(stream, 10);
+      } catch (boostErr) {
+        console.error('Recording boost error:', boostErr);
+      }
 
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -694,6 +719,10 @@ export default function PersonalChat() {
       recorder.onstop = () => {
         stream.getTracks().forEach(track => track.stop());
         stopRecordingVisualizer();
+        if (recordingBoostCtxRef.current) {
+          recordingBoostCtxRef.current.close().catch(() => {});
+          recordingBoostCtxRef.current = null;
+        }
         clearTimeout(maxDurationTimeoutRef.current);
 
         if (discardRecordingRef.current) {
