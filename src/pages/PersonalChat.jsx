@@ -187,7 +187,7 @@ export default function PersonalChat() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
-  const remoteAudioCtxRef = useRef(null); // ✅ audio boost
+  const remoteAudioCtxRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
@@ -790,14 +790,13 @@ export default function PersonalChat() {
         remoteAudioRef.current.srcObject = remoteStreamRef.current;
         remoteAudioRef.current.play().catch(() => {});
         
-        // ✅ Audio Volume Boost — Web Audio API 15x
         if (!remoteAudioCtxRef.current) {
           try {
             const AudioContextClass = window.AudioContext || window.webkitAudioContext;
             const audioCtx = new AudioContextClass();
             const source = audioCtx.createMediaStreamSource(remoteStreamRef.current);
             const gainNode = audioCtx.createGain();
-            gainNode.gain.value = 15.0; // ✅ 15x boost
+            gainNode.gain.value = 10.0; // ✅ 10x boost
             source.connect(gainNode);
             gainNode.connect(audioCtx.destination);
             remoteAudioCtxRef.current = audioCtx;
@@ -1033,9 +1032,8 @@ export default function PersonalChat() {
           }
           await updateDoc(callRef, { status: "ended" }).catch(() => {});
         } else {
-          if (!isCaller) {
-            await saveCallHistory(callType, startedAt, endedAt, true);
-          }
+          // ✅ Missed call — দুজনেই save করবে
+          await saveCallHistory(callType, startedAt, endedAt, true);
           await updateDoc(callRef, { status: "missed", answer: false }).catch(() => {});
         }
         
