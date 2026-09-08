@@ -26,27 +26,6 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// ✅ Audio Volume Boost Helper
-const createBoostedAudio = (stream, boostLevel = 10) => {
-  try {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    const audioCtx = new AudioContextClass();
-    const source = audioCtx.createMediaStreamSource(stream);
-    const gainNode = audioCtx.createGain();
-    
-    // Gain boost — 10x default
-    gainNode.gain.value = boostLevel;
-    
-    source.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    
-    return audioCtx;
-  } catch (err) {
-    console.error('Volume boost error:', err);
-    return null;
-  }
-};
-
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -208,7 +187,7 @@ export default function PersonalChat() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
-  const remoteAudioCtxRef = useRef(null); // ✅ Audio boost
+  const remoteAudioCtxRef = useRef(null); // ✅ audio boost
   const peerConnectionRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
@@ -766,7 +745,7 @@ export default function PersonalChat() {
   const cleanupCallLocally = () => {
     if (unsubscribeCallSignalRef.current) { unsubscribeCallSignalRef.current(); unsubscribeCallSignalRef.current = null; }
     if (unsubscribeCandidatesRef.current) { unsubscribeCandidatesRef.current(); unsubscribeCandidatesRef.current = null; }
-    if (remoteAudioCtxRef.current) { remoteAudioCtxRef.current.close().catch(() => {}); remoteAudioCtxRef.current = null; } // ✅ audio boost cleanup
+    if (remoteAudioCtxRef.current) { remoteAudioCtxRef.current.close().catch(() => {}); remoteAudioCtxRef.current = null; }
     if (peerConnectionRef.current) { peerConnectionRef.current.close(); peerConnectionRef.current = null; }
     if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
     if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach(track => track.stop()); remoteStreamRef.current = null; }
@@ -811,9 +790,20 @@ export default function PersonalChat() {
         remoteAudioRef.current.srcObject = remoteStreamRef.current;
         remoteAudioRef.current.play().catch(() => {});
         
-        // ✅ Audio Volume Boost — Web Audio API
+        // ✅ Audio Volume Boost — Web Audio API 15x
         if (!remoteAudioCtxRef.current) {
-          remoteAudioCtxRef.current = createBoostedAudio(remoteStreamRef.current, 10);
+          try {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            const audioCtx = new AudioContextClass();
+            const source = audioCtx.createMediaStreamSource(remoteStreamRef.current);
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = 15.0; // ✅ 15x boost
+            source.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            remoteAudioCtxRef.current = audioCtx;
+          } catch (err) {
+            console.error('Volume boost error:', err);
+          }
         }
       }
     }
@@ -822,7 +812,7 @@ export default function PersonalChat() {
   const initiateCall = async (callType = 'video') => {
     try {
       cleanupCallLocally();
-      callHistorySavedRef.current = true; // ✅ Caller save করবে না
+      callHistorySavedRef.current = true;
       callAnsweredTimeRef.current = null;
       
       const pc = new RTCPeerConnection(rtcConfiguration);
@@ -933,7 +923,7 @@ export default function PersonalChat() {
   const answerIncomingCall = async () => {
     try {
       cleanupCallLocally();
-      callHistorySavedRef.current = false; // ✅ Receiver save করবে
+      callHistorySavedRef.current = false;
       callAnsweredTimeRef.current = null;
       
       const callRef = doc(db, "personal-connections", chatRoomId);
@@ -994,7 +984,7 @@ export default function PersonalChat() {
         }
         if (snap.data()?.status === 'ended') {
           const endedAt = new Date().getTime();
-          saveCallHistory(callType, startedAt, endedAt, false); // ✅ Receiver save করবে
+          saveCallHistory(callType, startedAt, endedAt, false);
           cleanupCallLocally();
           setInCall(false);
           setActiveCallType('video');
