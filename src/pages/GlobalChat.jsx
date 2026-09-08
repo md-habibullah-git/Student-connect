@@ -26,39 +26,88 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// ✅ Video Tile-এ Audio element যোগ করা হয়েছে
+// ✅ Audio Volume Boost Helper
+const createBoostedAudio = (stream, boostLevel = 10) => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const gainNode = audioCtx.createGain();
+    
+    // Gain boost — 10x default, safe max to avoid distortion
+    gainNode.gain.value = boostLevel;
+    
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
+    return audioCtx;
+  } catch (err) {
+    console.error('Volume boost error:', err);
+    return null;
+  }
+};
+
+// ✅ Video Tile with Audio Boost
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
-  const audioRef = useRef(null); // ✅ নতুন — audio fix
+  const audioRef = useRef(null);
+  const audioCtxRef = useRef(null);
 
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
       videoRef.current.play().catch(() => {});
     }
+    
     if (audioRef.current) {
       audioRef.current.srcObject = stream;
+      audioRef.current.volume = 1.0;
       audioRef.current.play().catch(() => {});
+      
+      // ✅ Web Audio API volume boost
+      audioCtxRef.current = createBoostedAudio(stream, 10);
     }
+    
+    return () => {
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    };
   }, [stream]);
 
   return (
     <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
       <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-      <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} /> {/* ✅ নতুন */}
+      <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />
       <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
     </div>
   );
 }
 
+// ✅ Audio Tile with Boost
 function RemoteAudioTile({ stream }) {
   const audioRef = useRef(null);
+  const audioCtxRef = useRef(null);
+
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.srcObject = stream;
+      audioRef.current.volume = 1.0;
       audioRef.current.play().catch(() => {});
+      
+      // ✅ Web Audio API volume boost
+      audioCtxRef.current = createBoostedAudio(stream, 10);
     }
+    
+    return () => {
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    };
   }, [stream]);
+
   return <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />;
 }
 
