@@ -531,7 +531,7 @@ export default function PersonalChat() {
     }
   };
 
-  // ✅ UPDATED: Multiple file selection — Native + Web
+  // ✅ UPDATED: Multiple file selection — Native + Web (accept removed)
   const handleFileChange = async (e) => {
     // Native App — FilePicker with multiple select
     if (window.Capacitor?.isNativePlatform?.()) {
@@ -539,11 +539,10 @@ export default function PersonalChat() {
         const result = await FilePicker.pickFiles({
           types: ['image/*', 'video/*'],
           readData: true,
-          multiple: true, // ✅ Multiple select enable
+          multiple: true,
         });
         
         if (result && result.files && result.files.length > 0) {
-          // ✅ Multiple files loop
           for (const pickedFile of result.files) {
             let blob = null;
             const fileType = pickedFile.mimeType || 'image/jpeg';
@@ -606,7 +605,7 @@ export default function PersonalChat() {
       return;
     }
     
-    // Web — File input (multiple already supported)
+    // Web — File input (multiple + no accept = File Manager & Gallery)
     if (!e.target.files || e.target.files.length === 0) return;
     const filesArray = Array.from(e.target.files);
 
