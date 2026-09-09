@@ -531,9 +531,9 @@ export default function PersonalChat() {
     }
   };
 
-  // ✅ UPDATED: Multiple file selection — Native + Web (accept removed)
+  // ✅ File selection — Home.jsx-এর মতোই (Native + Web)
   const handleFileChange = async (e) => {
-    // Native App — FilePicker with multiple select
+    // Native App — FilePicker
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
         const result = await FilePicker.pickFiles({
@@ -605,7 +605,7 @@ export default function PersonalChat() {
       return;
     }
     
-    // Web — File input (multiple + no accept = File Manager & Gallery)
+    // Web — File input (Home.jsx-এর মতো, accept ছাড়া)
     if (!e.target.files || e.target.files.length === 0) return;
     const filesArray = Array.from(e.target.files);
 
