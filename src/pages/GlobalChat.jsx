@@ -60,23 +60,6 @@ const createBoostedAudioFromElement = (audioElement, boostLevel = 10) => {
   }
 };
 
-// ✅ Recording Boost Helper — Microphone stream boost
-const createRecordingBoost = (stream, boostLevel = 10) => {
-  try {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    const audioCtx = new AudioContextClass();
-    const source = audioCtx.createMediaStreamSource(stream);
-    const gainNode = audioCtx.createGain();
-    gainNode.gain.value = boostLevel;
-    source.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    return audioCtx;
-  } catch (err) {
-    console.error('Recording boost error:', err);
-    return null;
-  }
-};
-
 // ✅ Video Tile with Audio Boost
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
@@ -151,7 +134,7 @@ function LocalAudioTile({ stream }) {
   return <audio ref={audioRef} autoPlay playsInline muted style={{ display: 'none' }} />;
 }
 
-// ✅ VoiceMessageBubble — Voice message-এর audio boost
+// ✅ VoiceMessageBubble — Play button-এ click করলে boost হবে
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -214,31 +197,28 @@ function VoiceMessageBubble({ src, isMe }) {
     };
   }, []);
 
-  // ✅ Boosted Audio Setup — Voice Message Volume Boost
-  const setupBoostedAudio = () => {
-    if (audioCtxRef.current) return;
-    try {
-      const audioCtx = createBoostedAudioFromElement(audioRef.current, 10);
-      if (audioCtx) {
-        audioCtxRef.current = audioCtx;
-      }
-    } catch (err) {
-      console.error('Setup boosted audio error:', err);
-    }
-  };
-
+  // ✅ Play button-এ click করলে boost setup হবে
   const togglePlay = () => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
     
-    setupBoostedAudio();
+    // ✅ Boost setup — প্রথমবার click-এ AudioContext তৈরি হবে
+    if (!audioCtxRef.current) {
+      const audioCtx = createBoostedAudioFromElement(audioEl, 10);
+      if (audioCtx) {
+        audioCtxRef.current = audioCtx;
+      }
+    }
     
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume();
     }
     
-    if (isPlaying) audioEl.pause();
-    else audioEl.play();
+    if (isPlaying) {
+      audioEl.pause();
+    } else {
+      audioEl.play();
+    }
   };
 
   useEffect(() => {
@@ -307,7 +287,6 @@ export default function GlobalChat() {
   const recordingCanvasRef = useRef(null);
   const recordingAnalyserRef = useRef(null);
   const recordingAudioCtxRef = useRef(null);
-  const recordingBoostCtxRef = useRef(null); // ✅ Recording boost context
   const recordingRafRef = useRef(null);
 
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
@@ -591,21 +570,7 @@ export default function GlobalChat() {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      // ✅ Recording-এর সময় Audio Boost — অন্য জনের voice message জোরে শোনাবে
-      try {
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        const audioCtx = new AudioContextClass();
-        const source = audioCtx.createMediaStreamSource(stream);
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.value = 10.0; // ✅ 10x boost
-        source.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-        recordingBoostCtxRef.current = audioCtx; // ✅ save for cleanup
-      } catch (boostErr) {
-        console.error('Recording boost error:', boostErr);
-      }
-      
+
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContextClass();
@@ -634,10 +599,6 @@ export default function GlobalChat() {
       recorder.onstop = () => {
         stream.getTracks().forEach(track => track.stop());
         stopRecordingVisualizer();
-        if (recordingBoostCtxRef.current) {
-          recordingBoostCtxRef.current.close().catch(() => {});
-          recordingBoostCtxRef.current = null;
-        }
         clearTimeout(maxDurationTimeoutRef.current);
         if (discardRecordingRef.current) { audioChunksRef.current = []; return; }
         const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
