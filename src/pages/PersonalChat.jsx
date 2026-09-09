@@ -10,7 +10,7 @@ import {
 } from 'firebase/firestore';
 import { getActiveCallSession, setActiveCallSession, clearActiveCallSession, subscribeActiveCallSession } from '../callSession';
 import { sendPushNotification, sendCallNotification } from '../pushNotifications';
-import { FilePicker } from '@capawesome/capacitor-file-picker'; // ✅ নতুন import
+import { FilePicker } from '@capawesome/capacitor-file-picker';
 
 const rtcConfiguration = {
   iceServers: [
@@ -531,70 +531,73 @@ export default function PersonalChat() {
     }
   };
 
-  // ✅ UPDATED: File selection — Native + Web উভয় support
+  // ✅ UPDATED: Multiple file selection — Native + Web
   const handleFileChange = async (e) => {
-    // Native App — FilePicker
+    // Native App — FilePicker with multiple select
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
         const result = await FilePicker.pickFiles({
           types: ['image/*', 'video/*'],
           readData: true,
+          multiple: true, // ✅ Multiple select enable
         });
         
         if (result && result.files && result.files.length > 0) {
-          const pickedFile = result.files[0];
-          let blob = null;
-          const fileType = pickedFile.mimeType || 'image/jpeg';
-          const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
-          
-          if (pickedFile.data) {
-            const base64Data = pickedFile.data.replace(/^data:.*;base64,/, '');
-            const byteCharacters = atob(base64Data);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-              byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
-            const byteArray = new Uint8Array(byteNumbers);
-            blob = new Blob([byteArray], { type: fileType });
-          }
-          
-          if (!blob) return;
-          
-          const file = new File([blob], fileName, { type: fileType });
-          
-          if (fileType.startsWith('image/')) {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-              const img = new Image();
-              img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const max_width = 800;
-                const scaleResolution = max_width / img.width;
-                canvas.width = max_width;
-                canvas.height = img.height * scaleResolution;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
-                setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: compressedBase64, type: 'image' }]);
-              };
-              img.src = event.target.result;
-            };
-            reader.readAsDataURL(file);
-          } else if (fileType.startsWith('video/')) {
-            if (file.size > MAX_VIDEO_RAW_BYTES) {
-              alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`);
-              return;
-            }
-            const reader = new FileReader();
-            reader.onload = (event) => {
-              const base64Result = event.target.result;
-              if (base64Result.length > MAX_VIDEO_BASE64_LENGTH) {
-                alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`);
-                return;
+          // ✅ Multiple files loop
+          for (const pickedFile of result.files) {
+            let blob = null;
+            const fileType = pickedFile.mimeType || 'image/jpeg';
+            const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
+            
+            if (pickedFile.data) {
+              const base64Data = pickedFile.data.replace(/^data:.*;base64,/, '');
+              const byteCharacters = atob(base64Data);
+              const byteNumbers = new Array(byteCharacters.length);
+              for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
               }
-              setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: base64Result, type: 'video' }]);
-            };
-            reader.readAsDataURL(file);
+              const byteArray = new Uint8Array(byteNumbers);
+              blob = new Blob([byteArray], { type: fileType });
+            }
+            
+            if (!blob) continue;
+            
+            const file = new File([blob], fileName, { type: fileType });
+            
+            if (fileType.startsWith('image/')) {
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                  const canvas = document.createElement('canvas');
+                  const max_width = 800;
+                  const scaleResolution = max_width / img.width;
+                  canvas.width = max_width;
+                  canvas.height = img.height * scaleResolution;
+                  const ctx = canvas.getContext('2d');
+                  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                  const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+                  setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: compressedBase64, type: 'image' }]);
+                };
+                img.src = event.target.result;
+              };
+              reader.readAsDataURL(file);
+            } else if (fileType.startsWith('video/')) {
+              if (file.size > MAX_VIDEO_RAW_BYTES) {
+                alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`);
+                continue;
+              }
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                const base64Result = event.target.result;
+                if (base64Result.length > MAX_VIDEO_BASE64_LENGTH) {
+                  alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`);
+                  return;
+                }
+                setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: base64Result, type: 'video' }]);
+              };
+              reader.readAsDataURL(file);
+            }
           }
         }
       } catch (err) {
@@ -603,7 +606,7 @@ export default function PersonalChat() {
       return;
     }
     
-    // Web — File input
+    // Web — File input (multiple already supported)
     if (!e.target.files || e.target.files.length === 0) return;
     const filesArray = Array.from(e.target.files);
 
@@ -740,7 +743,6 @@ export default function PersonalChat() {
         }
       });
 
-      // ✅ Visualizer — analyser connect কিন্তু speaker-এ NOT connect (feedback prevent)
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContextClass();
@@ -748,7 +750,6 @@ export default function PersonalChat() {
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 64;
         source.connect(analyser);
-        // ❌ analyser.connect(audioCtx.destination); — REMOVED (feedback fix)
         recordingAudioCtxRef.current = audioCtx;
         recordingAnalyserRef.current = analyser;
         drawRecordingBars();
@@ -902,7 +903,6 @@ export default function PersonalChat() {
         remoteAudioRef.current.srcObject = remoteStreamRef.current;
         remoteAudioRef.current.play().catch(() => {});
         
-        // ✅ Audio Volume Boost — Helper function
         if (!remoteAudioCtxRef.current) {
           remoteAudioCtxRef.current = createBoostedAudio(remoteStreamRef.current, 10);
         }
