@@ -10,6 +10,7 @@ import {
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 import { sendPushNotification } from '../pushNotifications';
+import { FilePicker } from '@capawesome/capacitor-file-picker'; // ✅ নতুন import
 
 const rtcConfiguration = {
   iceServers: [
@@ -197,7 +198,6 @@ function VoiceMessageBubble({ src, isMe }) {
     };
   }, []);
 
-  // ✅ Play button-এ click করলে boost setup হবে
   const togglePlay = () => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
@@ -478,11 +478,84 @@ export default function GlobalChat() {
     }
   };
 
-  const handleFileChange = (e) => {
+  // ✅ UPDATED: File selection — Native + Web উভয় support
+  const handleFileChange = async (e) => {
+    // Native App — FilePicker
+    if (window.Capacitor?.isNativePlatform?.()) {
+      try {
+        const result = await FilePicker.pickFiles({
+          types: ['image/*', 'video/*'],
+          readData: true,
+        });
+        
+        if (result && result.files && result.files.length > 0) {
+          const pickedFile = result.files[0];
+          let blob = null;
+          const fileType = pickedFile.mimeType || 'image/jpeg';
+          const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
+          
+          if (pickedFile.data) {
+            const base64Data = pickedFile.data.replace(/^data:.*;base64,/, '');
+            const byteCharacters = atob(base64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            blob = new Blob([byteArray], { type: fileType });
+          }
+          
+          if (!blob) return;
+          
+          const file = new File([blob], fileName, { type: fileType });
+          
+          if (fileType.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const img = new Image();
+              img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const max_width = 800;
+                const scaleResolution = max_width / img.width;
+                canvas.width = max_width;
+                canvas.height = img.height * scaleResolution;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+                setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: compressedBase64, type: 'image' }]);
+              };
+              img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+          } else if (fileType.startsWith('video/')) {
+            if (file.size > MAX_VIDEO_RAW_BYTES) {
+              alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const base64Result = event.target.result;
+              if (base64Result.length > MAX_VIDEO_BASE64_LENGTH) {
+                alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`);
+                return;
+              }
+              setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: base64Result, type: 'video' }]);
+            };
+            reader.readAsDataURL(file);
+          }
+        }
+      } catch (err) {
+        console.error("File picker error:", err);
+      }
+      return;
+    }
+    
+    // Web — File input
     if (!e.target.files || e.target.files.length === 0) return;
     Array.from(e.target.files).forEach((file) => {
       const fileName = file.name;
       const fileType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'file');
+
       if (fileType === 'image') {
         const reader = new FileReader();
         reader.onload = (event) => {
@@ -507,7 +580,7 @@ export default function GlobalChat() {
         reader.readAsDataURL(file);
       } else if (fileType === 'video') { alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`); }
     });
-    e.target.value = null; 
+    e.target.value = null;
   };
 
   const removeSelectedFile = (id) => { setSelectedFiles((prev) => prev.filter(file => file.id !== id)); };
@@ -1284,7 +1357,13 @@ export default function GlobalChat() {
               </div>
             )}
 
-            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" multiple style={{ display: 'none' }} />
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileChange} 
+              multiple 
+              style={{ display: 'none' }} 
+            />
 
             {isRecording ? (
               <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #dc3545 10%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(220, 53, 69, 0.4)' }}>
@@ -1298,7 +1377,13 @@ export default function GlobalChat() {
               </div>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
-                <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
+                <button type="button" onClick={() => {
+                  if (window.Capacitor?.isNativePlatform?.()) {
+                    handleFileChange();
+                  } else {
+                    fileInputRef.current?.click();
+                  }
+                }} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
                 <button type="button" onClick={startRecording} title="Record a voice message" style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>
                   <MicIcon />
                 </button>
