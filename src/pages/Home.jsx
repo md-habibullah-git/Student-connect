@@ -740,7 +740,7 @@ export default function Home({ isAdmin }) {
                       id="file-upload-web"
                       key={fileInputKey}
                       ref={fileInputRef}
-                      type="file" 
+                      type="file"
                       onChange={handleFileChange} 
                       style={{ display: 'none' }}
                     />
