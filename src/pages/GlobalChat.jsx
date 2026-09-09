@@ -202,7 +202,6 @@ function VoiceMessageBubble({ src, isMe }) {
     const audioEl = audioRef.current;
     if (!audioEl) return;
     
-    // ✅ Boost setup — প্রথমবার click-এ AudioContext তৈরি হবে
     if (!audioCtxRef.current) {
       const audioCtx = createBoostedAudioFromElement(audioEl, 10);
       if (audioCtx) {
@@ -569,8 +568,15 @@ export default function GlobalChat() {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      });
 
+      // ✅ Visualizer — analyser connect কিন্তু speaker-এ NOT connect (feedback prevent)
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContextClass();
@@ -578,12 +584,13 @@ export default function GlobalChat() {
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 64;
         source.connect(analyser);
+        // ❌ analyser.connect(audioCtx.destination); — REMOVED (feedback fix)
         recordingAudioCtxRef.current = audioCtx;
         recordingAnalyserRef.current = analyser;
         drawRecordingBars();
       } catch (visualizerErr) {}
 
-      let recorderOptions = { audioBitsPerSecond: 32000 };
+      let recorderOptions = { audioBitsPerSecond: 128000 };
       if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
         recorderOptions.mimeType = 'audio/webm;codecs=opus';
       }
