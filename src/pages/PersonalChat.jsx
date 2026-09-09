@@ -1,15 +1,15 @@
-// File Name: src/pages/PersonalChat.jsx
+// File Name: src/pages/GlobalChat.jsx
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { isUserOnline } from '../presence';
 import { 
-  collection, addDoc, query, orderBy, onSnapshot, doc, 
-  setDoc, updateDoc, getDoc, getDocs, where, deleteDoc, serverTimestamp 
+  collection, addDoc, onSnapshot, query, orderBy, limit, 
+  serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where, Timestamp 
 } from 'firebase/firestore';
-import { getActiveCallSession, setActiveCallSession, clearActiveCallSession, subscribeActiveCallSession } from '../callSession';
-import { sendPushNotification, sendCallNotification } from '../pushNotifications';
+import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
+import { sendPushNotification } from '../pushNotifications';
 
 const rtcConfiguration = {
   iceServers: [
@@ -59,6 +59,80 @@ const createBoostedAudioFromElement = (audioElement, boostLevel = 10) => {
     return null;
   }
 };
+
+// ✅ Video Tile with Audio Boost
+function RemoteVideoTile({ stream, label }) {
+  const videoRef = useRef(null);
+  const audioRef = useRef(null);
+  const audioCtxRef = useRef(null);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(() => {});
+    }
+    
+    if (audioRef.current) {
+      audioRef.current.srcObject = stream;
+      audioRef.current.volume = 1.0;
+      audioRef.current.play().catch(() => {});
+      
+      audioCtxRef.current = createBoostedAudio(stream, 10);
+    }
+    
+    return () => {
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    };
+  }, [stream]);
+
+  return (
+    <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
+      <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />
+      <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
+    </div>
+  );
+}
+
+// ✅ Audio Tile with Boost
+function RemoteAudioTile({ stream }) {
+  const audioRef = useRef(null);
+  const audioCtxRef = useRef(null);
+
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.srcObject = stream;
+      audioRef.current.volume = 1.0;
+      audioRef.current.play().catch(() => {});
+      
+      audioCtxRef.current = createBoostedAudio(stream, 10);
+    }
+    
+    return () => {
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    };
+  }, [stream]);
+
+  return <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />;
+}
+
+function LocalAudioTile({ stream }) {
+  const audioRef = useRef(null);
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.srcObject = stream;
+      audioRef.current.muted = true;
+      audioRef.current.play().catch(() => {});
+    }
+  }, [stream]);
+  return <audio ref={audioRef} autoPlay playsInline muted style={{ display: 'none' }} />;
+}
 
 // ✅ VoiceMessageBubble — Play button-এ click করলে boost হবে
 function VoiceMessageBubble({ src, isMe }) {
@@ -128,7 +202,6 @@ function VoiceMessageBubble({ src, isMe }) {
     const audioEl = audioRef.current;
     if (!audioEl) return;
     
-    // ✅ Boost setup — প্রথমবার click-এ AudioContext তৈরি হবে
     if (!audioCtxRef.current) {
       const audioCtx = createBoostedAudioFromElement(audioEl, 10);
       if (audioCtx) {
@@ -188,18 +261,18 @@ function VoiceMessageBubble({ src, isMe }) {
   );
 }
 
-export default function PersonalChat() {
-  const { receiverId, receiverName } = useParams(); 
+export default function GlobalChat() {
   const navigate = useNavigate();
   const location = useLocation();
   const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
+  const [newMessage, setNewMessage] = useState("");
   const [usersCache, setUsersCache] = useState({}); 
-  
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
   const [activeCallType, setActiveCallType] = useState('video');
+  const [showRejoinBtn, setShowRejoinBtn] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState(null);
+  const [avatarMenuFor, setAvatarMenuFor] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
 
   const [isRecording, setIsRecording] = useState(false);
@@ -215,38 +288,34 @@ export default function PersonalChat() {
   const recordingAudioCtxRef = useRef(null);
   const recordingRafRef = useRef(null);
 
-  const [receiverOnline, setReceiverOnline] = useState(false);
-
-  const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
-  const remoteAudioRef = useRef(null);
-  const remoteAudioCtxRef = useRef(null);
-  const peerConnectionRef = useRef(null);
-  const localStreamRef = useRef(null);
-  const remoteStreamRef = useRef(null);
-  const unsubscribeCallSignalRef = useRef(null);
-  const unsubscribeCandidatesRef = useRef(null);
-  const callStartTimeRef = useRef(null);
-  const callHistorySavedRef = useRef(false);
-  const callAnsweredTimeRef = useRef(null);
-
-  const initialMessagesLoadedRef = useRef(false);
-
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
-    const saved = localStorage.getItem(`deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
+    const saved = localStorage.getItem(`global_deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
     return saved ? JSON.parse(saved) : [];
   });
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null); 
+  const inCallRef = useRef(false);
+  const localVideoRef = useRef(null);
+  const sessionRef = useRef(null);
+  const callStartTimeRef = useRef(null);
 
+  const ensureSession = () => {
+    if (!sessionRef.current) {
+      const existing = getActiveGlobalCallSession();
+      sessionRef.current = existing || {
+        callType: 'video', localStream: null,
+        peerConnections: {}, peerUnsubscribers: {}, remoteStreams: {}, knownPeers: new Set()
+      };
+    }
+    return sessionRef.current;
+  };
+
+  const [remoteStreams, setRemoteStreams] = useState({});
+  
   const currentUid = auth.currentUser?.uid || "unknown_user";
-  const currentUserName = auth.currentUser?.displayName || "Student";
-  const targetUid = receiverId || "unknown_receiver";
-
-  const chatRoomId = currentUid < targetUid 
-    ? `${currentUid}_${targetUid}` 
-    : `${targetUid}_${currentUid}`;
+  const currentUserName = auth.currentUser?.displayName || "Campus Student";
+  const globalRoomId = "campus_global_conference_room";
 
   const formatDuration = (ms) => {
     if (!ms) return '0:00';
@@ -262,54 +331,29 @@ export default function PersonalChat() {
   };
 
   useEffect(() => {
-    const autoCleanOldMessages = async () => {
+    const autoCleanOldGlobalMessages = async () => {
       try {
-        const sevenDaysAgoTimestamp = new Date().getTime() - (7 * 24 * 60 * 60 * 1000); 
-        const msgCollectionRef = collection(db, "personal-rooms", chatRoomId, "messages");
-        const oldMessagesQuery = query(msgCollectionRef, where("createdAt", "<", sevenDaysAgoTimestamp));
+        const sevenDaysAgo = Timestamp.fromMillis(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const oldMessagesQuery = query(collection(db, "global-room-messages"), where("createdAt", "<", sevenDaysAgo));
         const snapshot = await getDocs(oldMessagesQuery);
-        await Promise.all(
-          snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "personal-rooms", chatRoomId, "messages", docSnapshot.id)))
-        );
-      } catch (error) {
-        console.error("Firebase Auto Cleanup Error:", error);
-      }
+        await Promise.all(snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "global-room-messages", docSnapshot.id))));
+      } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
     };
-
-    if (chatRoomId) {
-      autoCleanOldMessages();
-    }
-  }, [chatRoomId]);
-
-  useEffect(() => {
-    const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
-      const cache = {};
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        const uidKey = data.uid || doc.id;
-        if (uidKey) {
-          cache[uidKey] = data.photo || ""; 
-        }
-      });
-      setUsersCache(cache);
-    });
-
-    return () => unsubscribeUsers();
+    autoCleanOldGlobalMessages();
   }, []);
 
   useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {});
-    }
-  }, []);
+    const handleBeforeUnload = () => {
+      if (inCallRef.current) leaveGlobalCallBeacon();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      if (inCallRef.current) leaveGlobalCall();
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentUid]);
 
-  useEffect(() => {
-    if (!targetUid) return;
-    const unsubscribePresence = onSnapshot(doc(db, "users", targetUid), (snap) => {
-      setReceiverOnline(snap.exists() && isUserOnline(snap.data()));
-    });
-    return () => unsubscribePresence();
-  }, [targetUid]);
+  useEffect(() => { inCallRef.current = inCall; }, [inCall]);
 
   useEffect(() => {
     let interval;
@@ -321,196 +365,102 @@ export default function PersonalChat() {
   }, [isRecording]);
 
   useEffect(() => {
-    if (location.state?.autoJoinCall) {
-      answerIncomingCall();
+    if (location.state?.autoJoinCall && showRejoinBtn && !inCall) {
+      handleRejoinCall();
       navigate(location.pathname, { replace: true, state: {} });
     }
-  }, [location.state]);
+  }, [location.state, showRejoinBtn]);
 
   useEffect(() => {
-    if (!receiverId) return;
+    const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "asc"), limit(100));
+    const unsubscribeMessages = onSnapshot(q, (snapshot) => {
+      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      localStorage.setItem('lastRead_global', String(Date.now()));
+    }, (error) => console.error("Global Chat Stream Error:", error));
 
-    initialMessagesLoadedRef.current = false;
+    const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
+      const cache = {};
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        const uidKey = data.uid || doc.id;
+        cache[uidKey] = { photo: data.photo || "", online: isUserOnline(data), name: data.name || "" };
+      });
+      setUsersCache(cache);
+    });
 
-    const q = query(collection(db, "personal-rooms", chatRoomId, "messages"), orderBy("createdAt", "asc"));
-    const unsubscribeMsg = onSnapshot(q, (snapshot) => {
-      const newMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMessages(newMessages);
-      scrollToBottom();
-
-      localStorage.setItem(`lastRead_personal_${chatRoomId}`, String(Date.now()));
-
-      if (initialMessagesLoadedRef.current) {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const msgData = change.doc.data();
-            if (msgData.senderId !== currentUid && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-              new Notification(msgData.senderName || 'New message', {
-                body: msgData.isDeleted ? '' : (msgData.text || (msgData.fileType === 'audio' ? '🎤 Voice message' : (msgData.fileUrl ? '📷 Photo' : ''))),
-              });
-            }
+    const unsubscribeCall = onSnapshot(doc(db, "global-calls", globalRoomId), (snapshot) => {
+      if (snapshot.exists()) {
+        const callData = snapshot.data();
+        if (callData.status === "ringing" || callData.status === "active") {
+          const participants = callData.participants || [];
+          if (participants.length === 0) {
+            deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
+            setShowRejoinBtn(false);
+            setInCall(false);
+            window.location.reload();
+            return;
           }
-        });
+          setShowRejoinBtn(true);
+        }
       } else {
-        initialMessagesLoadedRef.current = true;
+        setShowRejoinBtn(false);
+        setInCall(false);
       }
     });
 
-    const handleOutsideClick = () => setActiveMenuId(null);
+    const handleOutsideClick = () => { setActiveMenuId(null); setAvatarMenuFor(null); };
     window.addEventListener('click', handleOutsideClick);
-
-    return () => { 
-      unsubscribeMsg(); 
+    return () => {
+      unsubscribeMessages(); unsubscribeUsers(); unsubscribeCall();
       window.removeEventListener('click', handleOutsideClick);
     };
-  }, [chatRoomId, receiverId, currentUid]);
+  }, [currentUid, inCall]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
+  useEffect(() => { scrollToBottom(); }, [messages]);
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const saveCallHistory = async (callType, startedAt, endedAt, wasMissed = false) => {
-    if (callHistorySavedRef.current) return;
-    callHistorySavedRef.current = true;
-    
-    try {
-      const callTypeIcon = callType === 'audio' ? '🎙️' : '📹';
-      const callTypeLabel = callType === 'audio' ? 'Audio call' : 'Video call';
-      let callSummaryText;
-      
-      if (wasMissed) {
-        callSummaryText = `❌ You missed a ${callTypeLabel.toLowerCase()} • ${formatTimeDisplay(startedAt)}`;
-      } else {
-        const answerTime = callAnsweredTimeRef.current || startedAt;
-        const duration = endedAt - answerTime;
-        callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(answerTime)} - ${formatTimeDisplay(endedAt)}\n📞 Call • ${formatDuration(duration)} min`;
-      }
-      
-      const roomRef = doc(db, "personal-rooms", chatRoomId);
-      await setDoc(roomRef, {
-        roomId: chatRoomId,
-        participants: [currentUid, targetUid],
-        lastActive: new Date().getTime(),
-        lastMessageText: callSummaryText,
-        lastMessageSenderId: 'system',
-        lastMessageSenderName: 'System',
-        lastMessageSenderPhoto: '',
-        lastMessageAt: new Date().getTime()
-      }, { merge: true });
-      
-      await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
-        text: callSummaryText,
-        senderId: 'system',
-        senderName: 'System',
-        senderPhoto: '',
-        createdAt: endedAt || startedAt,
-        isEdited: false,
-        isDeleted: false,
-        replyTo: null,
-        isCallSummary: true
-      });
-    } catch (err) {
-      console.error("Error saving call history:", err);
-    }
-  };
-
-  const sendMessage = async (e) => {
+  const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!input.trim() && selectedFiles.length === 0) return;
+    if (!newMessage.trim() && selectedFiles.length === 0) return;
 
-    try {
-      const roomRef = doc(db, "personal-rooms", chatRoomId);
-      const latestPreviewText = input.trim() ? input.trim() : '📷 Photo';
-      await setDoc(roomRef, {
-        roomId: chatRoomId,
-        participants: [currentUid, targetUid],
-        lastActive: new Date().getTime(),
-        lastMessageText: latestPreviewText,
-        lastMessageSenderId: currentUid,
-        lastMessageSenderName: currentUserName,
-        lastMessageSenderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-        lastMessageAt: new Date().getTime()
-      }, { merge: true });
+    const replyData = replyToMessage ? {
+      text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""), 
+      fileUrl: replyToMessage.fileUrl || "", 
+      fileType: replyToMessage.fileType || "",
+      senderName: replyToMessage.senderName,
+      msgId: replyToMessage.id
+    } : null;
 
-      const replyData = replyToMessage ? {
-        text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""), 
-        fileUrl: replyToMessage.fileUrl || "", 
-        fileType: replyToMessage.fileType || "",
-        senderName: replyToMessage.senderName,
-        msgId: replyToMessage.id
-      } : null;
-
-      if (input.trim()) {
-        await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
-          text: input,
-          senderId: currentUid,
-          senderName: currentUserName,
-          senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-          createdAt: new Date().getTime(),
-          isEdited: false,
-          isDeleted: false,
-          replyTo: replyData
+    if (newMessage.trim()) {
+      try {
+        await addDoc(collection(db, "global-room-messages"), {
+          text: newMessage, senderUid: currentUid, senderName: currentUserName,
+          senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
+          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
         });
-        
-        try {
-          const receiverDoc = await getDoc(doc(db, "users", targetUid));
-          if (receiverDoc.exists()) {
-            const receiverData = receiverDoc.data();
-            if (receiverData.pushToken) {
-              await sendPushNotification(
-                receiverData.pushToken,
-                'New Message 💬',
-                `${currentUserName}: ${input.trim()}`,
-                { type: 'message', senderId: currentUid, roomId: chatRoomId }
-              );
-            }
-          }
-        } catch (pushErr) {
-          console.error("Push notification error:", pushErr);
-        }
-        
-        setInput('');
-      }
-
-      await Promise.all(selectedFiles.map((fileData) =>
-        addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
-          text: "", 
-          fileUrl: fileData.url,
-          fileType: fileData.type,
-          senderId: currentUid,
-          senderName: currentUserName,
-          senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-          createdAt: new Date().getTime(),
-          isEdited: false,
-          isDeleted: false,
-          replyTo: replyData
-        })
-      ));
-
-      setSelectedFiles([]); 
-      setReplyToMessage(null); 
-    } catch (error) {
-      console.error("Error sending message:", error);
+        setNewMessage("");
+      } catch (error) { console.error("Error sending text message:", error); }
     }
+
+    await Promise.all(selectedFiles.map(async (fileData) => {
+      try {
+        await addDoc(collection(db, "global-room-messages"), {
+          text: "", fileUrl: fileData.url, fileType: fileData.type, fileName: fileData.name,
+          senderUid: currentUid, senderName: currentUserName,
+          senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
+          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
+        });
+      } catch (error) { console.error("Error sending file to firestore:", error); }
+    }));
+    setSelectedFiles([]); setReplyToMessage(null); 
   };
 
   const handleEditMessage = async (msgId, currentText) => {
     setActiveMenuId(null); 
-    const newText = prompt("Edit your private message:", currentText);
+    const newText = prompt("Edit your public campus message:", currentText);
     if (newText !== null && newText.trim() !== "") {
-      try {
-        const msgDocRef = doc(db, "personal-rooms", chatRoomId, "messages", msgId);
-        await updateDoc(msgDocRef, {
-          text: newText,
-          isEdited: true
-        });
-      } catch (error) {
-        console.error("Error editing message:", error);
-      }
+      try { await updateDoc(doc(db, "global-room-messages", msgId), { text: newText, isEdited: true }); } 
+      catch (error) { console.error("Error editing message:", error); }
     }
   };
 
@@ -518,28 +468,21 @@ export default function PersonalChat() {
     setActiveMenuId(null); 
     if (window.confirm("Are you sure you want to delete this message?")) {
       if (isSenderMe) {
-        try {
-          const msgDocRef = doc(db, "personal-rooms", chatRoomId, "messages", msgId);
-          await updateDoc(msgDocRef, { isDeleted: true });
-        } catch (error) {
-          console.error("Error deleting message globally:", error);
-        }
+        try { await updateDoc(doc(db, "global-room-messages", msgId), { isDeleted: true }); } 
+        catch (error) { console.error("Error deleting message globally:", error); }
       } else {
         const updatedDeletedIds = [...localDeletedIds, msgId];
         setLocalDeletedIds(updatedDeletedIds);
-        localStorage.setItem(`deleted_msgs_${currentUid}`, JSON.stringify(updatedDeletedIds));
+        localStorage.setItem(`global_deleted_msgs_${currentUid}`, JSON.stringify(updatedDeletedIds));
       }
     }
   };
 
   const handleFileChange = (e) => {
     if (!e.target.files || e.target.files.length === 0) return;
-    const filesArray = Array.from(e.target.files);
-
-    filesArray.forEach((file) => {
+    Array.from(e.target.files).forEach((file) => {
       const fileName = file.name;
       const fileType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'file');
-
       if (fileType === 'image') {
         const reader = new FileReader();
         reader.onload = (event) => {
@@ -547,46 +490,30 @@ export default function PersonalChat() {
           img.onload = () => {
             const canvas = document.createElement('canvas');
             const max_width = 800; 
-            const scaleResolution = max_width / img.width;
-            canvas.width = max_width;
-            canvas.height = img.height * scaleResolution;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
-            setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: compressedBase64, type: 'image' }]);
+            canvas.width = max_width; canvas.height = img.height * (max_width / img.width);
+            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+            setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: canvas.toDataURL('image/jpeg', 0.7), type: 'image' }]);
           };
           img.src = event.target.result;
         };
         reader.readAsDataURL(file);
-      } else if (fileType === 'video') {
-        if (file.size > MAX_VIDEO_RAW_BYTES) {
-          alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`);
-          return;
-        }
-
+      } else if (fileType === 'video' && file.size <= MAX_VIDEO_RAW_BYTES) {
         const reader = new FileReader();
         reader.onload = (event) => {
-          const base64Result = event.target.result;
-          if (base64Result.length > MAX_VIDEO_BASE64_LENGTH) {
-            alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`);
-            return;
-          }
-          setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: base64Result, type: 'video' }]);
+          if (event.target.result.length <= MAX_VIDEO_BASE64_LENGTH) {
+            setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: event.target.result, type: 'video' }]);
+          } else { alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`); }
         };
         reader.readAsDataURL(file);
-      }
+      } else if (fileType === 'video') { alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`); }
     });
-
-    e.target.value = null;
+    e.target.value = null; 
   };
 
-  const removeSelectedFile = (id) => {
-    setSelectedFiles((prev) => prev.filter(file => file.id !== id));
-  };
+  const removeSelectedFile = (id) => { setSelectedFiles((prev) => prev.filter(file => file.id !== id)); };
 
   const sendVoiceMessage = async (audioUrl) => {
     try {
-      const roomRef = doc(db, "personal-rooms", chatRoomId);
       const reply = capturedReplyRef.current;
       const replyData = reply ? {
         text: reply.fileUrl ? "" : (reply.text || ""),
@@ -596,35 +523,16 @@ export default function PersonalChat() {
         msgId: reply.id
       } : null;
 
-      await setDoc(roomRef, {
-        roomId: chatRoomId,
-        participants: [currentUid, targetUid],
-        lastActive: new Date().getTime(),
-        lastMessageText: '🎤 Voice message',
-        lastMessageSenderId: currentUid,
-        lastMessageSenderName: currentUserName,
-        lastMessageSenderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-        lastMessageAt: new Date().getTime()
-      }, { merge: true });
-
-      await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
-        text: "",
-        fileUrl: audioUrl,
-        fileType: 'audio',
-        senderId: currentUid,
-        senderName: currentUserName,
-        senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-        createdAt: new Date().getTime(),
-        isEdited: false,
-        isDeleted: false,
-        replyTo: replyData
+      await addDoc(collection(db, "global-room-messages"), {
+        text: "", fileUrl: audioUrl, fileType: 'audio', fileName: 'voice-message.webm',
+        senderUid: currentUid, senderName: currentUserName,
+        senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
+        createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
       });
 
       setReplyToMessage(null);
       capturedReplyRef.current = null;
-    } catch (error) {
-      console.error("Error sending voice message:", error);
-    }
+    } catch (error) { console.error("Error sending voice message:", error); }
   };
 
   const drawRecordingBars = () => {
@@ -636,7 +544,6 @@ export default function PersonalChat() {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
     analyser.getByteFrequencyData(dataArray);
-
     ctx.clearRect(0, 0, w, h);
     const barCount = 28;
     const step = Math.max(1, Math.floor(bufferLength / barCount));
@@ -661,8 +568,15 @@ export default function PersonalChat() {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      });
 
+      // ✅ Visualizer — analyser connect কিন্তু speaker-এ NOT connect (feedback prevent)
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContextClass();
@@ -670,12 +584,13 @@ export default function PersonalChat() {
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 64;
         source.connect(analyser);
+        // ❌ analyser.connect(audioCtx.destination); — REMOVED (feedback fix)
         recordingAudioCtxRef.current = audioCtx;
         recordingAnalyserRef.current = analyser;
         drawRecordingBars();
       } catch (visualizerErr) {}
 
-      let recorderOptions = { audioBitsPerSecond: 32000 };
+      let recorderOptions = { audioBitsPerSecond: 128000 };
       if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
         recorderOptions.mimeType = 'audio/webm;codecs=opus';
       }
@@ -692,11 +607,7 @@ export default function PersonalChat() {
         stream.getTracks().forEach(track => track.stop());
         stopRecordingVisualizer();
         clearTimeout(maxDurationTimeoutRef.current);
-
-        if (discardRecordingRef.current) {
-          audioChunksRef.current = [];
-          return;
-        }
+        if (discardRecordingRef.current) { audioChunksRef.current = []; return; }
         const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         const reader = new FileReader();
         reader.onload = (event) => {
@@ -746,338 +657,422 @@ export default function PersonalChat() {
     }
   };
 
-  const renderMessageText = (text) => {
-    const urlPattern = /(https?:\/\/[^\s]+)/g;
-    const parts = text.split(urlPattern);
-    return parts.map((part, i) =>
-      urlPattern.test(part) ? (
-        <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline', wordBreak: 'break-all' }}>
-          {part}
-        </a>
-      ) : (
-        <React.Fragment key={i}>{part}</React.Fragment>
-      )
-    );
-  };
-
-  const registerPeerConnectionListeners = (pc) => {
-    pc.addEventListener('icegatheringstatechange', () => {
-      console.log(`ICE gathering state changed: ${pc.iceGatheringState}`);
-    });
-    pc.addEventListener('connectionstatechange', () => {
-      console.log(`Connection state change: ${pc.connectionState}`);
-    });
-    pc.addEventListener('signalingstatechange', () => {
-      console.log(`Signaling state change: ${pc.signalingState}`);
-    });
-    pc.addEventListener('iceconnectionstatechange', () => {
-      console.log(`ICE connection state change: ${pc.iceConnectionState}`);
-    });
-  };
-
-  const cleanupCallLocally = () => {
-    if (unsubscribeCallSignalRef.current) { unsubscribeCallSignalRef.current(); unsubscribeCallSignalRef.current = null; }
-    if (unsubscribeCandidatesRef.current) { unsubscribeCandidatesRef.current(); unsubscribeCandidatesRef.current = null; }
-    if (remoteAudioCtxRef.current) { remoteAudioCtxRef.current.close().catch(() => {}); remoteAudioCtxRef.current = null; }
-    if (peerConnectionRef.current) { peerConnectionRef.current.close(); peerConnectionRef.current = null; }
-    if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
-    if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach(track => track.stop()); remoteStreamRef.current = null; }
-    if (localVideoRef.current) localVideoRef.current.srcObject = null;
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
-    clearActiveCallSession();
+  const getLocalStream = async (callType = 'video') => {
+    const s = ensureSession();
+    if (s.localStream) return s.localStream;
+    const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
+    s.localStream = stream;
+    s.callType = callType;
+    return stream;
   };
 
   useEffect(() => {
-    const existing = getActiveCallSession();
-    if (existing && existing.type === 'personal' && existing.chatRoomId === chatRoomId) {
-      peerConnectionRef.current = existing.peerConnection;
-      localStreamRef.current = existing.localStream;
-      remoteStreamRef.current = existing.remoteStream;
-      setActiveCallType(existing.callType);
+    const existing = getActiveGlobalCallSession();
+    if (existing && (existing.localStream || Object.keys(existing.peerConnections).length > 0)) {
+      sessionRef.current = existing;
+      setActiveCallType(existing.callType || 'video');
+      setRemoteStreams({ ...existing.remoteStreams });
       setInCall(true);
     }
-  }, [chatRoomId]);
+  }, []);
 
   useEffect(() => {
-    const unsubscribe = subscribeActiveCallSession((session) => {
-      if (!session || session.chatRoomId !== chatRoomId) {
-        peerConnectionRef.current = null;
-        localStreamRef.current = null;
-        remoteStreamRef.current = null;
-        if (localVideoRef.current) localVideoRef.current.srcObject = null;
-        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-        if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+    const unsubscribe = subscribeActiveGlobalCallSession((s) => {
+      if (!s) {
+        sessionRef.current = null;
         setInCall(false);
         setActiveCallType('video');
+        setRemoteStreams({});
+        if (localVideoRef.current) localVideoRef.current.srcObject = null;
       }
     });
     return unsubscribe;
-  }, [chatRoomId]);
+  }, []);
 
   useEffect(() => {
-    if (inCall) {
-      if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-      if (remoteVideoRef.current && remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
-      if (remoteAudioRef.current && remoteStreamRef.current) {
-        remoteAudioRef.current.srcObject = remoteStreamRef.current;
-        remoteAudioRef.current.play().catch(() => {});
-        
-        // ✅ Audio Volume Boost — Helper function
-        if (!remoteAudioCtxRef.current) {
-          remoteAudioCtxRef.current = createBoostedAudio(remoteStreamRef.current, 10);
-        }
-      }
+    if (inCall && localVideoRef.current && sessionRef.current?.localStream) {
+      localVideoRef.current.srcObject = sessionRef.current.localStream;
+      localVideoRef.current.play().catch(() => {});
     }
   }, [inCall]);
 
-  const initiateCall = async (callType = 'video') => {
-    try {
-      cleanupCallLocally();
-      callHistorySavedRef.current = false;
-      callAnsweredTimeRef.current = null;
-      
-      const pc = new RTCPeerConnection(rtcConfiguration);
-      peerConnectionRef.current = pc;
-      registerPeerConnectionListeners(pc);
+  const connectToPeer = async (peerUid) => {
+    const s = ensureSession();
+    if (!peerUid || peerUid === currentUid || s.peerConnections[peerUid]) return;
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
-      localStreamRef.current = stream;
+    const isInitiator = currentUid < peerUid;
+    const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
+    const connRef = doc(db, "global-calls", globalRoomId, "connections", pairKey);
+    const myCandidatesRef = collection(connRef, isInitiator ? "candidatesA" : "candidatesB");
+    const theirCandidatesRef = collection(connRef, isInitiator ? "candidatesB" : "candidatesA");
+
+    try {
+      const pc = new RTCPeerConnection(rtcConfiguration);
+      s.peerConnections[peerUid] = pc;
+
+      const pendingCandidates = [];
+
+      const stream = await getLocalStream(s.callType);
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      remoteStreamRef.current = new MediaStream();
+      const remoteStream = new MediaStream();
+      s.remoteStreams[peerUid] = remoteStream;
+      setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
+      
       pc.addEventListener('track', (event) => {
-        event.streams[0].getTracks().forEach(track => remoteStreamRef.current.addTrack(track));
+        event.streams[0].getTracks().forEach(track => { remoteStream.addTrack(track); });
+        setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
       });
 
-      const callRef = doc(db, "personal-connections", chatRoomId);
-      const callerCandidatesRef = collection(callRef, "callerCandidates");
       pc.addEventListener('icecandidate', (event) => {
-        if (event.candidate) addDoc(callerCandidatesRef, event.candidate.toJSON());
+        if (event.candidate) { addDoc(myCandidatesRef, event.candidate.toJSON()); }
       });
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      pc.addEventListener('connectionstatechange', () => {
+        if (pc.connectionState === 'failed') { removeStalePeerFromRoom(peerUid); }
+      });
 
+      const addPendingCandidates = async () => {
+        while (pendingCandidates.length > 0) {
+          const candidate = pendingCandidates.shift();
+          try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (err) {}
+        }
+      };
+
+      const unsubscribers = [
+        onSnapshot(theirCandidatesRef, (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added') {
+              const candidateData = change.doc.data();
+              if (pc.remoteDescription) {
+                pc.addIceCandidate(new RTCIceCandidate(candidateData)).catch(() => {});
+              } else {
+                pendingCandidates.push(candidateData);
+              }
+            }
+          });
+        })
+      ];
+
+      if (isInitiator) {
+        const [staleA, staleB] = await Promise.all([
+          getDocs(collection(connRef, "candidatesA")),
+          getDocs(collection(connRef, "candidatesB"))
+        ]);
+        await Promise.all([...staleA.docs, ...staleB.docs].map(d => deleteDoc(d.ref)));
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await setDoc(connRef, { offer: { type: offer.type, sdp: offer.sdp } }, { merge: true });
+
+        unsubscribers.push(onSnapshot(connRef, async (snap) => {
+          const data = snap.data();
+          if (data?.answer && !pc.currentRemoteDescription) {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            await addPendingCandidates();
+          }
+        }));
+      } else {
+        unsubscribers.push(onSnapshot(connRef, async (snap) => {
+          const data = snap.data();
+          if (data?.offer && !pc.currentRemoteDescription && !pc.localDescription) {
+            try {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+              await addPendingCandidates();
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              await updateDoc(connRef, { answer: { type: answer.type, sdp: answer.sdp } });
+            } catch (err) {}
+          }
+        }));
+      }
+
+      s.peerUnsubscribers[peerUid] = unsubscribers;
+    } catch (err) {}
+  };
+
+  const disconnectFromPeer = (peerUid) => {
+    const s = sessionRef.current;
+    if (!s) return;
+    const pc = s.peerConnections[peerUid];
+    if (pc) { pc.close(); delete s.peerConnections[peerUid]; }
+    const unsubs = s.peerUnsubscribers[peerUid];
+    if (unsubs) { unsubs.forEach(u => u && u()); delete s.peerUnsubscribers[peerUid]; }
+    if (s.remoteStreams[peerUid]) {
+      s.remoteStreams[peerUid].getTracks().forEach(track => track.stop());
+      delete s.remoteStreams[peerUid];
+    }
+    setRemoteStreams(prev => {
+      const next = { ...prev };
+      delete next[peerUid];
+      return next;
+    });
+  };
+
+  const removeStalePeerFromRoom = async (peerUid) => {
+    disconnectFromPeer(peerUid);
+    try {
+      const callRef = doc(db, "global-calls", globalRoomId);
+      const snap = await getDoc(callRef);
+      if (snap.exists()) {
+        const updated = (snap.data().participants || []).filter(id => id !== peerUid);
+        if (updated.length === 0) await deleteDoc(callRef);
+        else await updateDoc(callRef, { participants: updated });
+      }
+    } catch (err) {}
+  };
+
+  const deletePeerConnectionData = async (peerUid) => {
+    try {
+      const callRef = doc(db, "global-calls", globalRoomId);
+      const isInitiator = currentUid < peerUid;
+      const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
+      const connRef = doc(callRef, "connections", pairKey);
+      
+      const [subA, subB] = await Promise.all([
+        getDocs(collection(connRef, "candidatesA")),
+        getDocs(collection(connRef, "candidatesB"))
+      ]);
+      await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
+      
+      await deleteDoc(connRef).catch(() => {});
+    } catch (err) {}
+  };
+
+  useEffect(() => {
+    if (!inCall) return;
+    const s = ensureSession();
+    const callRef = doc(db, "global-calls", globalRoomId);
+    const unsubscribe = onSnapshot(callRef, (snap) => {
+      if (!snap.exists()) return;
+      const otherParticipants = (snap.data().participants || []).filter(uid => uid !== currentUid);
+      const currentSet = new Set(otherParticipants);
+      otherParticipants.forEach(uid => {
+        if (!s.knownPeers.has(uid)) connectToPeer(uid);
+      });
+      s.knownPeers.forEach(uid => {
+        if (!currentSet.has(uid)) {
+          disconnectFromPeer(uid);
+          deletePeerConnectionData(uid);
+        }
+      });
+      s.knownPeers = currentSet;
+    });
+    return () => unsubscribe();
+  }, [inCall]);
+
+  const initiateGlobalCall = async (callType = 'video') => {
+    try {
+      const callRef = doc(db, "global-calls", globalRoomId);
+      const oldConnections = await getDocs(collection(callRef, "connections"));
+      await Promise.all(oldConnections.docs.map(async (d) => {
+        const [subA, subB] = await Promise.all([
+          getDocs(collection(d.ref, "candidatesA")),
+          getDocs(collection(d.ref, "candidatesB"))
+        ]);
+        await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
+        await deleteDoc(d.ref);
+      }));
+      await deleteDoc(callRef).catch(() => {});
+      
+      sessionRef.current = null;
+      clearActiveGlobalCallSession();
+      setRemoteStreams({});
+      localStorage.removeItem('globalCallHistory');
+      
+      await getLocalStream(callType);
       const startedAt = new Date().getTime();
-      callStartTimeRef.current = startedAt;
-
-      await setDoc(callRef, {
-        status: "ringing",
-        callType,
-        hostName: currentUserName,
-        hostId: currentUid,
-        hostPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-        receiverId: targetUid,
-        receiverName: receiverName,
-        participants: [currentUid, targetUid],
-        roomId: chatRoomId,
+      await setDoc(callRef, { 
+        status: "ringing", 
+        callType, 
+        hostName: currentUserName, 
+        hostId: currentUid, 
+        roomId: globalRoomId, 
+        participants: [currentUid],
         callStartedAt: startedAt,
-        offer: { type: offer.type, sdp: offer.sdp }
+        callHistory: {
+          [currentUid]: {
+            name: currentUserName,
+            joinedAt: startedAt
+          }
+        }
       });
 
       try {
-        const receiverDoc = await getDoc(doc(db, "users", targetUid));
-        if (receiverDoc.exists()) {
-          const receiverData = receiverDoc.data();
-          if (receiverData.pushToken) {
-            await sendCallNotification(
-              receiverData.pushToken,
-              currentUserName,
-              callType,
-              chatRoomId
-            );
-          }
-        }
+        const usersSnapshot = await getDocs(query(collection(db, "users"), where("approved", "==", true)));
+        const pushPromises = usersSnapshot.docs
+          .filter(doc => doc.data().uid !== currentUid && doc.data().pushToken)
+          .map(doc => 
+            sendPushNotification(
+              doc.data().pushToken,
+              '📞 Group Call',
+              `${currentUserName} started a ${callType === 'audio' ? 'audio' : 'video'} conference`,
+              { type: 'global_call', roomId: globalRoomId, callerName: currentUserName }
+            )
+          );
+        await Promise.all(pushPromises);
       } catch (pushErr) {
-        console.error("Call notification error:", pushErr);
+        console.error("Push notification error:", pushErr);
       }
 
-      unsubscribeCallSignalRef.current = onSnapshot(callRef, async (snap) => {
-        const data = snap.data();
-        if (!snap.exists()) {
-          cleanupCallLocally();
-          setInCall(false);
-          setActiveCallType('video');
-          return;
-        }
-        if (data.answer && pc.signalingState !== 'closed' && !pc.currentRemoteDescription) {
-          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-          if (!callAnsweredTimeRef.current) {
-            callAnsweredTimeRef.current = new Date().getTime();
-          }
-        }
-        if (data.status === 'ended') {
-          cleanupCallLocally();
-          setInCall(false);
-          setActiveCallType('video');
-        }
-        if (data.status === 'missed') {
-          const endedAt = new Date().getTime();
-          await saveCallHistory(callType, startedAt, endedAt, true);
-          cleanupCallLocally();
-          setInCall(false);
-          setActiveCallType('video');
-        }
-      });
-
-      const calleeCandidatesRef = collection(callRef, "calleeCandidates");
-      unsubscribeCandidatesRef.current = onSnapshot(calleeCandidatesRef, (snapshot) => {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
-          }
-        });
-      });
-
-      setActiveCallType(callType);
-      setInCall(true);
-      setActiveCallSession({
-        type: 'personal', chatRoomId, otherUid: targetUid, otherName: receiverName,
-        otherPhoto: usersCache[targetUid] || '', callType,
-        peerConnection: pc, localStream: stream, remoteStream: remoteStreamRef.current,
-      });
-    } catch (err) {
-      console.error("Error starting call:", err);
-      alert("🎤 Could not start the call. Camera/microphone permission may be needed.");
-      cleanupCallLocally();
-    }
-  };
-
-  const answerIncomingCall = async () => {
-    try {
-      cleanupCallLocally();
-      callHistorySavedRef.current = false;
-      callAnsweredTimeRef.current = null;
-      
-      const callRef = doc(db, "personal-connections", chatRoomId);
-      const callSnap = await getDoc(callRef);
-      if (!callSnap.exists() || !callSnap.data().offer) {
-        return;
-      }
-      const callData = callSnap.data();
-      const offer = callData.offer;
-      const callType = callData.callType || 'video';
-      const startedAt = callData.callStartedAt || new Date().getTime();
       callStartTimeRef.current = startedAt;
-
-      const pc = new RTCPeerConnection(rtcConfiguration);
-      peerConnectionRef.current = pc;
-      registerPeerConnectionListeners(pc);
-
-      const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
-      localStreamRef.current = stream;
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
-
-      remoteStreamRef.current = new MediaStream();
-      pc.addEventListener('track', (event) => {
-        event.streams[0].getTracks().forEach(track => remoteStreamRef.current.addTrack(track));
-      });
-
-      const calleeCandidatesRef = collection(callRef, "calleeCandidates");
-      pc.addEventListener('icecandidate', (event) => {
-        if (event.candidate) addDoc(calleeCandidatesRef, event.candidate.toJSON());
-      });
-
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      callAnsweredTimeRef.current = new Date().getTime();
-
-      await updateDoc(callRef, {
-        status: "accepted",
-        answer: { type: answer.type, sdp: answer.sdp }
-      });
-
-      const callerCandidatesRef = collection(callRef, "callerCandidates");
-      unsubscribeCandidatesRef.current = onSnapshot(callerCandidatesRef, (snapshot) => {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
-          }
-        });
-      });
-
-      unsubscribeCallSignalRef.current = onSnapshot(callRef, (snap) => {
-        if (!snap.exists()) {
-          cleanupCallLocally();
-          setInCall(false);
-          setActiveCallType('video');
-          return;
-        }
-        if (snap.data()?.status === 'ended') {
-          const endedAt = new Date().getTime();
-          saveCallHistory(callType, startedAt, endedAt, false);
-          cleanupCallLocally();
-          setInCall(false);
-          setActiveCallType('video');
-        }
-      });
-
       setActiveCallType(callType);
       setInCall(true);
-      setActiveCallSession({
-        type: 'personal', chatRoomId, otherUid: targetUid, otherName: receiverName,
-        otherPhoto: usersCache[targetUid] || '', callType,
-        peerConnection: pc, localStream: stream, remoteStream: remoteStreamRef.current,
-      });
+      setActiveGlobalCallSession(sessionRef.current);
     } catch (err) {
-      console.error("Error answering call:", err);
-      alert("🎤 Could not join the call. Camera/microphone permission may be needed.");
-      cleanupCallLocally();
+      console.error("Error initiating global call:", err);
+      alert("🎤 Could not start the conference. Camera/microphone permission may be needed.");
     }
   };
 
-  const endCall = async () => {
-    const callRef = doc(db, "personal-connections", chatRoomId);
-    const startedAt = callStartTimeRef.current || new Date().getTime();
-    const endedAt = new Date().getTime();
-    const callType = activeCallType;
-    
+  const handleRejoinCall = async () => {
     try {
-      const callSnap = await getDoc(callRef);
-      if (callSnap.exists()) {
-        const callData = callSnap.data();
-        const wasAnswered = callData.answer ? true : false;
-        const isCaller = callData.hostId === currentUid;
-        
-        const [callerCandidates, calleeCandidates] = await Promise.all([
-          getDocs(collection(callRef, "callerCandidates")),
-          getDocs(collection(callRef, "calleeCandidates"))
-        ]);
-        await Promise.all([
-          ...callerCandidates.docs.map(c => deleteDoc(c.ref)),
-          ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
-        ]);
-        
-        if (wasAnswered) {
-          if (!isCaller) {
-            await saveCallHistory(callType, startedAt, endedAt, false);
-          }
-          await updateDoc(callRef, { status: "ended" }).catch(() => {});
-        } else {
-          if (isCaller) {
-            await saveCallHistory(callType, startedAt, endedAt, true);
-          }
-          await updateDoc(callRef, { status: "missed", answer: false }).catch(() => {});
+      const callDocRef = doc(db, "global-calls", globalRoomId);
+      const snapshot = await getDoc(callDocRef);
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        const callType = data.callType || 'video';
+        await getLocalStream(callType);
+        const updatedParts = data.participants || [];
+        if (!updatedParts.includes(currentUid)) updatedParts.push(currentUid);
+        const callHistory = data.callHistory || {};
+        if (!callHistory[currentUid]) {
+          callHistory[currentUid] = {
+            name: currentUserName,
+            joinedAt: new Date().getTime()
+          };
         }
-        
-        await deleteDoc(callRef).catch(() => {});
+        await updateDoc(callDocRef, { 
+          participants: updatedParts,
+          callHistory: callHistory
+        });
+        callStartTimeRef.current = new Date().getTime();
+        setActiveCallType(callType);
+        setInCall(true);
+        setActiveGlobalCallSession(sessionRef.current);
       }
     } catch (err) {
-      console.error("Error ending call:", err);
+      console.error("Error rejoining call:", err);
+      alert("🎤 Could not join the conference. Camera/microphone permission may be needed.");
     }
-    
-    cleanupCallLocally();
+  };
+
+  const leaveGlobalCallBeacon = () => {
+    try {
+      const callDocRef = doc(db, "global-calls", globalRoomId);
+      getDoc(callDocRef).then(async (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          const updatedParts = (data.participants || []).filter(id => id !== currentUid);
+          const callHistory = data.callHistory || {};
+          if (callHistory[currentUid] && callHistory[currentUid].joinedAt) {
+            callHistory[currentUid].leftAt = new Date().getTime();
+            callHistory[currentUid].duration = callHistory[currentUid].leftAt - callHistory[currentUid].joinedAt;
+          }
+          if (updatedParts.length === 0) {
+            if (data.callStartedAt) {
+              callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
+            }
+            const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
+            const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
+            const callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call • ${formatDuration(callHistory.totalDuration)} min`;
+            
+            await addDoc(collection(db, "global-room-messages"), {
+              text: callSummaryText,
+              senderUid: 'system',
+              senderName: 'System',
+              senderPhoto: '',
+              createdAt: serverTimestamp(),
+              isEdited: false,
+              isDeleted: false,
+              replyTo: null,
+              isCallSummary: true
+            });
+            localStorage.removeItem('globalCallHistory');
+          } else {
+            await updateDoc(callDocRef, { 
+              participants: updatedParts,
+              callHistory: callHistory
+            }).catch(() => {});
+          }
+        }
+      }).catch(() => {});
+    } catch (err) {}
+  };
+
+  const leaveGlobalCall = async () => {
+    try {
+      const callDocRef = doc(db, "global-calls", globalRoomId);
+      const snapshot = await getDoc(callDocRef);
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        const updatedParts = (data.participants || []).filter(id => id !== currentUid);
+        const callHistory = data.callHistory || {};
+        if (callHistory[currentUid] && callHistory[currentUid].joinedAt) {
+          callHistory[currentUid].leftAt = new Date().getTime();
+          callHistory[currentUid].duration = callHistory[currentUid].leftAt - callHistory[currentUid].joinedAt;
+        }
+        if (updatedParts.length === 0) {
+          if (data.callStartedAt) {
+            callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
+          }
+          
+          const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
+          const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
+          const memberCount = Object.keys(callHistory).filter(k => k !== 'totalDuration').length;
+          
+          let callSummaryText;
+          if (memberCount <= 1) {
+            callSummaryText = `❌ You missed a group ${callTypeLabel.toLowerCase()} • ${formatTimeDisplay(data.callStartedAt)}`;
+          } else {
+            callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call • ${formatDuration(callHistory.totalDuration)} min`;
+          }
+          
+          await addDoc(collection(db, "global-room-messages"), {
+            text: callSummaryText,
+            senderUid: 'system',
+            senderName: 'System',
+            senderPhoto: '',
+            createdAt: serverTimestamp(),
+            isEdited: false,
+            isDeleted: false,
+            replyTo: null,
+            isCallSummary: true
+          });
+          
+          const oldConnections = await getDocs(collection(callDocRef, "connections"));
+          await Promise.all(oldConnections.docs.map(async (d) => {
+            const [subA, subB] = await Promise.all([
+              getDocs(collection(d.ref, "candidatesA")),
+              getDocs(collection(d.ref, "candidatesB"))
+            ]);
+            await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
+            await deleteDoc(d.ref);
+          }));
+          await deleteDoc(callDocRef).catch(() => {});
+        } else {
+          await updateDoc(callDocRef, { 
+            participants: updatedParts,
+            callHistory: callHistory
+          });
+        }
+      }
+    } catch (err) {}
+    const s = sessionRef.current;
+    if (s) {
+      Object.keys(s.peerConnections).forEach(disconnectFromPeer);
+      if (s.localStream) s.localStream.getTracks().forEach(t => t.stop());
+    }
+    sessionRef.current = null;
+    clearActiveGlobalCallSession();
     setInCall(false);
     setActiveCallType('video');
+    setRemoteStreams({});
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    window.location.reload();
   };
 
-  const toggleMenu = (e, msgId) => {
-    e.stopPropagation();
-    setActiveMenuId(activeMenuId === msgId ? null : msgId);
-  };
+  const toggleMenu = (e, msgId) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
 
   const MicIcon = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1110,112 +1105,97 @@ export default function PersonalChat() {
   const formatRecordingTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 
   return (
-    <div style={{ 
-      maxWidth: '700px', margin: '15px auto', fontFamily: 'Arial', height: '85vh', 
-      display: 'flex', flexDirection: 'column', background: 'var(--card-bg, #f4f7fc)', 
-      border: '1px solid rgba(0, 86, 179, 0.2)', borderRadius: '15px', 
-      boxShadow: '0 8px 24px rgba(0, 86, 179, 0.08)', overflow: 'hidden', position: 'relative'
-    }}>
-      
+    <div style={{ maxWidth: '700px', margin: '15px auto', fontFamily: 'Arial', height: '85vh', display: 'flex', flexDirection: 'column', background: 'var(--card-bg, #f4f7fc)', border: '1px solid rgba(0, 86, 179, 0.2)', borderRadius: '15px', boxShadow: '0 8px 24px rgba(0, 86, 179, 0.08)', overflow: 'hidden', position: 'relative' }}>
       <style>{`
+        @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
         .dynamic-chat-input { color: #000000 !important; }
         .dynamic-chat-input::placeholder { color: #666666 !important; opacity: 0.6; }
         :root[data-theme='dark'] .dynamic-chat-input { color: #ffffff !important; }
         :root[data-theme='dark'] .dynamic-chat-input::placeholder { color: #cccccc !important; }
-        
-        .threedot-dropdown-menu {
-          position: absolute; bottom: 100%; right: 0; background: #fff; 
-          border: 1px solid #ddd; borderRadius: 8px; boxShadow: 0 4px 12px rgba(0,0,0,0.15);
-          padding: 5px 0; zIndex: 10; minWidth: 90px; textAlign: left; display: flex; flexDirection: column;
-        }
-        :root[data-theme='dark'] .threedot-dropdown-menu {
-          background: #222; border-color: #444; boxShadow: 0 4px 12px rgba(0,0,0,0.4);
-        }
-        .threedot-menu-item {
-          background: none; border: none; padding: 6px 12px; fontSize: 12px;
-          cursor: pointer; text-align: left; width: 100%; font-weight: bold;
-        }
-        .threedot-menu-item.reply-btn { color: #28a745; }
-        .threedot-menu-item.edit-btn { color: #0088ff; }
-        .threedot-menu-item.delete-btn { color: #dc3545; }
-        .threedot-menu-item:hover { background: rgba(0,0,0,0.05); }
-
+        .rejoin-pulse-btn { background: #28a745; color: white; border: none; padding: 8px 15px; border-radius: 20px; cursor: pointer; font-weight: bold; font-size: 13px; display: flex; align-items: center; gap: 5px; animation: pulse 2s infinite; box-shadow: 0 4px 10px rgba(40,167,69,0.3); }
+        .threedot-dropdown-menu { position: absolute; bottom: 100%; right: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); padding: 5px 0; z-index: 10; min-width: 90px; text-align: left; display: flex; flex-direction: column; }
+        :root[data-theme='dark'] .threedot-dropdown-menu { background: #222; border-color: #444; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+        .threedot-menu-item { background: none; border: none; padding: 6px 12px; font-size: 12px; cursor: pointer; text-align: left; width: 100%; font-weight: bold; }
+        .threedot-menu-item.reply-btn { color: #28a745; } .threedot-menu-item.edit-btn { color: #0088ff; } .threedot-menu-item.delete-btn { color: #dc3545; } .threedot-menu-item:hover { background: rgba(0,0,0,0.05); }
+        .threedot-action-btn { background: none; border: none; cursor: pointer; font-size: 18px; color: #444444; padding: 4px 8px; opacity: 0.8; transition: all 0.2s; border-radius: 50%; }
+        .threedot-action-btn:hover { background: rgba(0, 0, 0, 0.08); opacity: 1; }
+        :root[data-theme='dark'] .threedot-action-btn { color: #ffffff !important; opacity: 1 !important; text-shadow: 0 0 2px rgba(255,255,255,0.5); }
+        :root[data-theme='dark'] .threedot-action-btn:hover { background: rgba(255, 255, 255, 0.15); }
         @keyframes recordPulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }
         .recording-dot { width: 10px; height: 10px; border-radius: 50%; background: #dc3545; animation: recordPulse 1.2s infinite; display: inline-block; flex-shrink: 0; }
         .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
         .call-summary-msg { background: rgba(0,86,179,0.08) !important; border: 1px solid rgba(0,86,179,0.2) !important; text-align: center; }
       `}</style>
-
-      <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
-        <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
-        <div
-          onClick={() => navigate(`/profile/${targetUid}`)}
-          title={`${receiverName}-এর প্রোফাইলে যান`}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
-        >
-          <img
-            src={(usersCache[targetUid] && usersCache[targetUid].trim() !== '') ? usersCache[targetUid] : `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(receiverName || 'Student')}`}
-            alt=""
-            style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(255,255,255,0.6)' }}
-          />
-          <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px' }}>{receiverName}</h3>
-        </div>
-        {!inCall && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {receiverOnline && (
-              <span title="Online" style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid rgba(255,255,255,0.6)', display: 'inline-block' }} />
-            )}
-            <button onClick={() => initiateCall('video')} title="Video call" style={{ background: '#28a745', color: 'white', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <VideoCallIcon />
-            </button>
-            <button onClick={() => initiateCall('audio')} title="Audio call" style={{ background: 'rgba(255,255,255,0.25)', color: 'white', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <AudioCallIcon />
-            </button>
-          </div>
-        )}
-      </div>
-
-      {inCall ? (
-        <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
-          <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
-          <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }} />
-          {activeCallType === 'audio' && (
-            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', color: '#fff', background: '#111' }}>
+      
+      {inCall && (
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column' }}>
+          {activeCallType === 'audio' ? (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '18px', color: '#fff' }}>
               <div style={{ width: '90px', height: '90px', borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' }}>🎙️</div>
-              <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio call with {receiverName}</p>
+              <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio conference — {Object.keys(remoteStreams).length + 1} in the call</p>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', padding: '0 20px' }}>
+                <span style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>You</span>
+                {Object.keys(remoteStreams).map(uid => (
+                  <span key={uid} style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>{usersCache[uid]?.name || 'Student'}</span>
+                ))}
+              </div>
+              {sessionRef.current?.localStream && <LocalAudioTile stream={sessionRef.current.localStream} />}
+              {Object.entries(remoteStreams).map(([uid, stream]) => (
+                <RemoteAudioTile key={uid} stream={stream} />
+              ))}
+            </div>
+          ) : (
+            <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, Math.min(Math.ceil(Math.sqrt(Object.keys(remoteStreams).length + 1)), 3))}, 1fr)`, gap: '4px', padding: '4px', overflow: 'auto' }}>
+              <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
+                <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>You</span>
+              </div>
+              {Object.entries(remoteStreams).map(([uid, stream]) => (
+                <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />
+              ))}
             </div>
           )}
-          <video ref={localVideoRef} autoPlay playsInline muted style={{ position: 'absolute', bottom: '16px', right: '16px', width: '110px', height: '150px', objectFit: 'cover', borderRadius: '10px', border: '2px solid #fff', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', background: '#000', display: activeCallType === 'audio' ? 'none' : 'block' }} />
-          <button
-            onClick={endCall}
-            title="Hang up"
-            style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)' }}
-          >
+          <button onClick={leaveGlobalCall} title="Leave call" style={{ alignSelf: 'center', margin: '14px 0', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', flexShrink: 0 }}>
             <HangUpIcon />
           </button>
         </div>
-      ) : (
+      )}
+
+      <div style={{ padding: '15px 20px', background: '#0056b3', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
+        <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>⬅️ Back</button>
+        <h3 style={{ margin: 0, fontSize: '18px', letterSpacing: '0.3px', textAlign: 'center', flex: 1 }}>Campus Global Room 👥</h3>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {!inCall && !showRejoinBtn && (
+            <>
+              <button onClick={() => initiateGlobalCall('video')} title="Start video conference" style={{ background: '#28a745', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <VideoCallIcon />
+              </button>
+              <button onClick={() => initiateGlobalCall('audio')} title="Start audio conference" style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <AudioCallIcon />
+              </button>
+            </>
+          )}
+          {!inCall && showRejoinBtn && <button onClick={handleRejoinCall} className="rejoin-pulse-btn">🟢 Rejoin Call</button>}
+        </div>
+      </div>
+      {!inCall && (
         <>
-          <div style={{ 
-            flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', 
-            backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', 
-            display: 'flex', flexDirection: 'column', gap: '15px' 
-          }}>
+          <div style={{ flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg, #edf2f9)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 93%, #0056b3 7%)', display: 'flex', flexDirection: 'column', gap: '15px' }}>
             {messages.map((getMsg) => {
               if (localDeletedIds.includes(getMsg.id)) return null;
-
-              const isMe = getMsg.senderId === currentUid;
+              const isMe = getMsg.senderUid === currentUid;
               const isSystem = getMsg.isCallSummary === true;
-              const firestoreProfilePhoto = usersCache[getMsg.senderId] || getMsg.senderPhoto;
-              const defaultFallbackAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(getMsg.senderName || 'Student')}&backgroundColor=0056b3`;
+              const firestoreProfilePhoto = usersCache[getMsg.senderUid]?.photo || getMsg.senderPhoto;
+              const defaultFallbackAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(getMsg.senderName || 'Student')}`;
+              const senderOnline = usersCache[getMsg.senderUid]?.online === true;
 
               if (isSystem) {
                 return (
                   <div key={getMsg.id} style={{ display: 'flex', justifyContent: 'center' }}>
                     <div className="call-summary-msg" style={{ 
-                      padding: '10px 16px', 
+                      padding: '12px 20px', 
                       borderRadius: '12px', 
-                      fontSize: '12px', 
+                      fontSize: '13px', 
                       whiteSpace: 'pre-line',
                       background: 'rgba(0,86,179,0.08)',
                       border: '1px solid rgba(0,86,179,0.2)',
@@ -1229,83 +1209,49 @@ export default function PersonalChat() {
               }
 
               return (
-                <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px' }}>
-                  
-                  <img 
-                    src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} 
-                    alt="Profile" 
-                    onClick={() => navigate(`/profile/${getMsg.senderId}`)}
-                    onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }}
-                    style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', flexShrink: 0, cursor: 'pointer' }} 
-                  />
+                <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '10px', position: 'relative', zIndex: avatarMenuFor === getMsg.id ? 50 : 'auto' }}>
+                  <div style={{ position: 'relative', flexShrink: 0 }}>
+                    <img src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} alt="" onClick={(e) => { e.stopPropagation(); if (isMe) { navigate(`/profile/${currentUid}`); return; } setAvatarMenuFor(avatarMenuFor === getMsg.id ? null : getMsg.id); }} onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }} style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #0056b3', background: '#e4e6eb', display: 'block', cursor: 'pointer' }} />
+                    {senderOnline && <span title="Online" style={{ position: 'absolute', bottom: '-1px', right: '-1px', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2ecc71', border: '2px solid var(--bg, #fff)' }} />}
+                    {avatarMenuFor === getMsg.id && !isMe && (
+                      <div className="threedot-dropdown-menu" onClick={(e) => e.stopPropagation()} style={{ top: 'auto', bottom: 'calc(100% + 6px)', left: 0, right: 'auto', zIndex: 999 }}>
+                        <button type="button" className="threedot-menu-item" style={{ color: '#0056b3' }} onClick={() => { setAvatarMenuFor(null); navigate(`/profile/${getMsg.senderUid}`); }}>👤 View Profile</button>
+                        <button type="button" className="threedot-menu-item reply-btn" onClick={() => { setAvatarMenuFor(null); navigate(`/chat/${getMsg.senderUid}/${encodeURIComponent(getMsg.senderName || 'Student')}`); }}>💬 Message</button>
+                      </div>
+                    )}
+                  </div>
                   <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
-                    <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px', paddingLeft: isMe ? '0' : '4px', paddingRight: isMe ? '4px' : '0' }}>{getMsg.senderName}</small>
-                    
+                    <small style={{ color: 'var(--text-color, #666)', opacity: 0.8, fontSize: '11px', marginBottom: '2px' }}>{getMsg.senderName}</small>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexDirection: isMe ? 'row-reverse' : 'row' }}>
-                      
-                      <div style={{ 
-                        background: getMsg.isDeleted ? '#ebebeb' : (isMe ? '#0056b3' : 'var(--card-bg, #fff)'), 
-                        color: getMsg.isDeleted ? '#888' : (isMe ? 'white' : 'var(--text-color, #333)'), 
-                        padding: (getMsg.fileUrl || getMsg.fileType === 'audio') ? '4px' : '10px 14px', 
-                        borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px', 
-                        fontSize: '14px', boxShadow: '0 2px 5px rgba(0,0,0,0.04)', border: isMe ? 'none' : '1px solid rgba(0, 86, 179, 0.15)', wordBreak: 'break-word',
-                        display: 'flex', flexDirection: 'column', gap: '5px', overflow: 'hidden'
-                      }}>
-                        
-                        {getMsg.isDeleted ? (
-                          <p style={{ margin: 0, fontStyle: 'italic', fontSize: '13px', padding: '10px 14px' }}>🚫 This message was deleted</p>
-                        ) : (
+                      <div style={{ background: getMsg.isDeleted ? '#ebebeb' : (isMe ? '#0056b3' : 'var(--card-bg, #fff)'), color: getMsg.isDeleted ? '#888' : (isMe ? 'white' : 'var(--text-color, #333)'), padding: (getMsg.fileUrl || getMsg.fileType === 'audio') ? '4px' : '10px 14px', borderRadius: isMe ? '14px 14px 2px 14px' : '14px 14px 14px 2px', fontSize: '14px', boxShadow: '0 2px 5px rgba(0,0,0,0.04)', border: isMe ? 'none' : '1px solid rgba(0, 86, 179, 0.15)', wordBreak: 'break-word', display: 'flex', flexDirection: 'column', gap: '5px', overflow: 'hidden' }}>
+                        {getMsg.isDeleted ? <p style={{ margin: 0, fontStyle: 'italic', fontSize: '13px', padding: '10px 14px' }}>🚫 This message was deleted</p> : (
                           <>
                             {getMsg.replyTo && (
-                              <div style={{ background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,86,179,0.07)', padding: '6px 10px', borderRadius: '8px', borderLeft: '3px solid #0056b3', fontSize: '11px', margin: getMsg.fileUrl ? '4px 4px 0 4px' : '0 0 3px 0', color: isMe ? '#ffeb3b' : '#444', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '240px' }}>
-                                {getMsg.replyTo.fileUrl && getMsg.replyTo.fileType !== 'audio' && <img src={getMsg.replyTo.fileUrl} alt="Reply preview" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
-                                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  <strong style={{ color: isMe ? '#fff' : '#0056b3', display: 'block', fontSize: '10px', fontStyle: 'normal' }}>↩️ {getMsg.replyTo.senderName}:</strong>
-                                  {getMsg.replyTo.text || (getMsg.replyTo.fileType === 'audio' ? "🎤 Voice message" : (getMsg.replyTo.fileUrl ? "📷 Photo" : ""))}
-                                </div>
+                              <div style={{ background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,86,179,0.07)', padding: '6px 10px', borderRadius: '8px', borderLeft: '3px solid #0056b3', fontSize: '11px', color: isMe ? '#ffeb3b' : '#444', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '240px' }}>
+                                {getMsg.replyTo.fileUrl && getMsg.replyTo.fileType !== 'audio' && <img src={getMsg.replyTo.fileUrl} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', flexShrink: 0 }} />}
+                                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><strong style={{ color: isMe ? '#fff' : '#0056b3', display: 'block', fontSize: '10px', fontStyle: 'normal' }}>↩️ {getMsg.replyTo.senderName}:</strong>{getMsg.replyTo.text || (getMsg.replyTo.fileType === 'audio' ? "🎤 Voice message" : (getMsg.replyTo.fileUrl ? "📷 Photo" : ""))}</div>
                               </div>
                             )}
-
-                            {getMsg.fileUrl && getMsg.fileType === 'image' && (
-                              <img src={getMsg.fileUrl} alt="Shared Graphic" style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '350px', objectFit: 'cover', display: 'block' }} />
-                            )}
-
-                            {getMsg.fileUrl && getMsg.fileType === 'video' && (
-                              <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />
-                            )}
-
-                            {getMsg.fileUrl && getMsg.fileType === 'audio' && (
-                              <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />
-                            )}
-
-                            {getMsg.text && (
-                              <p style={{ margin: 0, fontSize: '14px', textAlign: 'left' }}>
-                                {renderMessageText(getMsg.text)}
-                                {getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}
-                              </p>
-                            )}
+                            {getMsg.fileUrl && getMsg.fileType === 'image' && <img src={getMsg.fileUrl} alt="" style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '350px', objectFit: 'cover', display: 'block' }} />}
+                            {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
+                            {getMsg.fileUrl && getMsg.fileType === 'audio' && <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />}
+                            {getMsg.text && <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{getMsg.text}{getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}</p>}
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{getMsg.createdAt ? new Date(getMsg.createdAt.seconds ? getMsg.createdAt.seconds * 1000 : getMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</div>
                           </>
                         )}
                       </div>
-
-                      {!getMsg.isDeleted && !isSystem && (
+                      {!getMsg.isDeleted && (
                         <div style={{ position: 'relative' }}>
-                          <span 
-                            onClick={(e) => toggleMenu(e, getMsg.id)}
-                            style={{ fontSize: '18px', color: 'var(--text-color, #777)', cursor: 'pointer', padding: '0 5px', userSelect: 'none', fontWeight: 'bold' }}
-                          >
-                            ⋮
-                          </span>
+                          <button onClick={(e) => toggleMenu(e, getMsg.id)} className="threedot-action-btn">⋮</button>
                           {activeMenuId === getMsg.id && (
                             <div className="threedot-dropdown-menu">
-                              <button type="button" className="threedot-menu-item reply-btn" onClick={() => { setReplyToMessage(getMsg); setActiveMenuId(null); }}>↩️ Reply</button>
-                              {isMe && !getMsg.fileUrl && <button type="button" className="threedot-menu-item edit-btn" onClick={() => handleEditMessage(getMsg.id, getMsg.text)}>✏️ Edit</button>}
-                              <button type="button" className="threedot-menu-item delete-btn" onClick={() => handleDeleteMessage(getMsg.id, isMe)}>🗑️ Delete</button>
+                              <button onClick={() => setReplyToMessage(getMsg)} className="threedot-menu-item reply-btn">Reply ↩️</button>
+                              {isMe && !getMsg.fileUrl && <button onClick={() => handleEditMessage(getMsg.id, getMsg.text)} className="threedot-menu-item edit-btn">Edit ✏️</button>}
+                              <button onClick={() => handleDeleteMessage(getMsg.id, isMe)} className="threedot-menu-item delete-btn">Delete 🗑️</button>
                             </div>
                           )}
                         </div>
                       )}
-
                     </div>
                   </div>
                 </div>
@@ -1313,26 +1259,25 @@ export default function PersonalChat() {
             })}
             <div ref={messagesEndRef} />
           </div>
-
-          <form onSubmit={sendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <form onSubmit={handleSendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {replyToMessage && (
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
                 <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {replyToMessage.fileUrl && replyToMessage.fileType !== 'audio' && <img src={replyToMessage.fileUrl} alt="Reply Input Preview" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
+                  {replyToMessage.fileUrl && replyToMessage.fileType !== 'audio' && <img src={replyToMessage.fileUrl} alt="" style={{ width: '28px', height: '24px', objectFit: 'cover', borderRadius: '3px' }} />}
                   <div>
                     <span style={{ fontWeight: 'bold', color: '#0056b3' }}>↩️ Reply to {replyToMessage.senderName}: </span>
-                    <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileType === 'audio' ? "🎤 Voice message" : (replyToMessage.fileUrl ? "📷 Photo" : ""))}</span>
+                    <span style={{ color: 'var(--text-color, #555)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileType === 'audio' ? "🎤 Voice message" : (replyToMessage.fileUrl ? "📸 Photo" : ""))}</span>
                   </div>
                 </div>
                 <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
               </div>
             )}
-
+            
             {selectedFiles.length > 0 && (
               <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
                 {selectedFiles.map((file) => (
                   <div key={file.id} style={{ position: 'relative', width: '55px', height: '55px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid #0056b3' }}>
-                    <img src={file.url} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <img src={file.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>✕</button>
                   </div>
                 ))}
@@ -1343,42 +1288,21 @@ export default function PersonalChat() {
 
             {isRecording ? (
               <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #dc3545 10%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(220, 53, 69, 0.4)' }}>
-                <button
-                  type="button"
-                  onClick={cancelRecording}
-                  title="Cancel recording"
-                  style={{ background: 'rgba(220, 53, 69, 0.12)', color: '#dc3545', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
-                >
-                  🗑️
-                </button>
+                <button type="button" onClick={cancelRecording} title="Cancel recording" style={{ background: 'rgba(220, 53, 69, 0.12)', color: '#dc3545', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>🗑️</button>
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0' }}>
                   <span className="recording-dot" />
                   <canvas ref={recordingCanvasRef} width={120} height={26} style={{ flex: 1 }} />
                   <span className="recording-label">{formatRecordingTime(recordingSeconds)}</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={stopAndSendRecording}
-                  title="Send voice message"
-                  style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}
-                >
-                  ➤
-                </button>
+                <button type="button" onClick={stopAndSendRecording} title="Send voice message" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
               </div>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg, #e1ecf7)', backgroundColor: 'color-mix(in srgb, var(--bg, #fff) 85%, #0056b3 15%)', borderRadius: '25px', padding: '2px 6px', border: '1px solid rgba(0, 86, 179, 0.3)' }}>
-                <button type="button" onClick={() => fileInputRef.current.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
-
-                <button
-                  type="button"
-                  onClick={startRecording}
-                  title="Record a voice message"
-                  style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}
-                >
+                <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>➕</button>
+                <button type="button" onClick={startRecording} title="Record a voice message" style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>
                   <MicIcon />
                 </button>
-
-                <input type="text" className="dynamic-chat-input" placeholder="✍️ Type a private message..." value={input} onChange={(e) => setInput(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
+                <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
                 <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
               </div>
             )}
