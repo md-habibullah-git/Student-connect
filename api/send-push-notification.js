@@ -1,3 +1,5 @@
+// File Name: api/send-push-notification.js
+
 import admin from 'firebase-admin';
 
 let serviceAccount;
@@ -27,23 +29,38 @@ export default async function handler(req, res) {
   try {
     const isCall = data?.type === 'incoming_call' || data?.type === 'global_call';
     
+    const finalTitle = title || (isCall ? '📞 Incoming Call' : 'Student Connect');
+    const finalBody = body || (isCall ? 'Someone is calling you' : 'You have a new notification');
+
+    // ✅ Data payload-এ title/body যোগ করুন — Native service এগুলো পড়বে
+    const enrichedData = {
+      ...(data || {}),
+      title: finalTitle,
+      body: finalBody,
+    };
+
     const message = {
       token: token,
       notification: {
-        title: title || 'Student Connect',
-        body: body || 'You have a new notification',
+        title: finalTitle,
+        body: finalBody,
       },
-      data: data || {},
+      data: enrichedData,
       android: {
         priority: 'high',
+        ttl: isCall ? 30000 : 3600000, // ✅ Call = 30s, Message = 1 hour
         notification: {
-          sound: isCall ? 'default' : 'default',
+          sound: 'default',
           channelId: isCall ? 'call_channel' : 'message_channel',
           priority: 'high',
           visibility: 'public',
         },
       },
       apns: {
+        headers: {
+          'apns-priority': '10',
+          'apns-push-type': isCall ? 'alert' : 'alert',
+        },
         payload: {
           aps: {
             sound: 'default',

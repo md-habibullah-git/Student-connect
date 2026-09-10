@@ -1,3 +1,5 @@
+// File Name: api/send-call-notification.js
+
 import admin from 'firebase-admin';
 
 let serviceAccount;
@@ -25,28 +27,41 @@ export default async function handler(req, res) {
   }
 
   try {
+    const finalTitle = '📞 Incoming Call';
+    const finalBody = `${callerName || 'Student'} is calling you...`;
+
     const message = {
       token: token,
+      // ✅ Notification block — system notification show করার জন্য
       notification: {
-        title: '📞 Incoming Call',
-        body: `${callerName || 'Student'} is calling you...`,
+        title: finalTitle,
+        body: finalBody,
       },
+      // ✅ Data block — Native service-এ ringtone + UI-এর জন্য
       data: {
         type: 'incoming_call',
         callType: callType || 'audio',
         roomId: roomId || '',
         callerName: callerName || 'Student',
+        title: finalTitle,
+        body: finalBody,
       },
       android: {
         priority: 'high',
+        ttl: 30000, // 30 seconds
         notification: {
           sound: 'default',
           channelId: 'call_channel',
           priority: 'high',
           visibility: 'public',
+          defaultVibrateTimings: true,
         },
       },
       apns: {
+        headers: {
+          'apns-priority': '10',
+          'apns-push-type': 'alert', // ✅ Background নয় — alert
+        },
         payload: {
           aps: {
             sound: 'default',
