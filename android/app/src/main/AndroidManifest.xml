@@ -14,7 +14,7 @@
     <!-- Storage Permissions (Gallery Access) -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
-    
+
     <!-- Android 13+ Media Permissions -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
@@ -25,10 +25,14 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    
-    <!-- ✅ Foreground Service Permission -->
+
+    <!-- Foreground Service Permission -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Full-Screen Intent Permission (Android 14+) -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <!-- ক্রোম ব্রাউজার খোলার জন্য -->
     <queries>
@@ -41,7 +45,6 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
         </intent>
-        <!-- Gallery apps -->
         <intent>
             <action android:name="android.intent.action.GET_CONTENT" />
             <category android:name="android.intent.category.OPENABLE" />
@@ -72,16 +75,17 @@
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
             android:exported="true"
-            android:hardwareAccelerated="true">
+            android:hardwareAccelerated="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
         </activity>
 
-        <!-- ✅ Custom Firebase Messaging Service -->
+        <!-- Custom Firebase Messaging Service -->
         <service
             android:name=".MyFirebaseMessagingService"
             android:exported="false">
@@ -90,13 +94,17 @@
             </intent-filter>
         </service>
 
-        <!-- ✅ Keep Alive Foreground Service -->
+        <!-- Keep Alive Foreground Service -->
         <service
             android:name=".KeepAliveService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps app ready for incoming calls and messages" />
+        </service>
 
-        <!-- ✅ Boot Receiver -->
+        <!-- Boot Receiver -->
         <receiver
             android:name=".BootReceiver"
             android:exported="true"
@@ -107,7 +115,17 @@
             </intent-filter>
         </receiver>
 
-        <!-- ✅ Firebase Instance ID Receiver -->
+        <!-- ✅ Call Action Receiver (Accept/Decline buttons) -->
+        <receiver
+            android:name=".CallActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.studentconnect.app.ACCEPT_CALL" />
+                <action android:name="com.studentconnect.app.DECLINE_CALL" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Firebase Instance ID Receiver -->
         <receiver
             android:name="com.google.firebase.iid.FirebaseInstanceIdReceiver"
             android:exported="true"
@@ -119,17 +137,17 @@
             </intent-filter>
         </receiver>
 
-        <!-- ✅ Default Notification Channel Metadata -->
+        <!-- Default Notification Channel Metadata -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="call_channel" />
+            android:value="call_channel_v2" />
 
-        <!-- ✅ Default Notification Icon -->
+        <!-- Default Notification Icon -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@mipmap/ic_launcher" />
 
-        <!-- ✅ Default Notification Color -->
+        <!-- Default Notification Color -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/colorPrimary" />

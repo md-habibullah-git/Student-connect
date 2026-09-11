@@ -1,4 +1,4 @@
-// File Name: api/send-call-notification.js
+// File Name: api/cancel-call-notification.js
 
 import admin from 'firebase-admin';
 
@@ -20,30 +20,22 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { token, callerName, callType, roomId } = req.body || {};
+  const { token, roomId } = req.body || {};
 
   if (!token) {
     return res.status(400).json({ error: 'Push token is required' });
   }
 
   try {
-    const finalTitle = `📞 ${callerName || 'Student'} is calling...`;
-    const finalBody = `${callType === 'video' ? '📹 Video' : '🎙️ Audio'} call`;
-
     const message = {
       token: token,
-      // ✅ data-only — notification block নেই
       data: {
-        type: 'incoming_call',
-        callType: callType || 'audio',
+        type: 'cancel_call',
         roomId: roomId || '',
-        callerName: callerName || 'Student',
-        title: finalTitle,
-        body: finalBody,
       },
       android: {
         priority: 'high',
-        ttl: 60000,
+        ttl: 10000,
       },
       apns: {
         headers: {
@@ -61,7 +53,7 @@ export default async function handler(req, res) {
     const response = await admin.messaging().send(message);
     return res.status(200).json({ success: true, response });
   } catch (err) {
-    console.error('Call notification error:', err);
+    console.error('Cancel notification error:', err);
     return res.status(500).json({ error: err.message });
   }
 }

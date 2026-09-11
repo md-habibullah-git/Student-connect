@@ -3,57 +3,83 @@ package com.studentconnect.app;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
+import android.util.Log;
 
+import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
 public class KeepAliveService extends Service {
-    private static final int NOTIFICATION_ID = 999;
+    private static final String TAG = "KeepAliveService";
     private static final String CHANNEL_ID = "keep_alive_channel";
+    private static final int NOTIFICATION_ID = 9999;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        createNotificationChannel();
-        startForeground(NOTIFICATION_ID, buildNotification());
+        Log.d(TAG, "KeepAliveService created");
+        createChannel();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        Log.d(TAG, "KeepAliveService started");
+
+        Intent mainIntent = new Intent(this, MainActivity.class);
+        mainIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        mainIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+
+        int pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            pendingFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, mainIntent, pendingFlags);
+
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("Student Connect")
+            .setContentText("Ready to receive calls & messages")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setContentIntent(pendingIntent)
+            .build();
+
+        startForeground(NOTIFICATION_ID, notification);
+
+        // ✅ Service চালু রাখার জন্য START_STICKY
         return START_STICKY;
     }
 
+    @Nullable
     @Override
     public IBinder onBind(Intent intent) {
         return null;
     }
 
-    private Notification buildNotification() {
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Student Connect")
-            .setContentText("Running in background")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_MIN)  // ✅ LOW থেকে MIN করলাম
-            .setOngoing(true);
-        return builder.build();
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        Log.d(TAG, "KeepAliveService destroyed");
     }
 
-    private void createNotificationChannel() {
+    private void createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
                 "Background Service",
-                NotificationManager.IMPORTANCE_MIN  // ✅ LOW থেকে MIN করলাম
+                NotificationManager.IMPORTANCE_LOW
             );
-            channel.setShowBadge(false);  // ✅ Badge off
-            channel.setSound(null, null);  // ✅ Sound off
-            channel.enableVibration(false);  // ✅ Vibration off
-            
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            manager.createNotificationChannel(channel);
+            channel.setDescription("Keeps the app ready to receive calls");
+            channel.setShowBadge(false);
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) {
+                nm.createNotificationChannel(channel);
+            }
         }
     }
 }

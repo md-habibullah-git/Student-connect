@@ -9,7 +9,7 @@ import {
   setDoc, updateDoc, getDoc, getDocs, where, deleteDoc, serverTimestamp 
 } from 'firebase/firestore';
 import { getActiveCallSession, setActiveCallSession, clearActiveCallSession, subscribeActiveCallSession } from '../callSession';
-import { sendPushNotification, sendCallNotification } from '../pushNotifications';
+import { sendPushNotification, sendCallNotification, sendCancelCallNotification } from '../pushNotifications';
 import { FilePicker } from '@capawesome/capacitor-file-picker';
 
 const rtcConfiguration = {
@@ -1112,6 +1112,24 @@ export default function PersonalChat() {
     const startedAt = callStartTimeRef.current || new Date().getTime();
     const endedAt = new Date().getTime();
     const callType = activeCallType;
+    
+    // ✅ Receiver-কে cancel notification পাঠান — যাতে receiver-এর ringtone বন্ধ হয়
+    try {
+      if (targetUid && chatRoomId) {
+        const receiverDoc = await getDoc(doc(db, "users", targetUid));
+        if (receiverDoc.exists()) {
+          const receiverData = receiverDoc.data();
+          if (receiverData.pushToken) {
+            await sendCancelCallNotification(receiverData.pushToken, chatRoomId);
+            console.log('✅ Cancel call notification sent to receiver');
+          } else {
+            console.log('⚠️ Receiver has no pushToken — skipping cancel notification');
+          }
+        }
+      }
+    } catch (cancelErr) {
+      console.error("❌ Cancel notification error:", cancelErr);
+    }
     
     try {
       const callSnap = await getDoc(callRef);

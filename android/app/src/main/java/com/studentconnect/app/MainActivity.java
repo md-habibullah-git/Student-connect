@@ -1,98 +1,82 @@
+// File Name: frontend/android/app/src/main/java/com/studentconnect/app/MainActivity.java
+
 package com.studentconnect.app;
 
-import android.Manifest;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
-import android.webkit.PermissionRequest;
-import android.webkit.WebChromeClient;
-import android.webkit.WebView;
-import android.view.View;
-import android.widget.FrameLayout;
-import android.content.pm.ActivityInfo;
+import android.util.Log;
+
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
-    
-    private View customView;
-    private WebChromeClient.CustomViewCallback customViewCallback;
-    private FrameLayout fullscreenContainer;
-    
+    private static final String TAG = "MainActivity";
+
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(RingtonePlugin.class);
+
         super.onCreate(savedInstanceState);
-        
-        // ✅ KeepAliveService start করুন — App swipe করে বন্ধ করলেও notification কাজ করবে
-        Intent serviceIntent = new Intent(this, KeepAliveService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent);
-        } else {
-            startService(serviceIntent);
-        }
-        
-        // ১. ওএস লেভেলে সরাসরি ক্যামেরা ও মাইকের পারমিশন পপ-আপ চাওয়া
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            requestPermissions(new String[]{
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.MODIFY_AUDIO_SETTINGS
-            }, 101);
-        }
+        Log.d(TAG, "MainActivity onCreate");
 
-        // ২. ক্যাপাসিটর ব্রিজ লোড হওয়ার পর WebView-এর কড়া সিকিউরিটি বাইপাস করা
-        this.bridge.getWebView().post(new Runnable() {
-            @Override
-            public void run() {
-                bridge.getWebView().getSettings().setMediaPlaybackRequiresUserGesture(false);
-                bridge.getWebView().setWebChromeClient(new WebChromeClient() {
-                    @Override
-                    public void onPermissionRequest(final PermissionRequest request) {
-                        MainActivity.this.runOnUiThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                request.grant(request.getResources());
-                            }
-                        });
-                    }
-                    
-                    // 🔥 Fullscreen support
-                    @Override
-                    public void onShowCustomView(View view, CustomViewCallback callback) {
-                        if (customView != null) {
-                            callback.onCustomViewHidden();
-                            return;
-                        }
-                        customView = view;
-                        customViewCallback = callback;
-                        
-                        fullscreenContainer = new FrameLayout(MainActivity.this);
-                        fullscreenContainer.setBackgroundColor(android.graphics.Color.BLACK);
-                        fullscreenContainer.addView(view);
-                        
-                        ((FrameLayout) getWindow().getDecorView()).addView(fullscreenContainer, 
-                            new FrameLayout.LayoutParams(
-                                FrameLayout.LayoutParams.MATCH_PARENT, 
-                                FrameLayout.LayoutParams.MATCH_PARENT
-                            ));
-                        
-                        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
-                    }
+        startKeepAliveService();
 
-                    @Override
-                    public void onHideCustomView() {
-                        if (customView == null) return;
-                        
-                        ((FrameLayout) getWindow().getDecorView()).removeView(fullscreenContainer);
-                        customView = null;
-                        fullscreenContainer = null;
-                        if (customViewCallback != null) {
-                            customViewCallback.onCustomViewHidden();
-                        }
-                        
-                        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
-                    }
+        // ✅ Accept button থেকে আসা extra data check করুন
+        handleIntentExtras(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // ✅ Accept button-এ tap করলে এই method trigger হবে (singleTask launch mode)
+        handleIntentExtras(intent);
+    }
+
+    private void handleIntentExtras(Intent intent) {
+        if (intent == null) return;
+
+        String type = intent.getStringExtra("type");
+        if ("incoming_call".equals(type)) {
+            boolean autoAccept = intent.getBooleanExtra("autoAccept", false);
+            String roomId = intent.getStringExtra("roomId");
+            String callerName = intent.getStringExtra("callerName");
+            String callType = intent.getStringExtra("callType");
+
+            Log.d(TAG, "Incoming call intent — autoAccept: " + autoAccept
+                + ", roomId: " + roomId
+                + ", callerName: " + callerName
+                + ", callType: " + callType);
+
+            // ✅ JS side এ event dispatch করুন যাতে GlobalAlerts handle করতে পারে
+            final String jsCode =
+                "window.dispatchEvent(new CustomEvent('native-call-accept', {" +
+                "  detail: {" +
+                "    roomId: '" + (roomId != null ? roomId : "") + "'," +
+                "    callerName: '" + (callerName != null ? callerName : "") + "'," +
+                "    callType: '" + (callType != null ? callType : "audio") + "'" +
+                "  }" +
+                "}));";
+
+            if (getBridge() != null && getBridge().getWebView() != null) {
+                getBridge().getWebView().post(() -> {
+                    getBridge().getWebView().evaluateJavascript(jsCode, null);
                 });
             }
-        });
+        }
+    }
+
+    private void startKeepAliveService() {
+        try {
+            Intent serviceIntent = new Intent(this, KeepAliveService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent);
+            } else {
+                startService(serviceIntent);
+            }
+            Log.d(TAG, "KeepAliveService started");
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start KeepAliveService: " + e.getMessage());
+        }
     }
 }

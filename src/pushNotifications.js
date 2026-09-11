@@ -1,3 +1,5 @@
+// File Name: src/pushNotifications.js
+
 import { PushNotifications } from '@capacitor/push-notifications';
 import { Capacitor } from '@capacitor/core';
 import { db, auth, getFCMToken, messaging } from './firebase';
@@ -102,6 +104,15 @@ export async function initPushNotifications() {
           
           const data = payload.data || {};
           
+          // ✅ Cancel call handler
+          if (data.type === 'cancel_call') {
+            const cancelEvent = new CustomEvent('cancel-call', {
+              detail: { roomId: data.roomId }
+            });
+            window.dispatchEvent(cancelEvent);
+            return;
+          }
+          
           if (data.type === 'incoming_call') {
             const ringtoneEvent = new CustomEvent('incoming-call', {
               detail: {
@@ -132,6 +143,15 @@ export async function initPushNotifications() {
           console.log('🔔 Native notification received:', notification);
           
           const data = notification.data || {};
+          
+          // ✅ Cancel call handler
+          if (data.type === 'cancel_call') {
+            const cancelEvent = new CustomEvent('cancel-call', {
+              detail: { roomId: data.roomId }
+            });
+            window.dispatchEvent(cancelEvent);
+            return;
+          }
           
           if (data.type === 'incoming_call') {
             const ringtoneEvent = new CustomEvent('incoming-call', {
@@ -197,5 +217,21 @@ export async function sendCallNotification(token, callerName, callType, roomId) 
     });
   } catch (err) {
     console.error('Send call notification error:', err);
+  }
+}
+
+// ✅ Cancel Call Notification — Caller cut করলে Receiver-কে জানানোর জন্য
+export async function sendCancelCallNotification(token, roomId) {
+  if (!token) return;
+  try {
+    const response = await fetch('/api/cancel-call-notification', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, roomId }),
+    });
+    const result = await response.json();
+    console.log('✅ Cancel call notification sent:', result);
+  } catch (err) {
+    console.error('❌ Send cancel call notification error:', err);
   }
 }

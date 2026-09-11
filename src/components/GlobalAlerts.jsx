@@ -1,4 +1,5 @@
 // File Name: src/components/GlobalAlerts.jsx
+
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
@@ -7,12 +8,29 @@ import {
   updateDoc, setDoc, getDocs
 } from 'firebase/firestore';
 import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { initPushNotifications } from '../pushNotifications';
 
 const GLOBAL_ROOM_ID = "campus_global_conference_room";
+
+// ✅ Native Ringtone Plugin register
+const RingtoneControl = Capacitor.isNativePlatform()
+  ? registerPlugin('RingtoneControl')
+  : null;
+
+// ✅ Native ringtone stop করার helper
+const stopNativeRingtone = async () => {
+  if (RingtoneControl) {
+    try {
+      await RingtoneControl.stopRingtone();
+      console.log('✅ Native ringtone stopped');
+    } catch (err) {
+      console.error('❌ Stop native ringtone error:', err);
+    }
+  }
+};
 
 const PhoneAcceptIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -34,12 +52,12 @@ let ringtoneIntervalRef = null;
 const startRingtone = () => {
   try {
     if (ringtoneAudioCtx) return;
-    
+
     ringtoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     ringtoneGainNode = ringtoneAudioCtx.createGain();
     ringtoneGainNode.connect(ringtoneAudioCtx.destination);
     ringtoneGainNode.gain.value = 2.0;
-    
+
     const playBeep = () => {
       try {
         if (ringtoneOscillator) {
@@ -53,7 +71,7 @@ const startRingtone = () => {
         ringtoneOscillator.stop(ringtoneAudioCtx.currentTime + 0.5);
       } catch (err) {}
     };
-    
+
     playBeep();
     ringtoneIntervalRef = setInterval(playBeep, 1000);
   } catch (err) {}
@@ -153,7 +171,7 @@ export default function GlobalAlerts() {
     } else {
       stopRingtone();
     }
-    
+
     return () => {
       stopRingtone();
     };
@@ -304,7 +322,7 @@ export default function GlobalAlerts() {
 
         if (
           !isFirst &&
-          data.lastMessageText && 
+          data.lastMessageText &&
           data.lastMessageText.includes('missed') &&
           data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
           data.lastMessageSenderId === 'system'
@@ -318,7 +336,7 @@ export default function GlobalAlerts() {
               'Missed Call 📞',
               `You missed a ${data.lastMessageText.includes('video') ? 'video' : 'audio'} call`
             );
-            
+
             setMessageBubbles((prev) => {
               const existing = prev.find((b) => b.roomId === `missed_${roomId}`);
               if (!existing) {
@@ -337,7 +355,7 @@ export default function GlobalAlerts() {
             });
           }
         }
-        
+
         if (
           !isFirst &&
           data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
@@ -353,7 +371,7 @@ export default function GlobalAlerts() {
               'New Message 💬',
               `${data.lastMessageSenderName || 'Student'}: ${data.lastMessageText || ''}`
             );
-            
+
             setMessageBubbles((prev) => {
               const existing = prev.find((b) => b.roomId === roomId);
               if (existing) {
@@ -391,7 +409,7 @@ export default function GlobalAlerts() {
           const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
           if (!onGlobalPage) {
             playMessageSound();
-            
+
             if (data.text && data.text.includes('missed')) {
               sendLocalNotification(
                 'Missed Group Call 🌐',
@@ -403,7 +421,7 @@ export default function GlobalAlerts() {
                 `${data.senderName || 'Student'}: ${data.text || ''}`
               );
             }
-            
+
             setMessageBubbles((prev) => {
               const existing = prev.find((b) => b.isGlobal);
               if (existing) {
@@ -440,6 +458,45 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
+  // ✅ Cancel Call Listener — Caller cut করলে ringtone stop
+  useEffect(() => {
+    const handleCancelCall = (event) => {
+      console.log('📞 Cancel call event received:', event.detail);
+      stopRingtone();        // JS ringtone stop
+      stopNativeRingtone();  // Native ringtone stop
+      setIncomingPersonalCall(null);
+      setIncomingGlobalCall(null);
+    };
+
+    window.addEventListener('cancel-call', handleCancelCall);
+    return () => {
+      window.removeEventListener('cancel-call', handleCancelCall);
+    };
+  }, []);
+
+  // ✅ Native Accept Listener — Native notification-এর Accept button থেকে event
+  useEffect(() => {
+    const handleNativeAccept = (event) => {
+      console.log('📞 Native accept event received:', event.detail);
+      stopRingtone();
+      stopNativeRingtone();
+
+      const { roomId, callerName } = event.detail || {};
+      if (roomId && callerName) {
+        navigate(`/chat/${roomId}/${encodeURIComponent(callerName)}`, {
+          state: { autoJoinCall: true }
+        });
+      }
+      setIncomingPersonalCall(null);
+      setIncomingGlobalCall(null);
+    };
+
+    window.addEventListener('native-call-accept', handleNativeAccept);
+    return () => {
+      window.removeEventListener('native-call-accept', handleNativeAccept);
+    };
+  }, [navigate]);
+
   // Global call listener
   useEffect(() => {
     if (!currentUid) return;
@@ -447,7 +504,7 @@ export default function GlobalAlerts() {
       if (snap.exists()) {
         const data = snap.data();
         const callId = String(data.callStartedAt || '0');
-        
+
         if (data.status === "ringing" && data.hostId !== currentUid) {
           const alreadyDismissed = dismissedGlobalCalls.includes(callId);
           if (!alreadyDismissed) {
@@ -459,14 +516,14 @@ export default function GlobalAlerts() {
             return;
           }
         }
-        
+
         if (data.status !== "ringing" && data.callStartedAt && data.hostId !== currentUid) {
           const memberCount = Object.keys(data.callHistory || {}).filter(k => k !== 'totalDuration').length;
           if (memberCount <= 1) {
             const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
             const globalCallId = `global_${callId}`;
             const alreadySaved = missedCallsStorage.some(call => call.callId === globalCallId);
-            
+
             if (!alreadySaved) {
               missedCallsStorage.push({
                 callId: globalCallId,
@@ -491,13 +548,13 @@ export default function GlobalAlerts() {
   useEffect(() => {
     if (!currentUid) return;
     if (location.pathname !== '/') return;
-    
+
     const checkAllAlerts = () => {
       const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
       const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
-      
+
       const unseenMissedCalls = missedCallsStorage.filter(call => !seenCallsStorage.includes(call.callId));
-      
+
       if (unseenMissedCalls.length > 0) {
         const missedBubbles = unseenMissedCalls.map(call => ({
           roomId: call.isGlobal ? `missed_global_${call.callId.replace('global_', '')}` : `missed_${call.callId}`,
@@ -509,7 +566,7 @@ export default function GlobalAlerts() {
           isMissedCall: true,
           callTypeIcon: call.callType === 'audio' ? '🎙️' : '📹'
         }));
-        
+
         setMessageBubbles(prev => {
           const merged = [...prev];
           missedBubbles.forEach(bubble => {
@@ -518,25 +575,25 @@ export default function GlobalAlerts() {
           });
           return merged.slice(-5);
         });
-        
+
         playMessageSound();
       }
-      
+
       const personalRoomsRef = collection(db, "personal-rooms");
       const personalQ = query(personalRoomsRef, where("participants", "array-contains", currentUid));
-      
+
       getDocs(personalQ).then(snapshot => {
         const unreadBubbles = [];
-        
+
         snapshot.docs.forEach((docSnap) => {
           const data = docSnap.data();
           const roomId = docSnap.id;
           const lastReadKey = `lastRead_personal_${roomId}`;
           const lastRead = Number(localStorage.getItem(lastReadKey)) || 0;
-          
+
           if (data.lastMessageAt && data.lastMessageAt > lastRead && data.lastMessageSenderId !== currentUid) {
             const otherUid = (data.participants || []).find((id) => id !== currentUid);
-            
+
             if (data.lastMessageText && data.lastMessageText.includes('missed')) {
               unreadBubbles.push({
                 roomId: `missed_${roomId}`,
@@ -560,7 +617,7 @@ export default function GlobalAlerts() {
             }
           }
         });
-        
+
         if (unreadBubbles.length > 0) {
           setMessageBubbles(prev => {
             const merged = [...prev];
@@ -570,20 +627,20 @@ export default function GlobalAlerts() {
             });
             return merged.slice(-5);
           });
-          
+
           playMessageSound();
         }
       }).catch(err => console.error("Error checking personal unread:", err));
-      
+
       const lastReadGlobal = Number(localStorage.getItem('lastRead_global')) || 0;
       const globalMsgRef = collection(db, "global-room-messages");
       const globalQ = query(globalMsgRef, orderBy("createdAt", "desc"), limit(1));
-      
+
       getDocs(globalQ).then(snapshot => {
         if (!snapshot.empty) {
           const globalData = snapshot.docs[0].data();
           const msgTime = globalData.createdAt?.seconds ? globalData.createdAt.seconds * 1000 : globalData.createdAt;
-          
+
           if (msgTime > lastReadGlobal && globalData.senderUid !== currentUid) {
             const unreadBubble = {
               roomId: 'global',
@@ -592,7 +649,7 @@ export default function GlobalAlerts() {
               senderName: globalData.senderName || 'Unknown',
               senderPhoto: globalData.senderPhoto || '',
             };
-            
+
             setMessageBubbles(prev => {
               const existing = prev.find(b => b.roomId === 'global' && !b.isMissedCall);
               if (!existing) {
@@ -600,13 +657,13 @@ export default function GlobalAlerts() {
               }
               return prev;
             });
-            
+
             playMessageSound();
           }
         }
       }).catch(err => console.error("Error checking global unread:", err));
     };
-    
+
     checkAllAlerts();
   }, [currentUid, location.pathname]);
 
@@ -625,9 +682,11 @@ export default function GlobalAlerts() {
     && activeSession.type === 'personal'
     && !location.pathname.startsWith(`/chat/${activeSession.otherUid}/`);
 
+  // ✅ handleReceive — JS + Native ringtone stop
   const handleReceive = () => {
     if (!activeCall) return;
     stopRingtone();
+    stopNativeRingtone();
     if (activeCall.type === 'personal') {
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
@@ -641,13 +700,15 @@ export default function GlobalAlerts() {
     }
   };
 
+  // ✅ handleDecline — JS + Native ringtone stop
   const handleDecline = async () => {
     if (!activeCall) return;
     stopRingtone();
+    stopNativeRingtone();
     if (activeCall.type === 'personal') {
-      try { 
-        await updateDoc(doc(db, "personal-connections", activeCall.roomId), { status: "ended" }); 
-      } catch (err) { 
+      try {
+        await updateDoc(doc(db, "personal-connections", activeCall.roomId), { status: "ended" });
+      } catch (err) {
         console.error("Error declining personal call:", err);
       }
       setIncomingPersonalCall(null);
@@ -668,7 +729,7 @@ export default function GlobalAlerts() {
 
   const handleBubbleClick = (bubble) => {
     if (dragMovedRef.current) { dragMovedRef.current = false; return; }
-    
+
     if (bubble.isMissedCall) {
       const callId = bubble.roomId.replace('missed_global_', 'global_').replace('missed_', '');
       const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
@@ -677,14 +738,14 @@ export default function GlobalAlerts() {
         localStorage.setItem(`seenCalls_${currentUid}`, JSON.stringify(seenCallsStorage));
       }
     }
-    
+
     if (!bubble.isMissedCall && !bubble.isGlobal) {
       localStorage.setItem(`lastRead_personal_${bubble.roomId}`, String(Date.now()));
     }
     if (bubble.isGlobal && !bubble.isMissedCall) {
       localStorage.setItem('lastRead_global', String(Date.now()));
     }
-    
+
     if (bubble.isGlobal) navigate('/chat/global/Global-Chatroom');
     else navigate(`/chat/${bubble.otherUid}/${encodeURIComponent(bubble.senderName || 'Student')}`);
     setMessageBubbles((prev) => prev.filter((b) => b !== bubble));

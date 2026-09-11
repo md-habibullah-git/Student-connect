@@ -9,7 +9,7 @@ import {
   serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where, Timestamp 
 } from 'firebase/firestore';
 import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
-import { sendPushNotification } from '../pushNotifications';
+import { sendPushNotification, sendCancelCallNotification } from '../pushNotifications';
 import { FilePicker } from '@capawesome/capacitor-file-picker';
 
 const rtcConfiguration = {
@@ -1030,6 +1030,22 @@ export default function GlobalChat() {
     }
   };
 
+  // ✅ Global Cancel Notification — সব approved user-দের cancel push পাঠান
+  const sendGlobalCancelNotifications = async () => {
+    try {
+      const usersSnapshot = await getDocs(query(collection(db, "users"), where("approved", "==", true)));
+      const cancelPromises = usersSnapshot.docs
+        .filter(doc => doc.data().uid !== currentUid && doc.data().pushToken)
+        .map(doc => 
+          sendCancelCallNotification(doc.data().pushToken, globalRoomId)
+        );
+      await Promise.all(cancelPromises);
+      console.log('✅ Global cancel notifications sent');
+    } catch (err) {
+      console.error("❌ Global cancel notification error:", err);
+    }
+  };
+
   const leaveGlobalCallBeacon = () => {
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
@@ -1074,6 +1090,9 @@ export default function GlobalChat() {
   };
 
   const leaveGlobalCall = async () => {
+    // ✅ সবার ringtone বন্ধ করার জন্য cancel notification পাঠান
+    await sendGlobalCancelNotifications();
+    
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
       const snapshot = await getDoc(callDocRef);

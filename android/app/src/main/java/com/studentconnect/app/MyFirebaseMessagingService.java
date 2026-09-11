@@ -2,12 +2,11 @@
 
 package com.studentconnect.app;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.media.AudioAttributes;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -24,11 +23,17 @@ import java.util.Map;
 
 public class MyFirebaseMessagingService extends FirebaseMessagingService {
     private static final String TAG = "FCMService";
-    private static final String CHANNEL_ID = "call_channel";
+    private static final String CHANNEL_ID = "call_channel_v2";
+    private static final String MESSAGE_CHANNEL_ID = "message_channel";
 
-    // ✅ Custom Ringtone-এর জন্য static variables
+    // ✅ Action constants — CallActionReceiver এর সাথে match করতে হবে
+    public static final String ACTION_ACCEPT_CALL = "com.studentconnect.app.ACCEPT_CALL";
+    public static final String ACTION_DECLINE_CALL = "com.studentconnect.app.DECLINE_CALL";
+
     private static Ringtone activeRingtone = null;
     private static Handler ringtoneHandler = null;
+    private static NotificationManager staticNotificationManager = null;
+    private static int lastNotificationId = 1001;
 
     @Override
     public void onMessageReceived(RemoteMessage remoteMessage) {
@@ -36,22 +41,32 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
         Map<String, String> data = remoteMessage.getData();
         String type = data.get("type");
+        Log.d(TAG, "Message type: " + type);
+
+        // ✅ Cancel call — ringtone + notification stop
+        if ("cancel_call".equals(type)) {
+            Log.d(TAG, "Cancel call received — stopping ringtone");
+            stopRingtoneFromOutside(getApplicationContext());
+            return;
+        }
 
         String title = remoteMessage.getNotification() != null ?
             remoteMessage.getNotification().getTitle() : "Student Connect";
         String body = remoteMessage.getNotification() != null ?
-            remoteMessage.getNotification().getBody() : "Incoming call";
+            remoteMessage.getNotification().getBody() : "";
 
-        // ✅ Data payload থেকেও title/body নিন (data-only message support)
         if (data.get("title") != null) title = data.get("title");
         if (data.get("body") != null) body = data.get("body");
 
-        // ✅ Call notification-এ ringtone বাজান (app killed হলেও বাজবে)
+        // ✅ Call হলে Native ringtone + full screen notification
         if ("incoming_call".equals(type) || "global_call".equals(type)) {
             playRingtone();
+            showCallNotification(title, body, data);
+            return;
         }
 
-        showNotification(title, body, data);
+        // ✅ Normal message হলে simple notification
+        showMessageNotification(title, body, data);
     }
 
     @Override
@@ -59,10 +74,36 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         Log.d(TAG, "Refreshed token: " + token);
     }
 
-    // ✅ Custom Ringtone play function
+    public static void stopRingtoneFromOutside(Context context) {
+        Log.d(TAG, "stopRingtoneFromOutside called");
+        try {
+            if (activeRingtone != null && activeRingtone.isPlaying()) {
+                activeRingtone.stop();
+                Log.d(TAG, "Native ringtone stopped");
+            }
+            activeRingtone = null;
+            if (ringtoneHandler != null) {
+                ringtoneHandler.removeCallbacksAndMessages(null);
+                ringtoneHandler = null;
+            }
+
+            NotificationManager nm = null;
+            if (staticNotificationManager != null) {
+                nm = staticNotificationManager;
+            } else if (context != null) {
+                nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            }
+            if (nm != null) {
+                nm.cancel(lastNotificationId);
+                Log.d(TAG, "Call notification cancelled");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Stop ringtone error: " + e.getMessage());
+        }
+    }
+
     private void playRingtone() {
         try {
-            // আগের ringtone থাকলে stop করুন
             stopRingtone();
 
             Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
@@ -70,24 +111,22 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
             if (activeRingtone != null) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    activeRingtone.setLooping(true); // ✅ Loop করে বাজবে
+                    activeRingtone.setLooping(true);
                 }
                 activeRingtone.play();
-                Log.d(TAG, "Ringtone started");
+                Log.d(TAG, "Native ringtone started");
 
-                // ✅ 30 seconds পরে ringtone stop
                 ringtoneHandler = new Handler();
                 ringtoneHandler.postDelayed(() -> {
                     stopRingtone();
-                    Log.d(TAG, "Ringtone stopped after 30s");
-                }, 30000);
+                    Log.d(TAG, "Native ringtone stopped after 60s");
+                }, 60000);
             }
         } catch (Exception e) {
             Log.e(TAG, "Ringtone error: " + e.getMessage());
         }
     }
 
-    // ✅ Ringtone stop function
     private void stopRingtone() {
         try {
             if (activeRingtone != null && activeRingtone.isPlaying()) {
@@ -103,63 +142,124 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         }
     }
 
-    private void showNotification(String title, String body, Map<String, String> data) {
+    private void showCallNotification(String title, String body, Map<String, String> data) {
         NotificationManager notificationManager =
             (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        staticNotificationManager = notificationManager;
 
-        createNotificationChannel(notificationManager);
+        createCallChannel(notificationManager);
 
-        Intent intent = new Intent(this, MainActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
-
+        Intent mainIntent = new Intent(this, MainActivity.class);
+        mainIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        mainIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        mainIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         for (Map.Entry<String, String> entry : data.entrySet()) {
-            intent.putExtra(entry.getKey(), entry.getValue());
+            mainIntent.putExtra(entry.getKey(), entry.getValue());
         }
 
-        // ✅ FLAG_UPDATE_CURRENT — duplicate intent problem fix
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
+        int pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            pendingFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        PendingIntent mainPendingIntent = PendingIntent.getActivity(this, 0, mainIntent, pendingFlags);
 
-        Uri defaultSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
-
-        // ✅ Call-এর জন্য Fullscreen Intent
-        boolean isCall = "incoming_call".equals(data.get("type")) || "global_call".equals(data.get("type"));
-
-        NotificationCompat.Builder notificationBuilder =
+        NotificationCompat.Builder builder =
             new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle(title)
                 .setContentText(body)
                 .setAutoCancel(true)
-                .setOngoing(isCall) // ✅ Call-এর জন্য ongoing (swipe করে remove হবে না)
-                .setSound(defaultSoundUri)
+                .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setContentIntent(pendingIntent);
+                .setContentIntent(mainPendingIntent);
 
-        // ✅ Fullscreen intent — lock screen-এ call UI দেখাবে
-        if (isCall) {
-            notificationBuilder.setFullScreenIntent(pendingIntent, true);
-        }
+        // ✅ Lock screen-এ popup
+        builder.setFullScreenIntent(mainPendingIntent, true);
 
-        notificationManager.notify((int) System.currentTimeMillis(), notificationBuilder.build());
+        // ✅ Accept button
+        Intent acceptIntent = new Intent(this, CallActionReceiver.class);
+        acceptIntent.setAction(ACTION_ACCEPT_CALL);
+        acceptIntent.putExtra("roomId", data.get("roomId"));
+        acceptIntent.putExtra("callerName", data.get("callerName"));
+        acceptIntent.putExtra("callType", data.get("callType"));
+        PendingIntent acceptPending = PendingIntent.getBroadcast(
+            this, 101, acceptIntent, pendingFlags
+        );
+        builder.addAction(android.R.drawable.ic_menu_call, "Accept", acceptPending);
+
+        // ✅ Decline button
+        Intent declineIntent = new Intent(this, CallActionReceiver.class);
+        declineIntent.setAction(ACTION_DECLINE_CALL);
+        declineIntent.putExtra("roomId", data.get("roomId"));
+        PendingIntent declinePending = PendingIntent.getBroadcast(
+            this, 102, declineIntent, pendingFlags
+        );
+        builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePending);
+
+        notificationManager.notify(lastNotificationId, builder.build());
     }
 
-    private void createNotificationChannel(NotificationManager notificationManager) {
+    private void showMessageNotification(String title, String body, Map<String, String> data) {
+        NotificationManager notificationManager =
+            (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
+            android.app.NotificationChannel channel = new android.app.NotificationChannel(
+                MESSAGE_CHANNEL_ID,
+                "Message Notifications",
+                NotificationManager.IMPORTANCE_HIGH
+            );
+            channel.setDescription("New message alerts");
+            channel.enableVibration(true);
+            notificationManager.createNotificationChannel(channel);
+        }
+
+        Intent mainIntent = new Intent(this, MainActivity.class);
+        mainIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        mainIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        mainIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        for (Map.Entry<String, String> entry : data.entrySet()) {
+            mainIntent.putExtra(entry.getKey(), entry.getValue());
+        }
+
+        int pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            pendingFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        PendingIntent mainPendingIntent = PendingIntent.getActivity(this, 0, mainIntent, pendingFlags);
+
+        NotificationCompat.Builder builder =
+            new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(mainPendingIntent);
+
+        int notifId = (int) (System.currentTimeMillis() % 10000) + 2000;
+        notificationManager.notify(notifId, builder.build());
+    }
+
+    private void createCallChannel(NotificationManager notificationManager) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.app.NotificationChannel channel = new android.app.NotificationChannel(
                 CHANNEL_ID,
                 "Call Notifications",
-                NotificationManager.IMPORTANCE_MAX
+                NotificationManager.IMPORTANCE_HIGH
             );
             channel.setDescription("Incoming call notifications");
             channel.enableVibration(true);
             channel.setVibrationPattern(new long[]{0, 500, 250, 500, 250, 500});
-            channel.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), null);
+            channel.setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            );
+            channel.enableLights(true);
             notificationManager.createNotificationChannel(channel);
         }
     }
