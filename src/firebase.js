@@ -1,3 +1,5 @@
+// File Name: src/firebase.js
+
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
@@ -31,25 +33,39 @@ try {
 }
 export { messaging };
 
-// ✅ VAPID Key — Firebase Console থেকে generate করা
+// ✅ VAPID Key (Web only)
 const VAPID_KEY = "BOtoloi6y3lWsPJzu0LYjrAkzwJuRxCo-ni4U0MU3BdUa2wdxbyJX34HdXYbbHsH_gd5QCd9weG-CNNAxudU5Og";
 
-// ✅ FCM Token — শুধু Web-এর জন্য
+/**
+ * ✅ FCM Token — শুধু Web-এর জন্য
+ *
+ * Native-এ token handle করে `src/pushNotifications.js` → initPushNotifications()
+ * কারণ Native-এ Capacitor PushNotifications plugin সরাসরি registration listener
+ * দিয়ে token দেয় এবং সেখানে Firestore-এ save-ও করা হয়।
+ */
 export async function getFCMToken() {
+  // Native-এ এই function use হবে না
+  if (Capacitor.isNativePlatform()) {
+    console.log('🔔 Native platform — token is handled in pushNotifications.js');
+    return null;
+  }
+
+  // Web
+  if (!messaging) {
+    console.error('❌ Messaging not initialized (Web)');
+    return null;
+  }
+
   try {
-    if (Capacitor.isNativePlatform()) {
-      console.log('🔔 Native platform — use Capacitor Push token instead');
-      return null;
-    }
-    
     const currentToken = await getToken(messaging, { vapidKey: VAPID_KEY });
     if (currentToken) {
       console.log('✅ Web FCM Token:', currentToken);
       return currentToken;
     }
+    console.warn('❌ Web FCM token empty');
     return null;
   } catch (err) {
-    console.error('❌ FCM Token error:', err);
+    console.error('❌ Web FCM Token error:', err);
     return null;
   }
 }

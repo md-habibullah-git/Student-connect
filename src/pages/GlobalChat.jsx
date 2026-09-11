@@ -331,7 +331,7 @@ export default function GlobalChat() {
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // ✅ Push notification — fire-and-forget, কখনো message flow আটকাবে না
+  // ✅ Push notification — fire-and-forget
   const sendGlobalMessagePushNotification = (title, body, notificationType = 'message') => {
     (async () => {
       try {
@@ -450,7 +450,6 @@ export default function GlobalChat() {
             deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
             setShowRejoinBtn(false);
             setInCall(false);
-            // ⚠️ window.location.reload() সরানো হয়েছে — এটাই message flow ভাঙছিল
             return;
           }
           setShowRejoinBtn(true);
@@ -474,10 +473,23 @@ export default function GlobalChat() {
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
 
-  // ✅ UPDATED handleSendMessage — PersonalChat-এর মতো: Date.now(), push fire-and-forget, reset আগে
+  // ✅ UPDATED handleSendMessage — debug logs সহ
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim() && selectedFiles.length === 0) return;
+
+    // ============ DEBUG LOGS ============
+    console.log('🔍 DEBUG — handleSendMessage called');
+    console.log('🔍 DEBUG — currentUid:', currentUid);
+    console.log('🔍 DEBUG — auth.currentUser:', auth.currentUser?.uid);
+    console.log('🔍 DEBUG — newMessage:', JSON.stringify(newMessage));
+    console.log('🔍 DEBUG — selectedFiles.length:', selectedFiles.length);
+    console.log('🔍 DEBUG — replyToMessage:', replyToMessage?.id);
+    // ====================================
+
+    if (!newMessage.trim() && selectedFiles.length === 0) {
+      console.log('🔍 DEBUG — Empty message, returning');
+      return;
+    }
 
     const replyData = replyToMessage ? {
       text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""),
@@ -492,16 +504,20 @@ export default function GlobalChat() {
     // ✅ Text message
     if (textToSend) {
       try {
+        console.log('🔍 DEBUG — Attempting addDoc to global-room-messages');
+
         await addDoc(collection(db, "global-room-messages"), {
           text: textToSend,
           senderUid: currentUid,
           senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: Date.now(),           // ← Date.now() (PersonalChat-এর মতো)
+          createdAt: Date.now(),
           isEdited: false,
           isDeleted: false,
           replyTo: replyData
         });
+
+        console.log('✅ DEBUG — addDoc SUCCESS');
 
         // ✅ আগে input clear
         setNewMessage("");
@@ -512,7 +528,9 @@ export default function GlobalChat() {
           `${currentUserName}: ${textToSend}`
         );
       } catch (error) {
-        console.error("Error sending text message:", error);
+        console.error("❌ DEBUG — Error sending text message:", error);
+        console.error("❌ DEBUG — Error code:", error?.code);
+        console.error("❌ DEBUG — Error message:", error?.message);
       }
     }
 
@@ -521,7 +539,6 @@ export default function GlobalChat() {
       const filesToSend = [...selectedFiles];
       const replyForFiles = replyData;
 
-      // ✅ আগে state clear
       setSelectedFiles([]);
       setReplyToMessage(null);
 
@@ -535,7 +552,7 @@ export default function GlobalChat() {
             senderUid: currentUid,
             senderName: currentUserName,
             senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-            createdAt: Date.now(),       // ← Date.now()
+            createdAt: Date.now(),
             isEdited: false,
             isDeleted: false,
             replyTo: replyForFiles
@@ -545,7 +562,6 @@ export default function GlobalChat() {
         }
       }));
 
-      // ✅ Push — fire-and-forget
       const fileCount = filesToSend.length;
       const firstType = filesToSend[0]?.type;
       const typeLabel = firstType === 'image' ? '📷 Photo'
@@ -721,7 +737,6 @@ export default function GlobalChat() {
     setSelectedFiles((prev) => prev.filter(file => file.id !== id));
   };
 
-  // ✅ UPDATED sendVoiceMessage — Date.now(), push fire-and-forget
   const sendVoiceMessage = async (audioUrl) => {
     try {
       const reply = capturedReplyRef.current;
@@ -741,7 +756,7 @@ export default function GlobalChat() {
         senderUid: currentUid,
         senderName: currentUserName,
         senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-        createdAt: Date.now(),             // ← Date.now()
+        createdAt: Date.now(),
         isEdited: false,
         isDeleted: false,
         replyTo: replyData
@@ -750,7 +765,6 @@ export default function GlobalChat() {
       setReplyToMessage(null);
       capturedReplyRef.current = null;
 
-      // ✅ Push — fire-and-forget
       sendGlobalMessagePushNotification(
         '🎤 Voice Message',
         `${currentUserName} sent a voice message`
@@ -1211,7 +1225,7 @@ export default function GlobalChat() {
               senderUid: 'system',
               senderName: 'System',
               senderPhoto: '',
-              createdAt: Date.now(),       // ← Date.now()
+              createdAt: Date.now(),
               isEdited: false,
               isDeleted: false,
               replyTo: null,
@@ -1262,7 +1276,7 @@ export default function GlobalChat() {
             senderUid: 'system',
             senderName: 'System',
             senderPhoto: '',
-            createdAt: Date.now(),       // ← Date.now()
+            createdAt: Date.now(),
             isEdited: false,
             isDeleted: false,
             replyTo: null,

@@ -15,12 +15,20 @@ import { initPushNotifications } from '../pushNotifications';
 
 const GLOBAL_ROOM_ID = "campus_global_conference_room";
 
-// ✅ Native Ringtone Plugin register
+// ✅ Helper — createdAt যেকোনো format handle করে
+const toMillis = (createdAt) => {
+  if (!createdAt) return 0;
+  if (typeof createdAt === 'number') return createdAt;
+  if (typeof createdAt === 'string') return new Date(createdAt).getTime() || 0;
+  if (typeof createdAt.toMillis === 'function') return createdAt.toMillis();
+  if (createdAt.seconds) return createdAt.seconds * 1000;
+  return 0;
+};
+
 const RingtoneControl = Capacitor.isNativePlatform()
   ? registerPlugin('RingtoneControl')
   : null;
 
-// ✅ Native ringtone stop করার helper
 const stopNativeRingtone = async () => {
   if (RingtoneControl) {
     try {
@@ -43,7 +51,6 @@ const PhoneDeclineIcon = () => (
   </svg>
 );
 
-// Sound functions with AudioContext
 let ringtoneAudioCtx = null;
 let ringtoneOscillator = null;
 let ringtoneGainNode = null;
@@ -52,17 +59,13 @@ let ringtoneIntervalRef = null;
 const startRingtone = () => {
   try {
     if (ringtoneAudioCtx) return;
-
     ringtoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     ringtoneGainNode = ringtoneAudioCtx.createGain();
     ringtoneGainNode.connect(ringtoneAudioCtx.destination);
     ringtoneGainNode.gain.value = 2.0;
-
     const playBeep = () => {
       try {
-        if (ringtoneOscillator) {
-          ringtoneOscillator.stop();
-        }
+        if (ringtoneOscillator) ringtoneOscillator.stop();
         ringtoneOscillator = ringtoneAudioCtx.createOscillator();
         ringtoneOscillator.connect(ringtoneGainNode);
         ringtoneOscillator.frequency.value = 880;
@@ -71,25 +74,15 @@ const startRingtone = () => {
         ringtoneOscillator.stop(ringtoneAudioCtx.currentTime + 0.5);
       } catch (err) {}
     };
-
     playBeep();
     ringtoneIntervalRef = setInterval(playBeep, 1000);
   } catch (err) {}
 };
 
 const stopRingtone = () => {
-  if (ringtoneIntervalRef) {
-    clearInterval(ringtoneIntervalRef);
-    ringtoneIntervalRef = null;
-  }
-  if (ringtoneOscillator) {
-    try { ringtoneOscillator.stop(); } catch (err) {}
-    ringtoneOscillator = null;
-  }
-  if (ringtoneAudioCtx) {
-    ringtoneAudioCtx.close().catch(() => {});
-    ringtoneAudioCtx = null;
-  }
+  if (ringtoneIntervalRef) { clearInterval(ringtoneIntervalRef); ringtoneIntervalRef = null; }
+  if (ringtoneOscillator) { try { ringtoneOscillator.stop(); } catch (err) {} ringtoneOscillator = null; }
+  if (ringtoneAudioCtx) { ringtoneAudioCtx.close().catch(() => {}); ringtoneAudioCtx = null; }
   ringtoneGainNode = null;
 };
 
@@ -106,9 +99,7 @@ const playMessageSound = () => {
     gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
     oscillator.start(audioCtx.currentTime);
     oscillator.stop(audioCtx.currentTime + 0.4);
-    oscillator.onended = () => {
-      audioCtx.close().catch(() => {});
-    };
+    oscillator.onended = () => { audioCtx.close().catch(() => {}); };
   } catch (err) {}
 };
 
@@ -117,15 +108,12 @@ const sendLocalNotification = async (title, body) => {
     const permStatus = await LocalNotifications.requestPermissions();
     if (permStatus.display === 'granted') {
       await LocalNotifications.schedule({
-        notifications: [
-          {
-            title: title,
-            body: body,
-            id: Math.floor(Math.random() * 1000000),
-            schedule: { at: new Date(Date.now() + 500) },
-            sound: null,
-          }
-        ]
+        notifications: [{
+          title, body,
+          id: Math.floor(Math.random() * 1000000),
+          schedule: { at: new Date(Date.now() + 500) },
+          sound: null,
+        }]
       });
     }
   } catch (err) {
@@ -145,9 +133,7 @@ export default function GlobalAlerts() {
     try {
       const saved = localStorage.getItem(`dismissedGlobalCalls_${auth.currentUser?.uid || 'guest'}`);
       return saved ? JSON.parse(saved) : [];
-    } catch (err) {
-      return [];
-    }
+    } catch (err) { return []; }
   });
 
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
@@ -156,7 +142,7 @@ export default function GlobalAlerts() {
     return unsubscribe;
   }, []);
 
-  // ✅ Push Notification Initialize with debug logs
+  // ✅ Push Notification Initialize
   useEffect(() => {
     if (currentUid) {
       console.log('🔔 GlobalAlerts: currentUid found:', currentUid);
@@ -166,15 +152,9 @@ export default function GlobalAlerts() {
   }, [currentUid]);
 
   useEffect(() => {
-    if (incomingPersonalCall || incomingGlobalCall) {
-      startRingtone();
-    } else {
-      stopRingtone();
-    }
-
-    return () => {
-      stopRingtone();
-    };
+    if (incomingPersonalCall || incomingGlobalCall) startRingtone();
+    else stopRingtone();
+    return () => { stopRingtone(); };
   }, [incomingPersonalCall, incomingGlobalCall]);
 
   useEffect(() => {
@@ -199,9 +179,7 @@ export default function GlobalAlerts() {
     try {
       const saved = localStorage.getItem('floatingBubblePos');
       return saved ? JSON.parse(saved) : null;
-    } catch (err) {
-      return null;
-    }
+    } catch (err) { return null; }
   });
   const draggingRef = useRef(false);
   const dragMovedRef = useRef(false);
@@ -240,7 +218,6 @@ export default function GlobalAlerts() {
     return unsubscribe;
   }, [!!activeGlobalSession, currentUid]);
 
-
   useEffect(() => {
     if (!currentUid) return;
     const selfRef = doc(db, "users", currentUid);
@@ -251,10 +228,10 @@ export default function GlobalAlerts() {
 
     const goOnline = () => {
       if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
-      setDoc(selfRef, { online: true, lastSeen: new Date().getTime() }, { merge: true }).catch(() => {});
+      setDoc(selfRef, { online: true, lastSeen: Date.now() }, { merge: true }).catch(() => {});
       if (!heartbeatInterval) {
         heartbeatInterval = setInterval(() => {
-          updateDoc(selfRef, { lastSeen: new Date().getTime() }).catch(() => {});
+          updateDoc(selfRef, { lastSeen: Date.now() }).catch(() => {});
         }, HEARTBEAT_MS);
       }
     };
@@ -273,11 +250,8 @@ export default function GlobalAlerts() {
     };
 
     const handleVisibilityChange = () => {
-      if (document.hidden) {
-        scheduleGoOffline();
-      } else {
-        goOnline();
-      }
+      if (document.hidden) scheduleGoOffline();
+      else goOnline();
     };
 
     goOnline();
@@ -308,7 +282,7 @@ export default function GlobalAlerts() {
     };
   }, [currentUid]);
 
-  // Personal rooms listener
+  // ============ Personal rooms listener ============
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-rooms"), where("participants", "array-contains", currentUid));
@@ -321,33 +295,21 @@ export default function GlobalAlerts() {
         const prevLastMessageAt = lastKnownRoomStateRef.current[roomId] || 0;
 
         if (
-          !isFirst &&
-          data.lastMessageText &&
-          data.lastMessageText.includes('missed') &&
+          !isFirst && data.lastMessageText && data.lastMessageText.includes('missed') &&
           data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
           data.lastMessageSenderId === 'system'
         ) {
           const otherUid = (data.participants || []).find((id) => id !== currentUid);
           const onThisChatPage = otherUid && locationRef.current.pathname.startsWith(`/chat/${otherUid}/`);
-
           if (!onThisChatPage) {
             playMessageSound();
-            sendLocalNotification(
-              'Missed Call 📞',
-              `You missed a ${data.lastMessageText.includes('video') ? 'video' : 'audio'} call`
-            );
-
+            sendLocalNotification('Missed Call 📞', `You missed a ${data.lastMessageText.includes('video') ? 'video' : 'audio'} call`);
             setMessageBubbles((prev) => {
               const existing = prev.find((b) => b.roomId === `missed_${roomId}`);
               if (!existing) {
                 return [...prev, {
-                  roomId: `missed_${roomId}`,
-                  otherUid,
-                  isGlobal: false,
-                  count: 1,
-                  senderName: 'Missed Call',
-                  senderPhoto: '',
-                  isMissedCall: true,
+                  roomId: `missed_${roomId}`, otherUid, isGlobal: false, count: 1,
+                  senderName: 'Missed Call', senderPhoto: '', isMissedCall: true,
                   callTypeIcon: data.lastMessageText.includes('video') ? '📹' : '🎙️'
                 }].slice(-3);
               }
@@ -357,21 +319,15 @@ export default function GlobalAlerts() {
         }
 
         if (
-          !isFirst &&
-          data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
+          !isFirst && data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
           data.lastMessageSenderId && data.lastMessageSenderId !== currentUid &&
           data.lastMessageSenderId !== 'system'
         ) {
           const otherUid = (data.participants || []).find((id) => id !== currentUid);
           const onThisChatPage = otherUid && locationRef.current.pathname.startsWith(`/chat/${otherUid}/`);
-
           if (!onThisChatPage) {
             playMessageSound();
-            sendLocalNotification(
-              'New Message 💬',
-              `${data.lastMessageSenderName || 'Student'}: ${data.lastMessageText || ''}`
-            );
-
+            sendLocalNotification('New Message 💬', `${data.lastMessageSenderName || 'Student'}: ${data.lastMessageText || ''}`);
             setMessageBubbles((prev) => {
               const existing = prev.find((b) => b.roomId === roomId);
               if (existing) {
@@ -379,11 +335,10 @@ export default function GlobalAlerts() {
                   ? { ...b, count: b.count + 1, senderName: data.lastMessageSenderName, senderPhoto: data.lastMessageSenderPhoto }
                   : b);
               }
-              const next = [...prev, {
+              return [...prev, {
                 roomId, otherUid, isGlobal: false, count: 1,
                 senderName: data.lastMessageSenderName, senderPhoto: data.lastMessageSenderPhoto
-              }];
-              return next.slice(-3);
+              }].slice(-3);
             });
           }
         }
@@ -395,7 +350,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Global messages listener
+  // ============ Global messages listener — FIXED ============
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
@@ -403,34 +358,30 @@ export default function GlobalAlerts() {
       const isFirst = isFirstGlobalLoadRef.current;
       if (!snapshot.empty) {
         const data = snapshot.docs[0].data();
-        const msgTime = data.createdAt?.seconds ? data.createdAt.seconds * 1000 : 0;
+        // ✅ FIX: toMillis helper
+        const msgTime = toMillis(data.createdAt);
+        console.log('🔔 Global msg listener — msgTime:', msgTime, 'lastKnown:', lastKnownGlobalMessageAtRef.current, 'sender:', data.senderUid, 'me:', currentUid);
 
         if (!isFirst && msgTime > lastKnownGlobalMessageAtRef.current && data.senderUid && data.senderUid !== currentUid) {
           const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
           if (!onGlobalPage) {
             playMessageSound();
-
             if (data.text && data.text.includes('missed')) {
-              sendLocalNotification(
-                'Missed Group Call 🌐',
-                'You missed a group call'
-              );
+              sendLocalNotification('Missed Group Call 🌐', 'You missed a group call');
             } else {
-              sendLocalNotification(
-                'Global Room 💬',
-                `${data.senderName || 'Student'}: ${data.text || ''}`
-              );
+              sendLocalNotification('Global Room 💬', `${data.senderName || 'Student'}: ${data.text || ''}`);
             }
-
             setMessageBubbles((prev) => {
-              const existing = prev.find((b) => b.isGlobal);
+              const existing = prev.find((b) => b.isGlobal && !b.isMissedCall);
               if (existing) {
-                return prev.map((b) => b.isGlobal
+                return prev.map((b) => (b.isGlobal && !b.isMissedCall)
                   ? { ...b, count: b.count + 1, senderName: data.senderName, senderPhoto: data.senderPhoto }
                   : b);
               }
-              const next = [...prev, { roomId: 'global', isGlobal: true, count: 1, senderName: data.senderName, senderPhoto: data.senderPhoto }];
-              return next.slice(-3);
+              return [...prev, {
+                roomId: 'global', isGlobal: true, count: 1,
+                senderName: data.senderName, senderPhoto: data.senderPhoto
+              }].slice(-3);
             });
           }
         }
@@ -458,43 +409,34 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ✅ Cancel Call Listener — Caller cut করলে ringtone stop
+  // Cancel Call Listener
   useEffect(() => {
     const handleCancelCall = (event) => {
       console.log('📞 Cancel call event received:', event.detail);
-      stopRingtone();        // JS ringtone stop
-      stopNativeRingtone();  // Native ringtone stop
+      stopRingtone();
+      stopNativeRingtone();
       setIncomingPersonalCall(null);
       setIncomingGlobalCall(null);
     };
-
     window.addEventListener('cancel-call', handleCancelCall);
-    return () => {
-      window.removeEventListener('cancel-call', handleCancelCall);
-    };
+    return () => { window.removeEventListener('cancel-call', handleCancelCall); };
   }, []);
 
-  // ✅ Native Accept Listener — Native notification-এর Accept button থেকে event
+  // Native Accept Listener
   useEffect(() => {
     const handleNativeAccept = (event) => {
       console.log('📞 Native accept event received:', event.detail);
       stopRingtone();
       stopNativeRingtone();
-
       const { roomId, callerName } = event.detail || {};
       if (roomId && callerName) {
-        navigate(`/chat/${roomId}/${encodeURIComponent(callerName)}`, {
-          state: { autoJoinCall: true }
-        });
+        navigate(`/chat/${roomId}/${encodeURIComponent(callerName)}`, { state: { autoJoinCall: true } });
       }
       setIncomingPersonalCall(null);
       setIncomingGlobalCall(null);
     };
-
     window.addEventListener('native-call-accept', handleNativeAccept);
-    return () => {
-      window.removeEventListener('native-call-accept', handleNativeAccept);
-    };
+    return () => { window.removeEventListener('native-call-accept', handleNativeAccept); };
   }, [navigate]);
 
   // Global call listener
@@ -509,10 +451,7 @@ export default function GlobalAlerts() {
           const alreadyDismissed = dismissedGlobalCalls.includes(callId);
           if (!alreadyDismissed) {
             setIncomingGlobalCall({ hostName: data.hostName, callId });
-            sendLocalNotification(
-              'Incoming Call 📞',
-              `${data.hostName || 'Student'} started a conference`
-            );
+            sendLocalNotification('Incoming Call 📞', `${data.hostName || 'Student'} started a conference`);
             return;
           }
         }
@@ -523,16 +462,12 @@ export default function GlobalAlerts() {
             const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
             const globalCallId = `global_${callId}`;
             const alreadySaved = missedCallsStorage.some(call => call.callId === globalCallId);
-
             if (!alreadySaved) {
               missedCallsStorage.push({
-                callId: globalCallId,
-                hostId: data.hostId,
-                hostName: data.hostName || 'Unknown',
-                hostPhoto: '',
+                callId: globalCallId, hostId: data.hostId,
+                hostName: data.hostName || 'Unknown', hostPhoto: '',
                 callType: data.callType || 'video',
-                missedAt: Date.now(),
-                isGlobal: true
+                missedAt: Date.now(), isGlobal: true
               });
               localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
             }
@@ -544,7 +479,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid, dismissedGlobalCalls]);
 
-  // Home page alerts check
+  // Home page alerts
   useEffect(() => {
     if (!currentUid) return;
     if (location.pathname !== '/') return;
@@ -552,7 +487,6 @@ export default function GlobalAlerts() {
     const checkAllAlerts = () => {
       const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
       const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
-
       const unseenMissedCalls = missedCallsStorage.filter(call => !seenCallsStorage.includes(call.callId));
 
       if (unseenMissedCalls.length > 0) {
@@ -566,7 +500,6 @@ export default function GlobalAlerts() {
           isMissedCall: true,
           callTypeIcon: call.callType === 'audio' ? '🎙️' : '📹'
         }));
-
         setMessageBubbles(prev => {
           const merged = [...prev];
           missedBubbles.forEach(bubble => {
@@ -575,49 +508,35 @@ export default function GlobalAlerts() {
           });
           return merged.slice(-5);
         });
-
         playMessageSound();
       }
 
       const personalRoomsRef = collection(db, "personal-rooms");
       const personalQ = query(personalRoomsRef, where("participants", "array-contains", currentUid));
-
       getDocs(personalQ).then(snapshot => {
         const unreadBubbles = [];
-
         snapshot.docs.forEach((docSnap) => {
           const data = docSnap.data();
           const roomId = docSnap.id;
           const lastReadKey = `lastRead_personal_${roomId}`;
           const lastRead = Number(localStorage.getItem(lastReadKey)) || 0;
-
           if (data.lastMessageAt && data.lastMessageAt > lastRead && data.lastMessageSenderId !== currentUid) {
             const otherUid = (data.participants || []).find((id) => id !== currentUid);
-
             if (data.lastMessageText && data.lastMessageText.includes('missed')) {
               unreadBubbles.push({
-                roomId: `missed_${roomId}`,
-                otherUid,
-                isGlobal: false,
-                count: 1,
-                senderName: 'Missed Call',
-                senderPhoto: '',
-                isMissedCall: true,
+                roomId: `missed_${roomId}`, otherUid, isGlobal: false, count: 1,
+                senderName: 'Missed Call', senderPhoto: '', isMissedCall: true,
                 callTypeIcon: data.lastMessageText.includes('video') ? '📹' : '🎙️'
               });
             } else {
               unreadBubbles.push({
-                roomId,
-                otherUid,
-                isGlobal: false,
-                count: 1,
+                roomId, otherUid, isGlobal: false, count: 1,
                 senderName: data.lastMessageSenderName || 'Unknown',
                 senderPhoto: data.lastMessageSenderPhoto || '',
               });
             }
           }
         });
-
         if (unreadBubbles.length > 0) {
           setMessageBubbles(prev => {
             const merged = [...prev];
@@ -627,7 +546,6 @@ export default function GlobalAlerts() {
             });
             return merged.slice(-5);
           });
-
           playMessageSound();
         }
       }).catch(err => console.error("Error checking personal unread:", err));
@@ -635,29 +553,22 @@ export default function GlobalAlerts() {
       const lastReadGlobal = Number(localStorage.getItem('lastRead_global')) || 0;
       const globalMsgRef = collection(db, "global-room-messages");
       const globalQ = query(globalMsgRef, orderBy("createdAt", "desc"), limit(1));
-
       getDocs(globalQ).then(snapshot => {
         if (!snapshot.empty) {
           const globalData = snapshot.docs[0].data();
-          const msgTime = globalData.createdAt?.seconds ? globalData.createdAt.seconds * 1000 : globalData.createdAt;
-
+          // ✅ FIX: toMillis helper
+          const msgTime = toMillis(globalData.createdAt);
           if (msgTime > lastReadGlobal && globalData.senderUid !== currentUid) {
             const unreadBubble = {
-              roomId: 'global',
-              isGlobal: true,
-              count: 1,
+              roomId: 'global', isGlobal: true, count: 1,
               senderName: globalData.senderName || 'Unknown',
               senderPhoto: globalData.senderPhoto || '',
             };
-
             setMessageBubbles(prev => {
               const existing = prev.find(b => b.roomId === 'global' && !b.isMissedCall);
-              if (!existing) {
-                return [...prev, unreadBubble].slice(-5);
-              }
+              if (!existing) return [...prev, unreadBubble].slice(-5);
               return prev;
             });
-
             playMessageSound();
           }
         }
@@ -682,7 +593,6 @@ export default function GlobalAlerts() {
     && activeSession.type === 'personal'
     && !location.pathname.startsWith(`/chat/${activeSession.otherUid}/`);
 
-  // ✅ handleReceive — JS + Native ringtone stop
   const handleReceive = () => {
     if (!activeCall) return;
     stopRingtone();
@@ -700,7 +610,6 @@ export default function GlobalAlerts() {
     }
   };
 
-  // ✅ handleDecline — JS + Native ringtone stop
   const handleDecline = async () => {
     if (!activeCall) return;
     stopRingtone();
@@ -708,9 +617,7 @@ export default function GlobalAlerts() {
     if (activeCall.type === 'personal') {
       try {
         await updateDoc(doc(db, "personal-connections", activeCall.roomId), { status: "ended" });
-      } catch (err) {
-        console.error("Error declining personal call:", err);
-      }
+      } catch (err) { console.error("Error declining personal call:", err); }
       setIncomingPersonalCall(null);
     } else {
       if (activeCall.callId) {
@@ -729,7 +636,6 @@ export default function GlobalAlerts() {
 
   const handleBubbleClick = (bubble) => {
     if (dragMovedRef.current) { dragMovedRef.current = false; return; }
-
     if (bubble.isMissedCall) {
       const callId = bubble.roomId.replace('missed_global_', 'global_').replace('missed_', '');
       const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
@@ -738,14 +644,12 @@ export default function GlobalAlerts() {
         localStorage.setItem(`seenCalls_${currentUid}`, JSON.stringify(seenCallsStorage));
       }
     }
-
     if (!bubble.isMissedCall && !bubble.isGlobal) {
       localStorage.setItem(`lastRead_personal_${bubble.roomId}`, String(Date.now()));
     }
     if (bubble.isGlobal && !bubble.isMissedCall) {
       localStorage.setItem('lastRead_global', String(Date.now()));
     }
-
     if (bubble.isGlobal) navigate('/chat/global/Global-Chatroom');
     else navigate(`/chat/${bubble.otherUid}/${encodeURIComponent(bubble.senderName || 'Student')}`);
     setMessageBubbles((prev) => prev.filter((b) => b !== bubble));
@@ -778,9 +682,7 @@ export default function GlobalAlerts() {
       if (pos) localStorage.setItem('floatingBubblePos', JSON.stringify(pos));
       return pos;
     });
-    setTimeout(() => {
-      dragMovedRef.current = false;
-    }, 150);
+    setTimeout(() => { dragMovedRef.current = false; }, 150);
   };
 
   const fallbackAvatar = (name) => `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name || 'Student')}`;
@@ -800,49 +702,27 @@ export default function GlobalAlerts() {
           padding: '6px 14px', boxShadow: '0 6px 18px rgba(0,0,0,0.25)',
           display: 'flex', alignItems: 'center', gap: '10px', maxWidth: '92vw'
         }}>
-          <button
-            onClick={handleDecline}
-            title="Decline"
-            style={{ background: '#dc3545', border: 'none', color: '#fff', width: '30px', height: '30px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-          >
+          <button onClick={handleDecline} title="Decline" style={{ background: '#dc3545', border: 'none', color: '#fff', width: '30px', height: '30px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <PhoneDeclineIcon />
           </button>
-
-          <img
-            src={(activeCall.hostPhoto && activeCall.hostPhoto.trim() !== "") ? activeCall.hostPhoto : fallbackAvatar(activeCall.hostName)}
-            alt=""
-            style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', flexShrink: 0 }}
-          />
+          <img src={(activeCall.hostPhoto && activeCall.hostPhoto.trim() !== "") ? activeCall.hostPhoto : fallbackAvatar(activeCall.hostName)} alt="" style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', flexShrink: 0 }} />
           <span style={{ fontSize: '12px', fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             📞 {activeCall.hostName} {activeCall.type === 'global' ? 'started a conference' : 'is calling'}
           </span>
-
-          <button
-            onClick={handleReceive}
-            title="Receive"
-            style={{ background: '#28a745', border: 'none', color: '#fff', width: '30px', height: '30px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-          >
+          <button onClick={handleReceive} title="Receive" style={{ background: '#28a745', border: 'none', color: '#fff', width: '30px', height: '30px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <PhoneAcceptIcon />
           </button>
         </div>
       )}
 
       {showMinimizedCallBubble && (
-        <button
-          onClick={handleMinimizedCallClick}
-          title={`Return to call with ${activeSession.otherName || 'Student'}`}
-          style={{
-            position: 'fixed', top: '8px', left: '16px', zIndex: 1950,
-            background: '#28a745', border: 'none', borderRadius: '30px', padding: '5px 14px 5px 5px',
-            display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
-            boxShadow: '0 6px 18px rgba(0,0,0,0.3)'
-          }}
-        >
-          <img
-            src={(activeSession.otherPhoto && activeSession.otherPhoto.trim() !== "") ? activeSession.otherPhoto : fallbackAvatar(activeSession.otherName)}
-            alt=""
-            style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', flexShrink: 0 }}
-          />
+        <button onClick={handleMinimizedCallClick} title={`Return to call with ${activeSession.otherName || 'Student'}`} style={{
+          position: 'fixed', top: '8px', left: '16px', zIndex: 1950,
+          background: '#28a745', border: 'none', borderRadius: '30px', padding: '5px 14px 5px 5px',
+          display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+          boxShadow: '0 6px 18px rgba(0,0,0,0.3)'
+        }}>
+          <img src={(activeSession.otherPhoto && activeSession.otherPhoto.trim() !== "") ? activeSession.otherPhoto : fallbackAvatar(activeSession.otherName)} alt="" style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', flexShrink: 0 }} />
           <span style={{ color: '#fff', fontSize: '12px', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
             {activeSession.callType === 'audio' ? '🎙️' : '📹'} {activeSession.otherName || 'Student'}
           </span>
@@ -850,19 +730,13 @@ export default function GlobalAlerts() {
       )}
 
       {activeGlobalSession && location.pathname !== '/chat/global/Global-Chatroom' && (
-        <button
-          onClick={() => navigate('/chat/global/Global-Chatroom')}
-          title="Return to the Global Room call"
-          style={{
-            position: 'fixed', top: '8px', right: '16px', zIndex: 1950,
-            background: '#0056b3', border: 'none', borderRadius: '30px', padding: '5px 14px 5px 5px',
-            display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
-            boxShadow: '0 6px 18px rgba(0,0,0,0.3)'
-          }}
-        >
-          <span style={{ width: '30px', height: '30px', borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px', flexShrink: 0 }}>
-            🌐
-          </span>
+        <button onClick={() => navigate('/chat/global/Global-Chatroom')} title="Return to the Global Room call" style={{
+          position: 'fixed', top: '8px', right: '16px', zIndex: 1950,
+          background: '#0056b3', border: 'none', borderRadius: '30px', padding: '5px 14px 5px 5px',
+          display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+          boxShadow: '0 6px 18px rgba(0,0,0,0.3)'
+        }}>
+          <span style={{ width: '30px', height: '30px', borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px', flexShrink: 0 }}>🌐</span>
           <span style={{ color: '#fff', fontSize: '12px', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
             {activeGlobalSession.callType === 'audio' ? '🎙️' : '📹'} Global Room
           </span>
@@ -884,11 +758,7 @@ export default function GlobalAlerts() {
                 border: 'none', padding: 0, cursor: 'grab', boxShadow: '0 4px 14px rgba(0,0,0,0.3)', touchAction: 'none'
               }}
             >
-              <img
-                src={(bubble.senderPhoto && bubble.senderPhoto.trim() !== "") ? bubble.senderPhoto : fallbackAvatar(bubble.senderName)}
-                alt=""
-                style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover', border: '2px solid #0056b3', background: '#e4e6eb', display: 'block', pointerEvents: 'none' }}
-              />
+              <img src={(bubble.senderPhoto && bubble.senderPhoto.trim() !== "") ? bubble.senderPhoto : fallbackAvatar(bubble.senderName)} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover', border: '2px solid #0056b3', background: '#e4e6eb', display: 'block', pointerEvents: 'none' }} />
               <span style={{
                 position: 'absolute', top: '-4px', right: '-4px', background: '#dc3545', color: '#fff',
                 fontSize: '11px', fontWeight: 'bold', minWidth: '20px', height: '20px', borderRadius: '10px',
