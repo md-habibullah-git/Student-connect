@@ -4,13 +4,33 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { isUserOnline } from '../presence';
-import { 
-  collection, addDoc, onSnapshot, query, orderBy, limit, 
-  serverTimestamp, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where, Timestamp 
+import {
+  collection, addDoc, onSnapshot, query, orderBy, limit,
+  doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where
 } from 'firebase/firestore';
-import { getActiveGlobalCallSession, setActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
-import { sendPushNotification, sendCancelCallNotification } from '../pushNotifications';
+import {
+  getActiveGlobalCallSession,
+  setActiveGlobalCallSession,
+  clearActiveGlobalCallSession,
+  subscribeActiveGlobalCallSession
+} from '../callSession';
+import { sendCallNotification, sendCancelCallNotification, sendPushNotification } from '../pushNotifications';
 import { FilePicker } from '@capawesome/capacitor-file-picker';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+
+const RingtoneControl = Capacitor.isNativePlatform()
+  ? registerPlugin('RingtoneControl')
+  : null;
+
+const stopNativeRingtone = async () => {
+  if (RingtoneControl) {
+    try {
+      await RingtoneControl.stopRingtone();
+    } catch (err) {
+      console.error('❌ Stop native ringtone error:', err);
+    }
+  }
+};
 
 const rtcConfiguration = {
   iceServers: [
@@ -27,7 +47,6 @@ const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
 
-// ✅ Audio Volume Boost Helper — Call stream-এর জন্য
 const createBoostedAudio = (stream, boostLevel = 10) => {
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -44,7 +63,6 @@ const createBoostedAudio = (stream, boostLevel = 10) => {
   }
 };
 
-// ✅ Voice Message Boost Helper — Audio element (src) থেকে boost
 const createBoostedAudioFromElement = (audioElement, boostLevel = 10) => {
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -61,7 +79,6 @@ const createBoostedAudioFromElement = (audioElement, boostLevel = 10) => {
   }
 };
 
-// ✅ Video Tile with Audio Boost
 function RemoteVideoTile({ stream, label }) {
   const videoRef = useRef(null);
   const audioRef = useRef(null);
@@ -72,15 +89,12 @@ function RemoteVideoTile({ stream, label }) {
       videoRef.current.srcObject = stream;
       videoRef.current.play().catch(() => {});
     }
-    
     if (audioRef.current) {
       audioRef.current.srcObject = stream;
       audioRef.current.volume = 1.0;
       audioRef.current.play().catch(() => {});
-      
       audioCtxRef.current = createBoostedAudio(stream, 10);
     }
-    
     return () => {
       if (audioCtxRef.current) {
         audioCtxRef.current.close().catch(() => {});
@@ -98,7 +112,6 @@ function RemoteVideoTile({ stream, label }) {
   );
 }
 
-// ✅ Audio Tile with Boost
 function RemoteAudioTile({ stream }) {
   const audioRef = useRef(null);
   const audioCtxRef = useRef(null);
@@ -108,10 +121,8 @@ function RemoteAudioTile({ stream }) {
       audioRef.current.srcObject = stream;
       audioRef.current.volume = 1.0;
       audioRef.current.play().catch(() => {});
-      
       audioCtxRef.current = createBoostedAudio(stream, 10);
     }
-    
     return () => {
       if (audioCtxRef.current) {
         audioCtxRef.current.close().catch(() => {});
@@ -135,7 +146,6 @@ function LocalAudioTile({ stream }) {
   return <audio ref={audioRef} autoPlay playsInline muted style={{ display: 'none' }} />;
 }
 
-// ✅ VoiceMessageBubble — Play button-এ click করলে boost হবে
 function VoiceMessageBubble({ src, isMe }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
@@ -173,7 +183,6 @@ function VoiceMessageBubble({ src, isMe }) {
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
     analyser.getByteFrequencyData(dataArray);
-
     ctx.clearRect(0, 0, w, h);
     const barCount = 24;
     const step = Math.max(1, Math.floor(bufferLength / barCount));
@@ -201,23 +210,15 @@ function VoiceMessageBubble({ src, isMe }) {
   const togglePlay = () => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
-    
     if (!audioCtxRef.current) {
       const audioCtx = createBoostedAudioFromElement(audioEl, 10);
-      if (audioCtx) {
-        audioCtxRef.current = audioCtx;
-      }
+      if (audioCtx) audioCtxRef.current = audioCtx;
     }
-    
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume();
     }
-    
-    if (isPlaying) {
-      audioEl.pause();
-    } else {
-      audioEl.play();
-    }
+    if (isPlaying) audioEl.pause();
+    else audioEl.play();
   };
 
   useEffect(() => {
@@ -266,7 +267,7 @@ export default function GlobalChat() {
   const location = useLocation();
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
-  const [usersCache, setUsersCache] = useState({}); 
+  const [usersCache, setUsersCache] = useState({});
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
   const [activeCallType, setActiveCallType] = useState('video');
@@ -294,7 +295,7 @@ export default function GlobalChat() {
   });
 
   const messagesEndRef = useRef(null);
-  const fileInputRef = useRef(null); 
+  const fileInputRef = useRef(null);
   const inCallRef = useRef(false);
   const localVideoRef = useRef(null);
   const sessionRef = useRef(null);
@@ -312,7 +313,7 @@ export default function GlobalChat() {
   };
 
   const [remoteStreams, setRemoteStreams] = useState({});
-  
+
   const currentUid = auth.currentUser?.uid || "unknown_user";
   const currentUserName = auth.currentUser?.displayName || "Campus Student";
   const globalRoomId = "campus_global_conference_room";
@@ -330,14 +331,58 @@ export default function GlobalChat() {
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  // ✅ Push notification — fire-and-forget, কখনো message flow আটকাবে না
+  const sendGlobalMessagePushNotification = (title, body, notificationType = 'message') => {
+    (async () => {
+      try {
+        const usersSnapshot = await Promise.race([
+          getDocs(query(collection(db, "users"), where("approved", "==", true))),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('push-timeout')), 5000))
+        ]);
+
+        const pushPromises = usersSnapshot.docs
+          .filter(d => {
+            const data = d.data();
+            return data.uid !== currentUid && data.pushToken;
+          })
+          .map(d =>
+            sendPushNotification(
+              d.data().pushToken,
+              title,
+              body,
+              {
+                type: notificationType,
+                senderId: currentUid,
+                senderName: currentUserName,
+                roomId: globalRoomId,
+                isGlobal: true,
+              }
+            ).catch(err => console.error('Single push failed:', err))
+          );
+
+        await Promise.allSettled(pushPromises);
+        console.log('✅ Global message push sent to', pushPromises.length, 'users');
+      } catch (pushErr) {
+        console.error("❌ Global message push error:", pushErr);
+      }
+    })();
+  };
+
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
-        const sevenDaysAgo = Timestamp.fromMillis(Date.now() - 7 * 24 * 60 * 60 * 1000);
-        const oldMessagesQuery = query(collection(db, "global-room-messages"), where("createdAt", "<", sevenDaysAgo));
+        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        const oldMessagesQuery = query(
+          collection(db, "global-room-messages"),
+          where("createdAt", "<", sevenDaysAgo)
+        );
         const snapshot = await getDocs(oldMessagesQuery);
-        await Promise.all(snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "global-room-messages", docSnapshot.id))));
-      } catch (error) { console.error("Global Chat Storage Auto Cleanup Error:", error); }
+        await Promise.all(
+          snapshot.docs.map(d => deleteDoc(doc(db, "global-room-messages", d.id)))
+        );
+      } catch (error) {
+        console.error("Global Chat Storage Auto Cleanup Error:", error);
+      }
     };
     autoCleanOldGlobalMessages();
   }, []);
@@ -372,7 +417,11 @@ export default function GlobalChat() {
   }, [location.state, showRejoinBtn]);
 
   useEffect(() => {
-    const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "asc"), limit(100));
+    const q = query(
+      collection(db, "global-room-messages"),
+      orderBy("createdAt", "asc"),
+      limit(100)
+    );
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
       setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       localStorage.setItem('lastRead_global', String(Date.now()));
@@ -380,10 +429,14 @@ export default function GlobalChat() {
 
     const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
       const cache = {};
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        const uidKey = data.uid || doc.id;
-        cache[uidKey] = { photo: data.photo || "", online: isUserOnline(data), name: data.name || "" };
+      snapshot.docs.forEach(d => {
+        const data = d.data();
+        const uidKey = data.uid || d.id;
+        cache[uidKey] = {
+          photo: data.photo || "",
+          online: isUserOnline(data),
+          name: data.name || ""
+        };
       });
       setUsersCache(cache);
     });
@@ -397,7 +450,7 @@ export default function GlobalChat() {
             deleteDoc(doc(db, "global-calls", globalRoomId)).catch(() => {});
             setShowRejoinBtn(false);
             setInCall(false);
-            window.location.reload();
+            // ⚠️ window.location.reload() সরানো হয়েছে — এটাই message flow ভাঙছিল
             return;
           }
           setShowRejoinBtn(true);
@@ -411,7 +464,9 @@ export default function GlobalChat() {
     const handleOutsideClick = () => { setActiveMenuId(null); setAvatarMenuFor(null); };
     window.addEventListener('click', handleOutsideClick);
     return () => {
-      unsubscribeMessages(); unsubscribeUsers(); unsubscribeCall();
+      unsubscribeMessages();
+      unsubscribeUsers();
+      unsubscribeCall();
       window.removeEventListener('click', handleOutsideClick);
     };
   }, [currentUid, inCall]);
@@ -419,57 +474,112 @@ export default function GlobalChat() {
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
 
+  // ✅ UPDATED handleSendMessage — PersonalChat-এর মতো: Date.now(), push fire-and-forget, reset আগে
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() && selectedFiles.length === 0) return;
 
     const replyData = replyToMessage ? {
-      text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""), 
-      fileUrl: replyToMessage.fileUrl || "", 
+      text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""),
+      fileUrl: replyToMessage.fileUrl || "",
       fileType: replyToMessage.fileType || "",
       senderName: replyToMessage.senderName,
       msgId: replyToMessage.id
     } : null;
 
-    if (newMessage.trim()) {
+    const textToSend = newMessage.trim();
+
+    // ✅ Text message
+    if (textToSend) {
       try {
         await addDoc(collection(db, "global-room-messages"), {
-          text: newMessage, senderUid: currentUid, senderName: currentUserName,
+          text: textToSend,
+          senderUid: currentUid,
+          senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
+          createdAt: Date.now(),           // ← Date.now() (PersonalChat-এর মতো)
+          isEdited: false,
+          isDeleted: false,
+          replyTo: replyData
         });
+
+        // ✅ আগে input clear
         setNewMessage("");
-      } catch (error) { console.error("Error sending text message:", error); }
+
+        // ✅ তারপর push — await ছাড়া (fire-and-forget)
+        sendGlobalMessagePushNotification(
+          'New Message 💬',
+          `${currentUserName}: ${textToSend}`
+        );
+      } catch (error) {
+        console.error("Error sending text message:", error);
+      }
     }
 
-    await Promise.all(selectedFiles.map(async (fileData) => {
-      try {
-        await addDoc(collection(db, "global-room-messages"), {
-          text: "", fileUrl: fileData.url, fileType: fileData.type, fileName: fileData.name,
-          senderUid: currentUid, senderName: currentUserName,
-          senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-          createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
-        });
-      } catch (error) { console.error("Error sending file to firestore:", error); }
-    }));
-    setSelectedFiles([]); setReplyToMessage(null); 
+    // ✅ File/Image/Video messages
+    if (selectedFiles.length > 0) {
+      const filesToSend = [...selectedFiles];
+      const replyForFiles = replyData;
+
+      // ✅ আগে state clear
+      setSelectedFiles([]);
+      setReplyToMessage(null);
+
+      await Promise.all(filesToSend.map(async (fileData) => {
+        try {
+          await addDoc(collection(db, "global-room-messages"), {
+            text: "",
+            fileUrl: fileData.url,
+            fileType: fileData.type,
+            fileName: fileData.name,
+            senderUid: currentUid,
+            senderName: currentUserName,
+            senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
+            createdAt: Date.now(),       // ← Date.now()
+            isEdited: false,
+            isDeleted: false,
+            replyTo: replyForFiles
+          });
+        } catch (error) {
+          console.error("Error sending file to firestore:", error);
+        }
+      }));
+
+      // ✅ Push — fire-and-forget
+      const fileCount = filesToSend.length;
+      const firstType = filesToSend[0]?.type;
+      const typeLabel = firstType === 'image' ? '📷 Photo'
+                      : firstType === 'video' ? '🎥 Video'
+                      : '📎 File';
+      const countLabel = fileCount > 1 ? ` (${fileCount})` : '';
+
+      sendGlobalMessagePushNotification(
+        'New Message 💬',
+        `${currentUserName}: ${typeLabel}${countLabel}`
+      );
+    }
   };
 
   const handleEditMessage = async (msgId, currentText) => {
-    setActiveMenuId(null); 
+    setActiveMenuId(null);
     const newText = prompt("Edit your public campus message:", currentText);
     if (newText !== null && newText.trim() !== "") {
-      try { await updateDoc(doc(db, "global-room-messages", msgId), { text: newText, isEdited: true }); } 
-      catch (error) { console.error("Error editing message:", error); }
+      try {
+        await updateDoc(doc(db, "global-room-messages", msgId), {
+          text: newText,
+          isEdited: true
+        });
+      } catch (error) { console.error("Error editing message:", error); }
     }
   };
 
   const handleDeleteMessage = async (msgId, isSenderMe) => {
-    setActiveMenuId(null); 
+    setActiveMenuId(null);
     if (window.confirm("Are you sure you want to delete this message?")) {
       if (isSenderMe) {
-        try { await updateDoc(doc(db, "global-room-messages", msgId), { isDeleted: true }); } 
-        catch (error) { console.error("Error deleting message globally:", error); }
+        try {
+          await updateDoc(doc(db, "global-room-messages", msgId), { isDeleted: true });
+        } catch (error) { console.error("Error deleting message globally:", error); }
       } else {
         const updatedDeletedIds = [...localDeletedIds, msgId];
         setLocalDeletedIds(updatedDeletedIds);
@@ -478,23 +588,21 @@ export default function GlobalChat() {
     }
   };
 
-  // ✅ UPDATED: Multiple file selection — Native + Web (accept removed for File Manager)
   const handleFileChange = async (e) => {
-    // Native App — FilePicker with multiple select
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
         const result = await FilePicker.pickFiles({
           types: ['image/*', 'video/*'],
           readData: true,
-          multiple: true, // ✅ Multiple select enable
+          multiple: true,
         });
-        
+
         if (result && result.files && result.files.length > 0) {
           for (const pickedFile of result.files) {
             let blob = null;
             const fileType = pickedFile.mimeType || 'image/jpeg';
             const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
-            
+
             if (pickedFile.data) {
               const base64Data = pickedFile.data.replace(/^data:.*;base64,/, '');
               const byteCharacters = atob(base64Data);
@@ -505,11 +613,10 @@ export default function GlobalChat() {
               const byteArray = new Uint8Array(byteNumbers);
               blob = new Blob([byteArray], { type: fileType });
             }
-            
+
             if (!blob) continue;
-            
             const file = new File([blob], fileName, { type: fileType });
-            
+
             if (fileType.startsWith('image/')) {
               const reader = new FileReader();
               reader.onload = (event) => {
@@ -523,7 +630,12 @@ export default function GlobalChat() {
                   const ctx = canvas.getContext('2d');
                   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                   const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
-                  setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: compressedBase64, type: 'image' }]);
+                  setSelectedFiles((prev) => [...prev, {
+                    id: Date.now() + Math.random(),
+                    name: fileName,
+                    url: compressedBase64,
+                    type: 'image'
+                  }]);
                 };
                 img.src = event.target.result;
               };
@@ -537,10 +649,15 @@ export default function GlobalChat() {
               reader.onload = (event) => {
                 const base64Result = event.target.result;
                 if (base64Result.length > MAX_VIDEO_BASE64_LENGTH) {
-                  alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`);
+                  alert(`⚠️ "${fileName}" is too large to send even after encoding.`);
                   return;
                 }
-                setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: base64Result, type: 'video' }]);
+                setSelectedFiles((prev) => [...prev, {
+                  id: Date.now() + Math.random(),
+                  name: fileName,
+                  url: base64Result,
+                  type: 'video'
+                }]);
               };
               reader.readAsDataURL(file);
             }
@@ -551,12 +668,12 @@ export default function GlobalChat() {
       }
       return;
     }
-    
-    // Web — File input (multiple + no accept = File Manager & Gallery)
+
     if (!e.target.files || e.target.files.length === 0) return;
     Array.from(e.target.files).forEach((file) => {
       const fileName = file.name;
-      const fileType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'file');
+      const fileType = file.type.startsWith('image/') ? 'image'
+                     : (file.type.startsWith('video/') ? 'video' : 'file');
 
       if (fileType === 'image') {
         const reader = new FileReader();
@@ -564,10 +681,16 @@ export default function GlobalChat() {
           const img = new Image();
           img.onload = () => {
             const canvas = document.createElement('canvas');
-            const max_width = 800; 
-            canvas.width = max_width; canvas.height = img.height * (max_width / img.width);
+            const max_width = 800;
+            canvas.width = max_width;
+            canvas.height = img.height * (max_width / img.width);
             canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-            setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: canvas.toDataURL('image/jpeg', 0.7), type: 'image' }]);
+            setSelectedFiles((prev) => [...prev, {
+              id: Date.now() + Math.random(),
+              name: fileName,
+              url: canvas.toDataURL('image/jpeg', 0.7),
+              type: 'image'
+            }]);
           };
           img.src = event.target.result;
         };
@@ -576,17 +699,29 @@ export default function GlobalChat() {
         const reader = new FileReader();
         reader.onload = (event) => {
           if (event.target.result.length <= MAX_VIDEO_BASE64_LENGTH) {
-            setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: event.target.result, type: 'video' }]);
-          } else { alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`); }
+            setSelectedFiles((prev) => [...prev, {
+              id: Date.now() + Math.random(),
+              name: fileName,
+              url: event.target.result,
+              type: 'video'
+            }]);
+          } else {
+            alert(`⚠️ "${fileName}" is too large to send even after encoding.`);
+          }
         };
         reader.readAsDataURL(file);
-      } else if (fileType === 'video') { alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`); }
+      } else if (fileType === 'video') {
+        alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB).`);
+      }
     });
     e.target.value = null;
   };
 
-  const removeSelectedFile = (id) => { setSelectedFiles((prev) => prev.filter(file => file.id !== id)); };
+  const removeSelectedFile = (id) => {
+    setSelectedFiles((prev) => prev.filter(file => file.id !== id));
+  };
 
+  // ✅ UPDATED sendVoiceMessage — Date.now(), push fire-and-forget
   const sendVoiceMessage = async (audioUrl) => {
     try {
       const reply = capturedReplyRef.current;
@@ -599,15 +734,30 @@ export default function GlobalChat() {
       } : null;
 
       await addDoc(collection(db, "global-room-messages"), {
-        text: "", fileUrl: audioUrl, fileType: 'audio', fileName: 'voice-message.webm',
-        senderUid: currentUid, senderName: currentUserName,
+        text: "",
+        fileUrl: audioUrl,
+        fileType: 'audio',
+        fileName: 'voice-message.webm',
+        senderUid: currentUid,
+        senderName: currentUserName,
         senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
-        createdAt: serverTimestamp(), isEdited: false, isDeleted: false, replyTo: replyData
+        createdAt: Date.now(),             // ← Date.now()
+        isEdited: false,
+        isDeleted: false,
+        replyTo: replyData
       });
 
       setReplyToMessage(null);
       capturedReplyRef.current = null;
-    } catch (error) { console.error("Error sending voice message:", error); }
+
+      // ✅ Push — fire-and-forget
+      sendGlobalMessagePushNotification(
+        '🎤 Voice Message',
+        `${currentUserName} sent a voice message`
+      );
+    } catch (error) {
+      console.error("Error sending voice message:", error);
+    }
   };
 
   const drawRecordingBars = () => {
@@ -643,7 +793,7 @@ export default function GlobalChat() {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -791,7 +941,7 @@ export default function GlobalChat() {
       const remoteStream = new MediaStream();
       s.remoteStreams[peerUid] = remoteStream;
       setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
-      
+
       pc.addEventListener('track', (event) => {
         event.streams[0].getTracks().forEach(track => { remoteStream.addTrack(track); });
         setRemoteStreams(prev => ({ ...prev, [peerUid]: remoteStream }));
@@ -901,13 +1051,13 @@ export default function GlobalChat() {
       const isInitiator = currentUid < peerUid;
       const pairKey = isInitiator ? `${currentUid}_${peerUid}` : `${peerUid}_${currentUid}`;
       const connRef = doc(callRef, "connections", pairKey);
-      
+
       const [subA, subB] = await Promise.all([
         getDocs(collection(connRef, "candidatesA")),
         getDocs(collection(connRef, "candidatesB"))
       ]);
       await Promise.all([...subA.docs, ...subB.docs].map(c => deleteDoc(c.ref)));
-      
+
       await deleteDoc(connRef).catch(() => {});
     } catch (err) {}
   };
@@ -947,40 +1097,38 @@ export default function GlobalChat() {
         await deleteDoc(d.ref);
       }));
       await deleteDoc(callRef).catch(() => {});
-      
+
       sessionRef.current = null;
       clearActiveGlobalCallSession();
       setRemoteStreams({});
       localStorage.removeItem('globalCallHistory');
-      
+
       await getLocalStream(callType);
-      const startedAt = new Date().getTime();
-      await setDoc(callRef, { 
-        status: "ringing", 
-        callType, 
-        hostName: currentUserName, 
-        hostId: currentUid, 
-        roomId: globalRoomId, 
+      const startedAt = Date.now();
+      await setDoc(callRef, {
+        status: "ringing",
+        callType,
+        hostName: currentUserName,
+        hostId: currentUid,
+        roomId: globalRoomId,
         participants: [currentUid],
         callStartedAt: startedAt,
         callHistory: {
-          [currentUid]: {
-            name: currentUserName,
-            joinedAt: startedAt
-          }
+          [currentUid]: { name: currentUserName, joinedAt: startedAt }
         }
       });
 
       try {
         const usersSnapshot = await getDocs(query(collection(db, "users"), where("approved", "==", true)));
         const pushPromises = usersSnapshot.docs
-          .filter(doc => doc.data().uid !== currentUid && doc.data().pushToken)
-          .map(doc => 
-            sendPushNotification(
-              doc.data().pushToken,
-              '📞 Group Call',
-              `${currentUserName} started a ${callType === 'audio' ? 'audio' : 'video'} conference`,
-              { type: 'global_call', roomId: globalRoomId, callerName: currentUserName }
+          .filter(d => d.data().uid !== currentUid && d.data().pushToken)
+          .map(d =>
+            sendCallNotification(
+              d.data().pushToken,
+              currentUserName,
+              callType,
+              globalRoomId,
+              { isGlobalCall: true }
             )
           );
         await Promise.all(pushPromises);
@@ -1010,16 +1158,10 @@ export default function GlobalChat() {
         if (!updatedParts.includes(currentUid)) updatedParts.push(currentUid);
         const callHistory = data.callHistory || {};
         if (!callHistory[currentUid]) {
-          callHistory[currentUid] = {
-            name: currentUserName,
-            joinedAt: new Date().getTime()
-          };
+          callHistory[currentUid] = { name: currentUserName, joinedAt: Date.now() };
         }
-        await updateDoc(callDocRef, { 
-          participants: updatedParts,
-          callHistory: callHistory
-        });
-        callStartTimeRef.current = new Date().getTime();
+        await updateDoc(callDocRef, { participants: updatedParts, callHistory });
+        callStartTimeRef.current = Date.now();
         setActiveCallType(callType);
         setInCall(true);
         setActiveGlobalCallSession(sessionRef.current);
@@ -1030,15 +1172,13 @@ export default function GlobalChat() {
     }
   };
 
-  // ✅ Global Cancel Notification — সব approved user-দের cancel push পাঠান
   const sendGlobalCancelNotifications = async () => {
     try {
+      await stopNativeRingtone();
       const usersSnapshot = await getDocs(query(collection(db, "users"), where("approved", "==", true)));
       const cancelPromises = usersSnapshot.docs
-        .filter(doc => doc.data().uid !== currentUid && doc.data().pushToken)
-        .map(doc => 
-          sendCancelCallNotification(doc.data().pushToken, globalRoomId)
-        );
+        .filter(d => d.data().uid !== currentUid && d.data().pushToken)
+        .map(d => sendCancelCallNotification(d.data().pushToken, globalRoomId));
       await Promise.all(cancelPromises);
       console.log('✅ Global cancel notifications sent');
     } catch (err) {
@@ -1055,23 +1195,23 @@ export default function GlobalChat() {
           const updatedParts = (data.participants || []).filter(id => id !== currentUid);
           const callHistory = data.callHistory || {};
           if (callHistory[currentUid] && callHistory[currentUid].joinedAt) {
-            callHistory[currentUid].leftAt = new Date().getTime();
+            callHistory[currentUid].leftAt = Date.now();
             callHistory[currentUid].duration = callHistory[currentUid].leftAt - callHistory[currentUid].joinedAt;
           }
           if (updatedParts.length === 0) {
             if (data.callStartedAt) {
-              callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
+              callHistory.totalDuration = Date.now() - data.callStartedAt;
             }
             const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
             const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
-            const callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call • ${formatDuration(callHistory.totalDuration)} min`;
-            
+            const callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(Date.now())}\n👥 Group call • ${formatDuration(callHistory.totalDuration)} min`;
+
             await addDoc(collection(db, "global-room-messages"), {
               text: callSummaryText,
               senderUid: 'system',
               senderName: 'System',
               senderPhoto: '',
-              createdAt: serverTimestamp(),
+              createdAt: Date.now(),       // ← Date.now()
               isEdited: false,
               isDeleted: false,
               replyTo: null,
@@ -1079,10 +1219,7 @@ export default function GlobalChat() {
             });
             localStorage.removeItem('globalCallHistory');
           } else {
-            await updateDoc(callDocRef, { 
-              participants: updatedParts,
-              callHistory: callHistory
-            }).catch(() => {});
+            await updateDoc(callDocRef, { participants: updatedParts, callHistory }).catch(() => {});
           }
         }
       }).catch(() => {});
@@ -1090,9 +1227,9 @@ export default function GlobalChat() {
   };
 
   const leaveGlobalCall = async () => {
-    // ✅ সবার ringtone বন্ধ করার জন্য cancel notification পাঠান
+    await stopNativeRingtone();
     await sendGlobalCancelNotifications();
-    
+
     try {
       const callDocRef = doc(db, "global-calls", globalRoomId);
       const snapshot = await getDoc(callDocRef);
@@ -1101,37 +1238,37 @@ export default function GlobalChat() {
         const updatedParts = (data.participants || []).filter(id => id !== currentUid);
         const callHistory = data.callHistory || {};
         if (callHistory[currentUid] && callHistory[currentUid].joinedAt) {
-          callHistory[currentUid].leftAt = new Date().getTime();
+          callHistory[currentUid].leftAt = Date.now();
           callHistory[currentUid].duration = callHistory[currentUid].leftAt - callHistory[currentUid].joinedAt;
         }
         if (updatedParts.length === 0) {
           if (data.callStartedAt) {
-            callHistory.totalDuration = new Date().getTime() - data.callStartedAt;
+            callHistory.totalDuration = Date.now() - data.callStartedAt;
           }
-          
+
           const callTypeIcon = data.callType === 'audio' ? '🎙️' : '📹';
           const callTypeLabel = data.callType === 'audio' ? 'Audio call' : 'Video call';
           const memberCount = Object.keys(callHistory).filter(k => k !== 'totalDuration').length;
-          
+
           let callSummaryText;
           if (memberCount <= 1) {
             callSummaryText = `❌ You missed a group ${callTypeLabel.toLowerCase()} • ${formatTimeDisplay(data.callStartedAt)}`;
           } else {
-            callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(new Date().getTime())}\n👥 Group call • ${formatDuration(callHistory.totalDuration)} min`;
+            callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(data.callStartedAt)} - ${formatTimeDisplay(Date.now())}\n👥 Group call • ${formatDuration(callHistory.totalDuration)} min`;
           }
-          
+
           await addDoc(collection(db, "global-room-messages"), {
             text: callSummaryText,
             senderUid: 'system',
             senderName: 'System',
             senderPhoto: '',
-            createdAt: serverTimestamp(),
+            createdAt: Date.now(),       // ← Date.now()
             isEdited: false,
             isDeleted: false,
             replyTo: null,
             isCallSummary: true
           });
-          
+
           const oldConnections = await getDocs(collection(callDocRef, "connections"));
           await Promise.all(oldConnections.docs.map(async (d) => {
             const [subA, subB] = await Promise.all([
@@ -1143,13 +1280,11 @@ export default function GlobalChat() {
           }));
           await deleteDoc(callDocRef).catch(() => {});
         } else {
-          await updateDoc(callDocRef, { 
-            participants: updatedParts,
-            callHistory: callHistory
-          });
+          await updateDoc(callDocRef, { participants: updatedParts, callHistory });
         }
       }
     } catch (err) {}
+
     const s = sessionRef.current;
     if (s) {
       Object.keys(s.peerConnections).forEach(disconnectFromPeer);
@@ -1161,10 +1296,12 @@ export default function GlobalChat() {
     setActiveCallType('video');
     setRemoteStreams({});
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
-    window.location.reload();
   };
 
-  const toggleMenu = (e, msgId) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
+  const toggleMenu = (e, msgId) => {
+    e.stopPropagation();
+    setActiveMenuId(activeMenuId === msgId ? null : msgId);
+  };
 
   const MicIcon = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1218,7 +1355,7 @@ export default function GlobalChat() {
         .recording-label { color: #dc3545 !important; font-weight: bold; font-size: 13px; }
         .call-summary-msg { background: rgba(0,86,179,0.08) !important; border: 1px solid rgba(0,86,179,0.2) !important; text-align: center; }
       `}</style>
-      
+
       {inCall && (
         <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column' }}>
           {activeCallType === 'audio' ? (
@@ -1284,10 +1421,10 @@ export default function GlobalChat() {
               if (isSystem) {
                 return (
                   <div key={getMsg.id} style={{ display: 'flex', justifyContent: 'center' }}>
-                    <div className="call-summary-msg" style={{ 
-                      padding: '12px 20px', 
-                      borderRadius: '12px', 
-                      fontSize: '13px', 
+                    <div className="call-summary-msg" style={{
+                      padding: '12px 20px',
+                      borderRadius: '12px',
+                      fontSize: '13px',
                       whiteSpace: 'pre-line',
                       background: 'rgba(0,86,179,0.08)',
                       border: '1px solid rgba(0,86,179,0.2)',
@@ -1328,7 +1465,7 @@ export default function GlobalChat() {
                             {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
                             {getMsg.fileUrl && getMsg.fileType === 'audio' && <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />}
                             {getMsg.text && <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{getMsg.text}{getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}</p>}
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{getMsg.createdAt ? new Date(getMsg.createdAt.seconds ? getMsg.createdAt.seconds * 1000 : getMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</div>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{getMsg.createdAt ? new Date(getMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</div>
                           </>
                         )}
                       </div>
@@ -1364,7 +1501,7 @@ export default function GlobalChat() {
                 <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
               </div>
             )}
-            
+
             {selectedFiles.length > 0 && (
               <div style={{ display: 'flex', gap: '10px', padding: '8px 10px', background: 'rgba(0, 86, 179, 0.05)', borderRadius: '10px', overflowX: 'auto', alignItems: 'center' }}>
                 {selectedFiles.map((file) => (
@@ -1376,12 +1513,12 @@ export default function GlobalChat() {
               </div>
             )}
 
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              onChange={handleFileChange} 
-              multiple 
-              style={{ display: 'none' }} 
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              multiple
+              style={{ display: 'none' }}
             />
 
             {isRecording ? (

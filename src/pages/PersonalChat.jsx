@@ -417,6 +417,29 @@ export default function PersonalChat() {
     }
   };
 
+  // ✅ Helper: Receiver-কে push notification পাঠানোর function
+  const sendMessagePushNotification = async (title, body) => {
+    try {
+      const receiverDoc = await getDoc(doc(db, "users", targetUid));
+      if (receiverDoc.exists()) {
+        const receiverData = receiverDoc.data();
+        if (receiverData.pushToken) {
+          await sendPushNotification(
+            receiverData.pushToken,
+            title,
+            body,
+            { type: 'message', senderId: currentUid, roomId: chatRoomId }
+          );
+          console.log('✅ Message push sent:', title);
+        } else {
+          console.log('⚠️ Receiver has no pushToken');
+        }
+      }
+    } catch (pushErr) {
+      console.error("Message push notification error:", pushErr);
+    }
+  };
+
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim() && selectedFiles.length === 0) return;
@@ -443,6 +466,7 @@ export default function PersonalChat() {
         msgId: replyToMessage.id
       } : null;
 
+      // ✅ Text message
       if (input.trim()) {
         await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
           text: input,
@@ -454,41 +478,46 @@ export default function PersonalChat() {
           isDeleted: false,
           replyTo: replyData
         });
-        
-        try {
-          const receiverDoc = await getDoc(doc(db, "users", targetUid));
-          if (receiverDoc.exists()) {
-            const receiverData = receiverDoc.data();
-            if (receiverData.pushToken) {
-              await sendPushNotification(
-                receiverData.pushToken,
-                'New Message 💬',
-                `${currentUserName}: ${input.trim()}`,
-                { type: 'message', senderId: currentUid, roomId: chatRoomId }
-              );
-            }
-          }
-        } catch (pushErr) {
-          console.error("Push notification error:", pushErr);
-        }
-        
+
+        // ✅ Text message-এর জন্য push notification
+        await sendMessagePushNotification(
+          'New Message 💬',
+          `${currentUserName}: ${input.trim()}`
+        );
+
         setInput('');
       }
 
-      await Promise.all(selectedFiles.map((fileData) =>
-        addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
-          text: "", 
-          fileUrl: fileData.url,
-          fileType: fileData.type,
-          senderId: currentUid,
-          senderName: currentUserName,
-          senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
-          createdAt: new Date().getTime(),
-          isEdited: false,
-          isDeleted: false,
-          replyTo: replyData
-        })
-      ));
+      // ✅ File/Image/Video messages
+      if (selectedFiles.length > 0) {
+        await Promise.all(selectedFiles.map((fileData) =>
+          addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
+            text: "", 
+            fileUrl: fileData.url,
+            fileType: fileData.type,
+            senderId: currentUid,
+            senderName: currentUserName,
+            senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+            createdAt: new Date().getTime(),
+            isEdited: false,
+            isDeleted: false,
+            replyTo: replyData
+          })
+        ));
+
+        // ✅ File message-এর জন্য push notification
+        const fileCount = selectedFiles.length;
+        const firstType = selectedFiles[0]?.type;
+        const typeLabel = firstType === 'image' ? '📷 Photo' 
+                        : firstType === 'video' ? '🎥 Video' 
+                        : '📎 File';
+        const countLabel = fileCount > 1 ? ` (${fileCount})` : '';
+
+        await sendMessagePushNotification(
+          'New Message 💬',
+          `${currentUserName}: ${typeLabel}${countLabel}`
+        );
+      }
 
       setSelectedFiles([]); 
       setReplyToMessage(null); 
@@ -692,6 +721,12 @@ export default function PersonalChat() {
         isDeleted: false,
         replyTo: replyData
       });
+
+      // ✅ Voice message-এর জন্য push notification
+      await sendMessagePushNotification(
+        '🎤 Voice Message',
+        `${currentUserName} sent a voice message`
+      );
 
       setReplyToMessage(null);
       capturedReplyRef.current = null;

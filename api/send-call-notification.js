@@ -20,21 +20,35 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { token, callerName, callType, roomId } = req.body || {};
+  const { 
+    token, 
+    callerName, 
+    callType, 
+    roomId,
+    // ✅ নতুন — global call detection (default false → backward compatible)
+    isGlobalCall = false,
+  } = req.body || {};
 
   if (!token) {
     return res.status(400).json({ error: 'Push token is required' });
   }
 
   try {
-    const finalTitle = `📞 ${callerName || 'Student'} is calling...`;
-    const finalBody = `${callType === 'video' ? '📹 Video' : '🎙️ Audio'} call`;
+    // ✅ Global call হলে আলাদা title/body
+    const finalTitle = isGlobalCall
+      ? `📞 ${callerName || 'Student'} started a group call`
+      : `📞 ${callerName || 'Student'} is calling...`;
+
+    const finalBody = isGlobalCall
+      ? `👥 ${callType === 'video' ? '📹 Video' : '🎙️ Audio'} conference`
+      : `${callType === 'video' ? '📹 Video' : '🎙️ Audio'} call`;
 
     const message = {
       token: token,
       // ✅ data-only — notification block নেই
       data: {
-        type: 'incoming_call',
+        // ✅ Global call হলে type 'global_call', নাহলে 'incoming_call'
+        type: isGlobalCall ? 'global_call' : 'incoming_call',
         callType: callType || 'audio',
         roomId: roomId || '',
         callerName: callerName || 'Student',

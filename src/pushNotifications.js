@@ -207,13 +207,31 @@ export async function sendPushNotification(token, title, body, data = {}) {
   }
 }
 
-export async function sendCallNotification(token, callerName, callType, roomId) {
+/**
+ * ✅ Call notification — Personal + Global দুটোর জন্যই
+ * 
+ * @param {string} token — Receiver-এর FCM token
+ * @param {string} callerName — Caller-এর নাম
+ * @param {string} callType — 'audio' | 'video'
+ * @param {string} roomId — Chat room / Global room ID
+ * @param {object} options — { isGlobalCall: boolean } (default: false)
+ */
+export async function sendCallNotification(token, callerName, callType, roomId, options = {}) {
   if (!token) return;
   try {
+    const { isGlobalCall = false } = options;
+    
     await fetch('/api/send-call-notification', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, callerName, callType, roomId }),
+      body: JSON.stringify({ 
+        token, 
+        callerName, 
+        callType, 
+        roomId,
+        // ✅ নতুন — global call flag
+        isGlobalCall,
+      }),
     });
   } catch (err) {
     console.error('Send call notification error:', err);

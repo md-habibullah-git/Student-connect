@@ -15,13 +15,10 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(RingtonePlugin.class);
-
         super.onCreate(savedInstanceState);
         Log.d(TAG, "MainActivity onCreate");
 
         startKeepAliveService();
-
-        // ✅ Accept button থেকে আসা extra data check করুন
         handleIntentExtras(getIntent());
     }
 
@@ -29,7 +26,6 @@ public class MainActivity extends BridgeActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        // ✅ Accept button-এ tap করলে এই method trigger হবে (singleTask launch mode)
         handleIntentExtras(intent);
     }
 
@@ -48,7 +44,10 @@ public class MainActivity extends BridgeActivity {
                 + ", callerName: " + callerName
                 + ", callType: " + callType);
 
-            // ✅ JS side এ event dispatch করুন যাতে GlobalAlerts handle করতে পারে
+            // ✅ Ringtone stop — JS side trigger (GlobalAlerts listener)
+            MyFirebaseMessagingService.stopRingtoneFromOutside(getApplicationContext());
+
+            // ✅ JS side এ event dispatch
             final String jsCode =
                 "window.dispatchEvent(new CustomEvent('native-call-accept', {" +
                 "  detail: {" +

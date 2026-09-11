@@ -11,7 +11,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
-    <!-- Storage Permissions (Gallery Access) -->
+    <!-- Storage Permissions -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
@@ -26,15 +26,14 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Foreground Service Permission -->
+    <!-- Foreground Service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
-    <!-- Full-Screen Intent Permission (Android 14+) -->
+    <!-- Full-Screen Intent (রাখা হলো, ব্যবহার হবে না) -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
-    <!-- ক্রোম ব্রাউজার খোলার জন্য -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -75,9 +74,7 @@
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
             android:exported="true"
-            android:hardwareAccelerated="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true">
+            android:hardwareAccelerated="true">
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -115,13 +112,12 @@
             </intent-filter>
         </receiver>
 
-        <!-- ✅ Call Action Receiver (Accept/Decline buttons) -->
+        <!-- ✅ Notification Action Receiver — notification dismiss হলে ringtone stop -->
         <receiver
-            android:name=".CallActionReceiver"
+            android:name=".NotificationActionReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.studentconnect.app.ACCEPT_CALL" />
-                <action android:name="com.studentconnect.app.DECLINE_CALL" />
+                <action android:name="com.studentconnect.app.NOTIFICATION_DISMISSED" />
             </intent-filter>
         </receiver>
 
@@ -142,12 +138,10 @@
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="call_channel_v2" />
 
-        <!-- Default Notification Icon -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@mipmap/ic_launcher" />
 
-        <!-- Default Notification Color -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/colorPrimary" />

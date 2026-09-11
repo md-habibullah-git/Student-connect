@@ -26,10 +26,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     private static final String CHANNEL_ID = "call_channel_v2";
     private static final String MESSAGE_CHANNEL_ID = "message_channel";
 
-    // ✅ Action constants — CallActionReceiver এর সাথে match করতে হবে
-    public static final String ACTION_ACCEPT_CALL = "com.studentconnect.app.ACCEPT_CALL";
-    public static final String ACTION_DECLINE_CALL = "com.studentconnect.app.DECLINE_CALL";
-
     private static Ringtone activeRingtone = null;
     private static Handler ringtoneHandler = null;
     private static NotificationManager staticNotificationManager = null;
@@ -43,7 +39,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         String type = data.get("type");
         Log.d(TAG, "Message type: " + type);
 
-        // ✅ Cancel call — ringtone + notification stop
         if ("cancel_call".equals(type)) {
             Log.d(TAG, "Cancel call received — stopping ringtone");
             stopRingtoneFromOutside(getApplicationContext());
@@ -58,14 +53,12 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         if (data.get("title") != null) title = data.get("title");
         if (data.get("body") != null) body = data.get("body");
 
-        // ✅ Call হলে Native ringtone + full screen notification
         if ("incoming_call".equals(type) || "global_call".equals(type)) {
             playRingtone();
             showCallNotification(title, body, data);
             return;
         }
 
-        // ✅ Normal message হলে simple notification
         showMessageNotification(title, body, data);
     }
 
@@ -149,13 +142,16 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
         createCallChannel(notificationManager);
 
+        // ✅ Main Intent — notification tap করলে app খুলবে + auto accept হবে
         Intent mainIntent = new Intent(this, MainActivity.class);
         mainIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
         mainIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         mainIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        for (Map.Entry<String, String> entry : data.entrySet()) {
-            mainIntent.putExtra(entry.getKey(), entry.getValue());
-        }
+        mainIntent.putExtra("type", "incoming_call");
+        mainIntent.putExtra("roomId", data.get("roomId"));
+        mainIntent.putExtra("callerName", data.get("callerName"));
+        mainIntent.putExtra("callType", data.get("callType"));
+        mainIntent.putExtra("autoAccept", true);
 
         int pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -163,39 +159,26 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         }
         PendingIntent mainPendingIntent = PendingIntent.getActivity(this, 0, mainIntent, pendingFlags);
 
+        // ✅ Delete Intent — notification swipe/dismiss হলে ringtone বন্ধ
+        Intent deleteIntent = new Intent(this, NotificationActionReceiver.class);
+        deleteIntent.setAction(NotificationActionReceiver.ACTION_NOTIFICATION_DISMISSED);
+        PendingIntent deletePendingIntent = PendingIntent.getBroadcast(
+            this, 300, deleteIntent, pendingFlags
+        );
+
         NotificationCompat.Builder builder =
             new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle(title)
                 .setContentText(body)
                 .setAutoCancel(true)
-                .setOngoing(true)
+                .setOngoing(false)  // ✅ swipe করে remove করা যাবে
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setContentIntent(mainPendingIntent);
+                .setContentIntent(mainPendingIntent)
+                .setDeleteIntent(deletePendingIntent);  // ✅ dismiss হলে ringtone stop
 
-        // ✅ Lock screen-এ popup
-        builder.setFullScreenIntent(mainPendingIntent, true);
-
-        // ✅ Accept button
-        Intent acceptIntent = new Intent(this, CallActionReceiver.class);
-        acceptIntent.setAction(ACTION_ACCEPT_CALL);
-        acceptIntent.putExtra("roomId", data.get("roomId"));
-        acceptIntent.putExtra("callerName", data.get("callerName"));
-        acceptIntent.putExtra("callType", data.get("callType"));
-        PendingIntent acceptPending = PendingIntent.getBroadcast(
-            this, 101, acceptIntent, pendingFlags
-        );
-        builder.addAction(android.R.drawable.ic_menu_call, "Accept", acceptPending);
-
-        // ✅ Decline button
-        Intent declineIntent = new Intent(this, CallActionReceiver.class);
-        declineIntent.setAction(ACTION_DECLINE_CALL);
-        declineIntent.putExtra("roomId", data.get("roomId"));
-        PendingIntent declinePending = PendingIntent.getBroadcast(
-            this, 102, declineIntent, pendingFlags
-        );
-        builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePending);
+        // ❌ setFullScreenIntent সরিয়ে দেওয়া হয়েছে — lock থাকলে app auto-open হবে না
 
         notificationManager.notify(lastNotificationId, builder.build());
     }
