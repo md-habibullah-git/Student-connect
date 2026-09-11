@@ -5,8 +5,9 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { isUserOnline } from '../presence';
 import {
-  collection, addDoc, onSnapshot, query, orderBy, limit,
-  doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where
+  collection, addDoc, onSnapshot, query, orderBy,
+  doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where,
+  writeBatch
 } from 'firebase/firestore';
 import {
   getActiveGlobalCallSession,
@@ -46,6 +47,23 @@ const MAX_VOICE_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
+
+// ✅ createdAt যেকোনো format handle করে
+const toMillis = (createdAt) => {
+  if (!createdAt) return 0;
+  if (typeof createdAt === 'number') return createdAt;
+  if (typeof createdAt === 'string') return new Date(createdAt).getTime() || 0;
+  if (typeof createdAt.toMillis === 'function') return createdAt.toMillis();
+  if (createdAt.seconds) return createdAt.seconds * 1000;
+  return 0;
+};
+
+// ✅ Time format helper
+const formatMsgTime = (createdAt) => {
+  const ms = toMillis(createdAt);
+  if (!ms) return '';
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
 
 const createBoostedAudio = (stream, boostLevel = 10) => {
   try {
@@ -105,7 +123,7 @@ function RemoteVideoTile({ stream, label }) {
 
   return (
     <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
-      <video ref={videoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
       <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />
       <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>{label}</span>
     </div>
@@ -266,7 +284,7 @@ export default function GlobalChat() {
   const navigate = useNavigate();
   const location = useLocation();
   const [messages, setMessages] = useState([]);
-  const [newMessage, setNewMessage] = useState("");
+  const [input, setInput] = useState('');
   const [usersCache, setUsersCache] = useState({});
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
@@ -331,7 +349,7 @@ export default function GlobalChat() {
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // ✅ Push notification — fire-and-forget
+  // ✅ Push notification — fire-and-forget, String() wrap
   const sendGlobalMessagePushNotification = (title, body, notificationType = 'message') => {
     (async () => {
       try {
@@ -351,11 +369,11 @@ export default function GlobalChat() {
               title,
               body,
               {
-                type: notificationType,
-                senderId: currentUid,
-                senderName: currentUserName,
-                roomId: globalRoomId,
-                isGlobal: true,
+                type: String(notificationType || 'message'),
+                senderId: String(currentUid || ''),
+                senderName: String(currentUserName || ''),
+                roomId: String(globalRoomId || ''),
+                isGlobal: "true"          // ✅ boolean → string
               }
             ).catch(err => console.error('Single push failed:', err))
           );
@@ -368,18 +386,38 @@ export default function GlobalChat() {
     })();
   };
 
+  // ✅ ৭ দিনের cleanup — সব type handle
   useEffect(() => {
     const autoCleanOldGlobalMessages = async () => {
       try {
         const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-        const oldMessagesQuery = query(
+
+        const allQuery = query(
           collection(db, "global-room-messages"),
-          where("createdAt", "<", sevenDaysAgo)
+          orderBy("createdAt", "asc")
         );
-        const snapshot = await getDocs(oldMessagesQuery);
-        await Promise.all(
-          snapshot.docs.map(d => deleteDoc(doc(db, "global-room-messages", d.id)))
-        );
+        const snapshot = await getDocs(allQuery);
+
+        const oldDocs = snapshot.docs.filter(d => {
+          const ms = toMillis(d.data().createdAt);
+          return ms > 0 && ms < sevenDaysAgo;
+        });
+
+        if (oldDocs.length === 0) {
+          console.log('🧹 No old messages to delete');
+          return;
+        }
+
+        const batchSize = 500;
+        let deletedCount = 0;
+        for (let i = 0; i < oldDocs.length; i += batchSize) {
+          const batch = writeBatch(db);
+          const chunk = oldDocs.slice(i, i + batchSize);
+          chunk.forEach(d => batch.delete(d.ref));
+          await batch.commit();
+          deletedCount += chunk.length;
+        }
+        console.log(`✅ Total deleted: ${deletedCount} old messages`);
       } catch (error) {
         console.error("Global Chat Storage Auto Cleanup Error:", error);
       }
@@ -416,14 +454,18 @@ export default function GlobalChat() {
     }
   }, [location.state, showRejoinBtn]);
 
+  // ✅ Message listener — limit সরানো + client-side sort
   useEffect(() => {
     const q = query(
       collection(db, "global-room-messages"),
-      orderBy("createdAt", "asc"),
-      limit(100)
+      orderBy("createdAt", "asc")
+      // ✅ limit(100) সরানো
     );
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // ✅ client-side sort — number, string, missing সব handle
+      msgs.sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
+      setMessages(msgs);
       localStorage.setItem('lastRead_global', String(Date.now()));
     }, (error) => console.error("Global Chat Stream Error:", error));
 
@@ -473,41 +515,24 @@ export default function GlobalChat() {
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
 
-  // ✅ UPDATED handleSendMessage — debug logs সহ
-  const handleSendMessage = async (e) => {
+  // ✅ sendMessage — PersonalChat-এর মতো
+  const sendMessage = async (e) => {
     e.preventDefault();
+    if (!input.trim() && selectedFiles.length === 0) return;
 
-    // ============ DEBUG LOGS ============
-    console.log('🔍 DEBUG — handleSendMessage called');
-    console.log('🔍 DEBUG — currentUid:', currentUid);
-    console.log('🔍 DEBUG — auth.currentUser:', auth.currentUser?.uid);
-    console.log('🔍 DEBUG — newMessage:', JSON.stringify(newMessage));
-    console.log('🔍 DEBUG — selectedFiles.length:', selectedFiles.length);
-    console.log('🔍 DEBUG — replyToMessage:', replyToMessage?.id);
-    // ====================================
+    try {
+      const replyData = replyToMessage ? {
+        text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""),
+        fileUrl: replyToMessage.fileUrl || "",
+        fileType: replyToMessage.fileType || "",
+        senderName: replyToMessage.senderName,
+        msgId: replyToMessage.id
+      } : null;
 
-    if (!newMessage.trim() && selectedFiles.length === 0) {
-      console.log('🔍 DEBUG — Empty message, returning');
-      return;
-    }
-
-    const replyData = replyToMessage ? {
-      text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""),
-      fileUrl: replyToMessage.fileUrl || "",
-      fileType: replyToMessage.fileType || "",
-      senderName: replyToMessage.senderName,
-      msgId: replyToMessage.id
-    } : null;
-
-    const textToSend = newMessage.trim();
-
-    // ✅ Text message
-    if (textToSend) {
-      try {
-        console.log('🔍 DEBUG — Attempting addDoc to global-room-messages');
-
+      // ✅ Text message
+      if (input.trim()) {
         await addDoc(collection(db, "global-room-messages"), {
-          text: textToSend,
+          text: input,
           senderUid: currentUid,
           senderName: currentUserName,
           senderPhoto: usersCache[currentUid]?.photo || auth.currentUser?.photoURL || "",
@@ -517,34 +542,18 @@ export default function GlobalChat() {
           replyTo: replyData
         });
 
-        console.log('✅ DEBUG — addDoc SUCCESS');
+        setInput('');
 
-        // ✅ আগে input clear
-        setNewMessage("");
-
-        // ✅ তারপর push — await ছাড়া (fire-and-forget)
         sendGlobalMessagePushNotification(
           'New Message 💬',
-          `${currentUserName}: ${textToSend}`
+          `${currentUserName}: ${input.trim()}`
         );
-      } catch (error) {
-        console.error("❌ DEBUG — Error sending text message:", error);
-        console.error("❌ DEBUG — Error code:", error?.code);
-        console.error("❌ DEBUG — Error message:", error?.message);
       }
-    }
 
-    // ✅ File/Image/Video messages
-    if (selectedFiles.length > 0) {
-      const filesToSend = [...selectedFiles];
-      const replyForFiles = replyData;
-
-      setSelectedFiles([]);
-      setReplyToMessage(null);
-
-      await Promise.all(filesToSend.map(async (fileData) => {
-        try {
-          await addDoc(collection(db, "global-room-messages"), {
+      // ✅ File/Image/Video messages
+      if (selectedFiles.length > 0) {
+        await Promise.all(selectedFiles.map((fileData) =>
+          addDoc(collection(db, "global-room-messages"), {
             text: "",
             fileUrl: fileData.url,
             fileType: fileData.type,
@@ -555,24 +564,27 @@ export default function GlobalChat() {
             createdAt: Date.now(),
             isEdited: false,
             isDeleted: false,
-            replyTo: replyForFiles
-          });
-        } catch (error) {
-          console.error("Error sending file to firestore:", error);
-        }
-      }));
+            replyTo: replyData
+          })
+        ));
 
-      const fileCount = filesToSend.length;
-      const firstType = filesToSend[0]?.type;
-      const typeLabel = firstType === 'image' ? '📷 Photo'
-                      : firstType === 'video' ? '🎥 Video'
-                      : '📎 File';
-      const countLabel = fileCount > 1 ? ` (${fileCount})` : '';
+        const fileCount = selectedFiles.length;
+        const firstType = selectedFiles[0]?.type;
+        const typeLabel = firstType === 'image' ? '📷 Photo'
+                        : firstType === 'video' ? '🎥 Video'
+                        : '📎 File';
+        const countLabel = fileCount > 1 ? ` (${fileCount})` : '';
 
-      sendGlobalMessagePushNotification(
-        'New Message 💬',
-        `${currentUserName}: ${typeLabel}${countLabel}`
-      );
+        sendGlobalMessagePushNotification(
+          'New Message 💬',
+          `${currentUserName}: ${typeLabel}${countLabel}`
+        );
+      }
+
+      setSelectedFiles([]);
+      setReplyToMessage(null);
+    } catch (error) {
+      console.error("Error sending message:", error);
     }
   };
 
@@ -1479,7 +1491,7 @@ export default function GlobalChat() {
                             {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
                             {getMsg.fileUrl && getMsg.fileType === 'audio' && <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />}
                             {getMsg.text && <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{getMsg.text}{getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}</p>}
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{getMsg.createdAt ? new Date(getMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</div>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{formatMsgTime(getMsg.createdAt)}</div>
                           </>
                         )}
                       </div>
@@ -1502,7 +1514,7 @@ export default function GlobalChat() {
             })}
             <div ref={messagesEndRef} />
           </div>
-          <form onSubmit={handleSendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <form onSubmit={sendMessage} style={{ padding: '15px', background: 'var(--card-bg, #fff)', borderTop: '1px solid rgba(0, 86, 179, 0.1)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {replyToMessage && (
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', background: 'rgba(40,167,69,0.06)', borderLeft: '4px solid #28a745', borderRadius: '6px', fontSize: '12px' }}>
                 <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1557,7 +1569,7 @@ export default function GlobalChat() {
                 <button type="button" onClick={startRecording} title="Record a voice message" style={{ background: 'rgba(0, 86, 179, 0.1)', color: '#0056b3', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '8px', flexShrink: 0 }}>
                   <MicIcon />
                 </button>
-                <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
+                <input type="text" className="dynamic-chat-input" placeholder="✍️ Type public campus message..." value={input} onChange={(e) => setInput(e.target.value)} style={{ flex: 1, padding: '10px 0', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
                 <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,86,179,0.2)', flexShrink: 0 }}>➤</button>
               </div>
             )}

@@ -5,7 +5,9 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import {
   collection, doc, onSnapshot, query, where, orderBy, limit,
-  updateDoc, setDoc, getDocs
+  updateDoc, setDoc, getDocs,
+  writeBatch,      // ✅ যোগ করা হয়েছে
+  deleteDoc        // ✅ যোগ করা হয়েছে
 } from 'firebase/firestore';
 import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 import { Capacitor, registerPlugin } from '@capacitor/core';
@@ -149,6 +151,105 @@ export default function GlobalAlerts() {
       console.log('🔔 GlobalAlerts: Is Native:', Capacitor.isNativePlatform());
       initPushNotifications();
     }
+  }, [currentUid]);
+
+  // =====================================================
+  // ✅ NEW: Cleanup — সব room + global messages
+  // =====================================================
+  useEffect(() => {
+    if (!currentUid) return;
+
+    const cleanupAllOldMessages = async () => {
+      try {
+        // ✅ শেষ cleanup কবে হয়েছিল চেক করো — প্রতি ঘণ্টায় একবার
+        const lastCleanup = Number(localStorage.getItem(`lastCleanup_${currentUid}`)) || 0;
+        const oneHourAgo = Date.now() - 60 * 60 * 1000;
+
+        if (lastCleanup > oneHourAgo) {
+          console.log('⏭️ Cleanup recently done — skipping');
+          return;
+        }
+
+        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+        // ============================================
+        // ১. Global messages cleanup
+        // ============================================
+        try {
+          const globalQ = query(
+            collection(db, "global-room-messages"),
+            orderBy("createdAt", "asc")
+          );
+          const globalSnap = await getDocs(globalQ);
+
+          const oldGlobalDocs = globalSnap.docs.filter(d => {
+            const ms = toMillis(d.data().createdAt);
+            return ms > 0 && ms < sevenDaysAgo;
+          });
+
+          if (oldGlobalDocs.length > 0) {
+            const batchSize = 500;
+            for (let i = 0; i < oldGlobalDocs.length; i += batchSize) {
+              const batch = writeBatch(db);
+              const chunk = oldGlobalDocs.slice(i, i + batchSize);
+              chunk.forEach(d => batch.delete(d.ref));
+              await batch.commit();
+            }
+            console.log(`🧹 Deleted ${oldGlobalDocs.length} old global messages`);
+          }
+        } catch (err) {
+          console.error("Global cleanup error:", err);
+        }
+
+        // ============================================
+        // ২. Personal rooms cleanup (সব room)
+        // ============================================
+        try {
+          const roomsQ = query(
+            collection(db, "personal-rooms"),
+            where("participants", "array-contains", currentUid)
+          );
+          const roomsSnap = await getDocs(roomsQ);
+
+          for (const roomDoc of roomsSnap.docs) {
+            const roomId = roomDoc.id;
+            const msgsQ = query(
+              collection(db, "personal-rooms", roomId, "messages"),
+              orderBy("createdAt", "asc")
+            );
+            const msgsSnap = await getDocs(msgsQ);
+
+            const oldDocs = msgsSnap.docs.filter(d => {
+              const ms = toMillis(d.data().createdAt);
+              return ms > 0 && ms < sevenDaysAgo;
+            });
+
+            if (oldDocs.length > 0) {
+              const batchSize = 500;
+              for (let i = 0; i < oldDocs.length; i += batchSize) {
+                const batch = writeBatch(db);
+                const chunk = oldDocs.slice(i, i + batchSize);
+                chunk.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+              }
+              console.log(`🧹 Deleted ${oldDocs.length} from room ${roomId}`);
+            }
+          }
+        } catch (err) {
+          console.error("Personal cleanup error:", err);
+        }
+
+        // ✅ cleanup সফল হলে timestamp save
+        localStorage.setItem(`lastCleanup_${currentUid}`, String(Date.now()));
+        console.log('✅ Cleanup complete');
+      } catch (error) {
+        console.error("Cleanup error:", error);
+      }
+    };
+
+    // ✅ App খোলার ৫ সেকেন্ড পরে cleanup (UI block না করতে)
+    const timer = setTimeout(cleanupAllOldMessages, 5000);
+    return () => clearTimeout(timer);
   }, [currentUid]);
 
   useEffect(() => {
@@ -350,7 +451,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ============ Global messages listener — FIXED ============
+  // ============ Global messages listener ============
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
@@ -358,9 +459,7 @@ export default function GlobalAlerts() {
       const isFirst = isFirstGlobalLoadRef.current;
       if (!snapshot.empty) {
         const data = snapshot.docs[0].data();
-        // ✅ FIX: toMillis helper
         const msgTime = toMillis(data.createdAt);
-        console.log('🔔 Global msg listener — msgTime:', msgTime, 'lastKnown:', lastKnownGlobalMessageAtRef.current, 'sender:', data.senderUid, 'me:', currentUid);
 
         if (!isFirst && msgTime > lastKnownGlobalMessageAtRef.current && data.senderUid && data.senderUid !== currentUid) {
           const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
@@ -556,7 +655,6 @@ export default function GlobalAlerts() {
       getDocs(globalQ).then(snapshot => {
         if (!snapshot.empty) {
           const globalData = snapshot.docs[0].data();
-          // ✅ FIX: toMillis helper
           const msgTime = toMillis(globalData.createdAt);
           if (msgTime > lastReadGlobal && globalData.senderUid !== currentUid) {
             const unreadBubble = {
