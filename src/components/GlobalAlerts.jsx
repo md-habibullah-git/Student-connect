@@ -5,9 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import {
   collection, doc, onSnapshot, query, where, orderBy, limit,
-  updateDoc, setDoc, getDocs,
-  writeBatch,      // ✅ যোগ করা হয়েছে
-  deleteDoc        // ✅ যোগ করা হয়েছে
+  updateDoc, setDoc, getDocs, writeBatch
 } from 'firebase/firestore';
 import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
 import { Capacitor, registerPlugin } from '@capacitor/core';
@@ -17,7 +15,10 @@ import { initPushNotifications } from '../pushNotifications';
 
 const GLOBAL_ROOM_ID = "campus_global_conference_room";
 
-// ✅ Helper — createdAt যেকোনো format handle করে
+// ✅ ৪২০ ঘণ্টা = ৭ দিন
+const SEVEN_DAYS_MS = 420 * 60 * 60 * 1000;
+
+// ✅ createdAt যেকোনো format handle করে
 const toMillis = (createdAt) => {
   if (!createdAt) return 0;
   if (typeof createdAt === 'number') return createdAt;
@@ -53,6 +54,9 @@ const PhoneDeclineIcon = () => (
   </svg>
 );
 
+// =====================================================
+// ✅ Receiver ringtone (জোরে) — অপরিবর্তিত
+// =====================================================
 let ringtoneAudioCtx = null;
 let ringtoneOscillator = null;
 let ringtoneGainNode = null;
@@ -86,6 +90,49 @@ const stopRingtone = () => {
   if (ringtoneOscillator) { try { ringtoneOscillator.stop(); } catch (err) {} ringtoneOscillator = null; }
   if (ringtoneAudioCtx) { ringtoneAudioCtx.close().catch(() => {}); ringtoneAudioCtx = null; }
   ringtoneGainNode = null;
+};
+
+// =====================================================
+// ✅ Caller ringback tone (হালকা) — নতুন
+// =====================================================
+let callerToneAudioCtx = null;
+let callerToneOscillator = null;
+let callerToneGainNode = null;
+let callerToneIntervalRef = null;
+
+const startCallerTone = () => {
+  try {
+    if (callerToneAudioCtx) return;
+    callerToneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    callerToneGainNode = callerToneAudioCtx.createGain();
+    callerToneGainNode.connect(callerToneAudioCtx.destination);
+    // ✅ হালকা শব্দ — receiver-এর চেয়ে অনেক কম
+    callerToneGainNode.gain.value = 0.15;
+
+    const playTone = () => {
+      try {
+        if (callerToneOscillator) callerToneOscillator.stop();
+        callerToneOscillator = callerToneAudioCtx.createOscillator();
+        callerToneOscillator.connect(callerToneGainNode);
+        // ✅ হালকা "ring ring" — 440Hz
+        callerToneOscillator.frequency.value = 440;
+        callerToneOscillator.type = 'sine';
+        callerToneOscillator.start(callerToneAudioCtx.currentTime);
+        callerToneOscillator.stop(callerToneAudioCtx.currentTime + 0.4);
+      } catch (err) {}
+    };
+
+    // ✅ Ring pattern: ০.৪ সেকেন্ড beep, তারপর ২ সেকেন্ড silence
+    playTone();
+    callerToneIntervalRef = setInterval(playTone, 2400);
+  } catch (err) {}
+};
+
+const stopCallerTone = () => {
+  if (callerToneIntervalRef) { clearInterval(callerToneIntervalRef); callerToneIntervalRef = null; }
+  if (callerToneOscillator) { try { callerToneOscillator.stop(); } catch (err) {} callerToneOscillator = null; }
+  if (callerToneAudioCtx) { callerToneAudioCtx.close().catch(() => {}); callerToneAudioCtx = null; }
+  callerToneGainNode = null;
 };
 
 const playMessageSound = () => {
@@ -138,6 +185,10 @@ export default function GlobalAlerts() {
     } catch (err) { return []; }
   });
 
+  // ✅ Caller-এর জন্য ringing state
+  const [outgoingPersonalCall, setOutgoingPersonalCall] = useState(null);
+  const [outgoingGlobalCall, setOutgoingGlobalCall] = useState(null);
+
   const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
   useEffect(() => {
     const unsubscribe = subscribeActiveCallSession(setActiveSession);
@@ -154,27 +205,30 @@ export default function GlobalAlerts() {
   }, [currentUid]);
 
   // =====================================================
-  // ✅ NEW: Cleanup — সব room + global messages
+  // ✅ Cleanup — প্রতি ১ ঘণ্টায় ৪২০ ঘণ্টা (৭ দিন) পুরনো মেসেজ delete
   // =====================================================
   useEffect(() => {
     if (!currentUid) return;
 
-    const cleanupAllOldMessages = async () => {
+    const cleanupOldMessages = async () => {
       try {
-        // ✅ শেষ cleanup কবে হয়েছিল চেক করো — প্রতি ঘণ্টায় একবার
-        const lastCleanup = Number(localStorage.getItem(`lastCleanup_${currentUid}`)) || 0;
-        const oneHourAgo = Date.now() - 60 * 60 * 1000;
+        const now = Date.now();
+        const cutoffTime = now - SEVEN_DAYS_MS;
 
-        if (lastCleanup > oneHourAgo) {
-          console.log('⏭️ Cleanup recently done — skipping');
-          return;
-        }
+        const batchDelete = async (docs) => {
+          const batchSize = 500;
+          let deleted = 0;
+          for (let i = 0; i < docs.length; i += batchSize) {
+            const batch = writeBatch(db);
+            const chunk = docs.slice(i, i + batchSize);
+            chunk.forEach(d => batch.delete(d.ref));
+            await batch.commit();
+            deleted += chunk.length;
+          }
+          return deleted;
+        };
 
-        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-
-        // ============================================
-        // ১. Global messages cleanup
-        // ============================================
+        // ✅ Global messages
         try {
           const globalQ = query(
             collection(db, "global-room-messages"),
@@ -182,28 +236,20 @@ export default function GlobalAlerts() {
           );
           const globalSnap = await getDocs(globalQ);
 
-          const oldGlobalDocs = globalSnap.docs.filter(d => {
+          const oldDocs = globalSnap.docs.filter(d => {
             const ms = toMillis(d.data().createdAt);
-            return ms > 0 && ms < sevenDaysAgo;
+            return ms > 0 && ms < cutoffTime;
           });
 
-          if (oldGlobalDocs.length > 0) {
-            const batchSize = 500;
-            for (let i = 0; i < oldGlobalDocs.length; i += batchSize) {
-              const batch = writeBatch(db);
-              const chunk = oldGlobalDocs.slice(i, i + batchSize);
-              chunk.forEach(d => batch.delete(d.ref));
-              await batch.commit();
-            }
-            console.log(`🧹 Deleted ${oldGlobalDocs.length} old global messages`);
+          if (oldDocs.length > 0) {
+            const deleted = await batchDelete(oldDocs);
+            console.log(`🧹 Deleted ${deleted} old global messages`);
           }
         } catch (err) {
           console.error("Global cleanup error:", err);
         }
 
-        // ============================================
-        // ২. Personal rooms cleanup (সব room)
-        // ============================================
+        // ✅ Personal rooms
         try {
           const roomsQ = query(
             collection(db, "personal-rooms"),
@@ -221,42 +267,92 @@ export default function GlobalAlerts() {
 
             const oldDocs = msgsSnap.docs.filter(d => {
               const ms = toMillis(d.data().createdAt);
-              return ms > 0 && ms < sevenDaysAgo;
+              return ms > 0 && ms < cutoffTime;
             });
 
             if (oldDocs.length > 0) {
-              const batchSize = 500;
-              for (let i = 0; i < oldDocs.length; i += batchSize) {
-                const batch = writeBatch(db);
-                const chunk = oldDocs.slice(i, i + batchSize);
-                chunk.forEach(d => batch.delete(d.ref));
-                await batch.commit();
-              }
-              console.log(`🧹 Deleted ${oldDocs.length} from room ${roomId}`);
+              const deleted = await batchDelete(oldDocs);
+              console.log(`🧹 Deleted ${deleted} from room ${roomId}`);
             }
           }
         } catch (err) {
           console.error("Personal cleanup error:", err);
         }
 
-        // ✅ cleanup সফল হলে timestamp save
-        localStorage.setItem(`lastCleanup_${currentUid}`, String(Date.now()));
-        console.log('✅ Cleanup complete');
+        console.log('✅ Cleanup complete at', new Date(now).toLocaleTimeString());
       } catch (error) {
         console.error("Cleanup error:", error);
       }
     };
 
-    // ✅ App খোলার ৫ সেকেন্ড পরে cleanup (UI block না করতে)
-    const timer = setTimeout(cleanupAllOldMessages, 5000);
-    return () => clearTimeout(timer);
+    const initialTimer = setTimeout(cleanupOldMessages, 5000);
+    const hourlyInterval = setInterval(cleanupOldMessages, 60 * 60 * 1000);
+
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(hourlyInterval);
+    };
   }, [currentUid]);
 
+  // =====================================================
+  // ✅ Ringtone control — Receiver ringtone (অপরিবর্তিত)
+  // =====================================================
   useEffect(() => {
     if (incomingPersonalCall || incomingGlobalCall) startRingtone();
     else stopRingtone();
     return () => { stopRingtone(); };
   }, [incomingPersonalCall, incomingGlobalCall]);
+
+  // =====================================================
+  // ✅ Caller tone control — হালকা ringback (নতুন)
+  // =====================================================
+  useEffect(() => {
+    if (outgoingPersonalCall || outgoingGlobalCall) startCallerTone();
+    else stopCallerTone();
+    return () => { stopCallerTone(); };
+  }, [outgoingPersonalCall, outgoingGlobalCall]);
+
+  // =====================================================
+  // ✅ Outgoing Personal Call listener — caller-এর tone
+  // =====================================================
+  useEffect(() => {
+    if (!currentUid) return;
+    const q = query(
+      collection(db, "personal-connections"),
+      where("participants", "array-contains", currentUid)
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let found = null;
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        // ✅ আমি caller এবং status ringing → tone বাজাও
+        if (data.hostId === currentUid && data.status === "ringing") {
+          found = { roomId: docSnap.id };
+        }
+      });
+      setOutgoingPersonalCall(found);
+    });
+    return () => unsubscribe();
+  }, [currentUid]);
+
+  // =====================================================
+  // ✅ Outgoing Global Call listener — caller-এর tone
+  // =====================================================
+  useEffect(() => {
+    if (!currentUid) return;
+    const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        // ✅ আমি host এবং status ringing → tone বাজাও
+        if (data.hostId === currentUid && data.status === "ringing") {
+          setOutgoingGlobalCall({ roomId: GLOBAL_ROOM_ID });
+          return;
+        }
+      }
+      setOutgoingGlobalCall(null);
+    });
+    return () => unsubscribe();
+  }, [currentUid]);
 
   useEffect(() => {
     if (!activeSession || activeSession.type !== 'personal') return;
@@ -491,7 +587,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Personal call listener
+  // Personal call listener — receiver-এর জন্য (অপরিবর্তিত)
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-connections"), where("participants", "array-contains", currentUid));
@@ -514,8 +610,11 @@ export default function GlobalAlerts() {
       console.log('📞 Cancel call event received:', event.detail);
       stopRingtone();
       stopNativeRingtone();
+      stopCallerTone();   // ✅ Caller tone-ও বন্ধ
       setIncomingPersonalCall(null);
       setIncomingGlobalCall(null);
+      setOutgoingPersonalCall(null);
+      setOutgoingGlobalCall(null);
     };
     window.addEventListener('cancel-call', handleCancelCall);
     return () => { window.removeEventListener('cancel-call', handleCancelCall); };
@@ -527,6 +626,7 @@ export default function GlobalAlerts() {
       console.log('📞 Native accept event received:', event.detail);
       stopRingtone();
       stopNativeRingtone();
+      stopCallerTone();
       const { roomId, callerName } = event.detail || {};
       if (roomId && callerName) {
         navigate(`/chat/${roomId}/${encodeURIComponent(callerName)}`, { state: { autoJoinCall: true } });
@@ -538,7 +638,7 @@ export default function GlobalAlerts() {
     return () => { window.removeEventListener('native-call-accept', handleNativeAccept); };
   }, [navigate]);
 
-  // Global call listener
+  // Global call listener — receiver-এর জন্য (অপরিবর্তিত)
   useEffect(() => {
     if (!currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
@@ -695,6 +795,7 @@ export default function GlobalAlerts() {
     if (!activeCall) return;
     stopRingtone();
     stopNativeRingtone();
+    stopCallerTone();
     if (activeCall.type === 'personal') {
       navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
     } else {
@@ -712,6 +813,7 @@ export default function GlobalAlerts() {
     if (!activeCall) return;
     stopRingtone();
     stopNativeRingtone();
+    stopCallerTone();
     if (activeCall.type === 'personal') {
       try {
         await updateDoc(doc(db, "personal-connections", activeCall.roomId), { status: "ended" });

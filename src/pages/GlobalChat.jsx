@@ -5,9 +5,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { isUserOnline } from '../presence';
 import {
-  collection, addDoc, onSnapshot, query, orderBy,
-  doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where,
-  writeBatch
+  collection, addDoc, onSnapshot, query, orderBy, limit,
+  doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, where
 } from 'firebase/firestore';
 import {
   getActiveGlobalCallSession,
@@ -58,11 +57,25 @@ const toMillis = (createdAt) => {
   return 0;
 };
 
-// ✅ Time format helper
-const formatMsgTime = (createdAt) => {
+// ✅ Time Ago — কত সময় আগে পাঠানো হয়েছে
+const timeAgo = (createdAt) => {
   const ms = toMillis(createdAt);
   if (!ms) return '';
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const seconds = Math.floor((Date.now() - ms) / 1000);
+  if (seconds < 10) return 'just now';
+  if (seconds < 60) return `${seconds} seconds ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} day${days > 1 ? 's' : ''} ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months > 1 ? 's' : ''} ago`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years > 1 ? 's' : ''} ago`;
 };
 
 const createBoostedAudio = (stream, boostLevel = 10) => {
@@ -307,6 +320,13 @@ export default function GlobalChat() {
   const recordingAudioCtxRef = useRef(null);
   const recordingRafRef = useRef(null);
 
+  // ✅ প্রতি মিনিটে re-render — time ago update
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   const [localDeletedIds, setLocalDeletedIds] = useState(() => {
     const saved = localStorage.getItem(`global_deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
     return saved ? JSON.parse(saved) : [];
@@ -349,7 +369,6 @@ export default function GlobalChat() {
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // ✅ Push notification — fire-and-forget, String() wrap
   const sendGlobalMessagePushNotification = (title, body, notificationType = 'message') => {
     (async () => {
       try {
@@ -373,7 +392,7 @@ export default function GlobalChat() {
                 senderId: String(currentUid || ''),
                 senderName: String(currentUserName || ''),
                 roomId: String(globalRoomId || ''),
-                isGlobal: "true"          // ✅ boolean → string
+                isGlobal: "true"
               }
             ).catch(err => console.error('Single push failed:', err))
           );
@@ -385,45 +404,6 @@ export default function GlobalChat() {
       }
     })();
   };
-
-  // ✅ ৭ দিনের cleanup — সব type handle
-  useEffect(() => {
-    const autoCleanOldGlobalMessages = async () => {
-      try {
-        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-
-        const allQuery = query(
-          collection(db, "global-room-messages"),
-          orderBy("createdAt", "asc")
-        );
-        const snapshot = await getDocs(allQuery);
-
-        const oldDocs = snapshot.docs.filter(d => {
-          const ms = toMillis(d.data().createdAt);
-          return ms > 0 && ms < sevenDaysAgo;
-        });
-
-        if (oldDocs.length === 0) {
-          console.log('🧹 No old messages to delete');
-          return;
-        }
-
-        const batchSize = 500;
-        let deletedCount = 0;
-        for (let i = 0; i < oldDocs.length; i += batchSize) {
-          const batch = writeBatch(db);
-          const chunk = oldDocs.slice(i, i + batchSize);
-          chunk.forEach(d => batch.delete(d.ref));
-          await batch.commit();
-          deletedCount += chunk.length;
-        }
-        console.log(`✅ Total deleted: ${deletedCount} old messages`);
-      } catch (error) {
-        console.error("Global Chat Storage Auto Cleanup Error:", error);
-      }
-    };
-    autoCleanOldGlobalMessages();
-  }, []);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -454,16 +434,13 @@ export default function GlobalChat() {
     }
   }, [location.state, showRejoinBtn]);
 
-  // ✅ Message listener — limit সরানো + client-side sort
   useEffect(() => {
     const q = query(
       collection(db, "global-room-messages"),
       orderBy("createdAt", "asc")
-      // ✅ limit(100) সরানো
     );
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
       const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      // ✅ client-side sort — number, string, missing সব handle
       msgs.sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
       setMessages(msgs);
       localStorage.setItem('lastRead_global', String(Date.now()));
@@ -515,7 +492,6 @@ export default function GlobalChat() {
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
 
-  // ✅ sendMessage — PersonalChat-এর মতো
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim() && selectedFiles.length === 0) return;
@@ -529,7 +505,6 @@ export default function GlobalChat() {
         msgId: replyToMessage.id
       } : null;
 
-      // ✅ Text message
       if (input.trim()) {
         await addDoc(collection(db, "global-room-messages"), {
           text: input,
@@ -550,7 +525,6 @@ export default function GlobalChat() {
         );
       }
 
-      // ✅ File/Image/Video messages
       if (selectedFiles.length > 0) {
         await Promise.all(selectedFiles.map((fileData) =>
           addDoc(collection(db, "global-room-messages"), {
@@ -1458,6 +1432,9 @@ export default function GlobalChat() {
                       maxWidth: '80%'
                     }}>
                       {getMsg.text}
+                      <div style={{ fontSize: '10px', opacity: 0.6, marginTop: '4px' }}>
+                        {timeAgo(getMsg.createdAt)}
+                      </div>
                     </div>
                   </div>
                 );
@@ -1491,7 +1468,7 @@ export default function GlobalChat() {
                             {getMsg.fileUrl && getMsg.fileType === 'video' && <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '320px', borderRadius: '10px', maxHeight: '320px', display: 'block' }} />}
                             {getMsg.fileUrl && getMsg.fileType === 'audio' && <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />}
                             {getMsg.text && <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>{getMsg.text}{getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}</p>}
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{formatMsgTime(getMsg.createdAt)}</div>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', opacity: 0.7, fontSize: '10px' }}>{timeAgo(getMsg.createdAt)}</div>
                           </>
                         )}
                       </div>

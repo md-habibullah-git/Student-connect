@@ -6,7 +6,7 @@ import { db, auth } from '../firebase';
 import { isUserOnline } from '../presence';
 import { 
   collection, addDoc, query, orderBy, onSnapshot, doc, 
-  setDoc, updateDoc, getDoc, getDocs, where, deleteDoc, serverTimestamp 
+  setDoc, updateDoc, getDoc, getDocs, where, deleteDoc 
 } from 'firebase/firestore';
 import { getActiveCallSession, setActiveCallSession, clearActiveCallSession, subscribeActiveCallSession } from '../callSession';
 import { sendPushNotification, sendCallNotification, sendCancelCallNotification } from '../pushNotifications';
@@ -26,6 +26,37 @@ const MAX_VOICE_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_BASE64_LENGTH = 1100000;
 const MAX_VIDEO_RAW_BYTES = 750000;
 const MAX_RECORDING_SECONDS = 30;
+
+// ✅ createdAt যেকোনো format handle করে
+const toMillis = (createdAt) => {
+  if (!createdAt) return 0;
+  if (typeof createdAt === 'number') return createdAt;
+  if (typeof createdAt === 'string') return new Date(createdAt).getTime() || 0;
+  if (typeof createdAt.toMillis === 'function') return createdAt.toMillis();
+  if (createdAt.seconds) return createdAt.seconds * 1000;
+  return 0;
+};
+
+// ✅ Time Ago — কত সময় আগে পাঠানো হয়েছে
+const timeAgo = (createdAt) => {
+  const ms = toMillis(createdAt);
+  if (!ms) return '';
+  const seconds = Math.floor((Date.now() - ms) / 1000);
+  if (seconds < 10) return 'just now';
+  if (seconds < 60) return `${seconds} seconds ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} day${days > 1 ? 's' : ''} ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months > 1 ? 's' : ''} ago`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years > 1 ? 's' : ''} ago`;
+};
 
 // ✅ Audio Volume Boost Helper — Call stream-এর জন্য
 const createBoostedAudio = (stream, boostLevel = 10) => {
@@ -216,6 +247,13 @@ export default function PersonalChat() {
 
   const [receiverOnline, setReceiverOnline] = useState(false);
 
+  // ✅ প্রতি মিনিটে re-render — time ago update করার জন্য
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
@@ -254,31 +292,6 @@ export default function PersonalChat() {
     const secs = totalSeconds % 60;
     return `${mins}:${String(secs).padStart(2, '0')}`;
   };
-
-  const formatTimeDisplay = (timestamp) => {
-    if (!timestamp) return '';
-    return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  useEffect(() => {
-    const autoCleanOldMessages = async () => {
-      try {
-        const sevenDaysAgoTimestamp = new Date().getTime() - (7 * 24 * 60 * 60 * 1000); 
-        const msgCollectionRef = collection(db, "personal-rooms", chatRoomId, "messages");
-        const oldMessagesQuery = query(msgCollectionRef, where("createdAt", "<", sevenDaysAgoTimestamp));
-        const snapshot = await getDocs(oldMessagesQuery);
-        await Promise.all(
-          snapshot.docs.map((docSnapshot) => deleteDoc(doc(db, "personal-rooms", chatRoomId, "messages", docSnapshot.id)))
-        );
-      } catch (error) {
-        console.error("Firebase Auto Cleanup Error:", error);
-      }
-    };
-
-    if (chatRoomId) {
-      autoCleanOldMessages();
-    }
-  }, [chatRoomId]);
 
   useEffect(() => {
     const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
@@ -382,11 +395,11 @@ export default function PersonalChat() {
       let callSummaryText;
       
       if (wasMissed) {
-        callSummaryText = `❌ You missed a ${callTypeLabel.toLowerCase()} • ${formatTimeDisplay(startedAt)}`;
+        callSummaryText = `❌ You missed a ${callTypeLabel.toLowerCase()} • ${new Date(startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
       } else {
         const answerTime = callAnsweredTimeRef.current || startedAt;
         const duration = endedAt - answerTime;
-        callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${formatTimeDisplay(answerTime)} - ${formatTimeDisplay(endedAt)}\n📞 Call • ${formatDuration(duration)} min`;
+        callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${new Date(answerTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(endedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n📞 Call • ${formatDuration(duration)} min`;
       }
       
       const roomRef = doc(db, "personal-rooms", chatRoomId);
@@ -417,7 +430,6 @@ export default function PersonalChat() {
     }
   };
 
-  // ✅ Helper: Receiver-কে push notification পাঠানোর function
   const sendMessagePushNotification = async (title, body) => {
     try {
       const receiverDoc = await getDoc(doc(db, "users", targetUid));
@@ -430,9 +442,6 @@ export default function PersonalChat() {
             body,
             { type: 'message', senderId: currentUid, roomId: chatRoomId }
           );
-          console.log('✅ Message push sent:', title);
-        } else {
-          console.log('⚠️ Receiver has no pushToken');
         }
       }
     } catch (pushErr) {
@@ -466,7 +475,6 @@ export default function PersonalChat() {
         msgId: replyToMessage.id
       } : null;
 
-      // ✅ Text message
       if (input.trim()) {
         await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
           text: input,
@@ -479,7 +487,6 @@ export default function PersonalChat() {
           replyTo: replyData
         });
 
-        // ✅ Text message-এর জন্য push notification
         await sendMessagePushNotification(
           'New Message 💬',
           `${currentUserName}: ${input.trim()}`
@@ -488,7 +495,6 @@ export default function PersonalChat() {
         setInput('');
       }
 
-      // ✅ File/Image/Video messages
       if (selectedFiles.length > 0) {
         await Promise.all(selectedFiles.map((fileData) =>
           addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
@@ -505,7 +511,6 @@ export default function PersonalChat() {
           })
         ));
 
-        // ✅ File message-এর জন্য push notification
         const fileCount = selectedFiles.length;
         const firstType = selectedFiles[0]?.type;
         const typeLabel = firstType === 'image' ? '📷 Photo' 
@@ -560,9 +565,7 @@ export default function PersonalChat() {
     }
   };
 
-  // ✅ File selection — Home.jsx-এর মতোই (Native + Web)
   const handleFileChange = async (e) => {
-    // Native App — FilePicker
     if (window.Capacitor?.isNativePlatform?.()) {
       try {
         const result = await FilePicker.pickFiles({
@@ -634,7 +637,6 @@ export default function PersonalChat() {
       return;
     }
     
-    // Web — File input (Home.jsx-এর মতো, accept ছাড়া)
     if (!e.target.files || e.target.files.length === 0) return;
     const filesArray = Array.from(e.target.files);
 
@@ -722,7 +724,6 @@ export default function PersonalChat() {
         replyTo: replyData
       });
 
-      // ✅ Voice message-এর জন্য push notification
       await sendMessagePushNotification(
         '🎤 Voice Message',
         `${currentUserName} sent a voice message`
@@ -875,18 +876,10 @@ export default function PersonalChat() {
   };
 
   const registerPeerConnectionListeners = (pc) => {
-    pc.addEventListener('icegatheringstatechange', () => {
-      console.log(`ICE gathering state changed: ${pc.iceGatheringState}`);
-    });
-    pc.addEventListener('connectionstatechange', () => {
-      console.log(`Connection state change: ${pc.connectionState}`);
-    });
-    pc.addEventListener('signalingstatechange', () => {
-      console.log(`Signaling state change: ${pc.signalingState}`);
-    });
-    pc.addEventListener('iceconnectionstatechange', () => {
-      console.log(`ICE connection state change: ${pc.iceConnectionState}`);
-    });
+    pc.addEventListener('icegatheringstatechange', () => {});
+    pc.addEventListener('connectionstatechange', () => {});
+    pc.addEventListener('signalingstatechange', () => {});
+    pc.addEventListener('iceconnectionstatechange', () => {});
   };
 
   const cleanupCallLocally = () => {
@@ -1148,7 +1141,6 @@ export default function PersonalChat() {
     const endedAt = new Date().getTime();
     const callType = activeCallType;
     
-    // ✅ Receiver-কে cancel notification পাঠান — যাতে receiver-এর ringtone বন্ধ হয়
     try {
       if (targetUid && chatRoomId) {
         const receiverDoc = await getDoc(doc(db, "users", targetUid));
@@ -1156,9 +1148,6 @@ export default function PersonalChat() {
           const receiverData = receiverDoc.data();
           if (receiverData.pushToken) {
             await sendCancelCallNotification(receiverData.pushToken, chatRoomId);
-            console.log('✅ Cancel call notification sent to receiver');
-          } else {
-            console.log('⚠️ Receiver has no pushToken — skipping cancel notification');
           }
         }
       }
@@ -1354,6 +1343,9 @@ export default function PersonalChat() {
                       maxWidth: '80%'
                     }}>
                       {getMsg.text}
+                      <div style={{ fontSize: '10px', opacity: 0.6, marginTop: '4px' }}>
+                        {timeAgo(getMsg.createdAt)}
+                      </div>
                     </div>
                   </div>
                 );
@@ -1415,6 +1407,11 @@ export default function PersonalChat() {
                                 {getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '5px', fontStyle: 'italic' }}>(edited)</span>}
                               </p>
                             )}
+
+                            {/* ✅ Time Ago */}
+                            <div style={{ fontSize: '10px', opacity: 0.7, textAlign: isMe ? 'right' : 'left', marginTop: '2px' }}>
+                              {timeAgo(getMsg.createdAt)}
+                            </div>
                           </>
                         )}
                       </div>
