@@ -4,8 +4,57 @@ import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase'; 
 import { collection, doc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where, getDoc } from 'firebase/firestore'; 
 
+// ✅ createdAt যেকোনো format handle করে
+const toMillis = (createdAt) => {
+  if (!createdAt) return 0;
+  if (typeof createdAt === 'number') return createdAt;
+  if (typeof createdAt === 'string') return new Date(createdAt).getTime() || 0;
+  if (typeof createdAt.toMillis === 'function') return createdAt.toMillis();
+  if (createdAt.seconds) return createdAt.seconds * 1000;
+  return 0;
+};
+
+// ✅ Time Ago
+const timeAgo = (createdAt) => {
+  const ms = toMillis(createdAt);
+  if (!ms) return '';
+  const seconds = Math.floor((Date.now() - ms) / 1000);
+  if (seconds < 10) return 'just now';
+  if (seconds < 60) return `${seconds} seconds ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} day${days > 1 ? 's' : ''} ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months > 1 ? 's' : ''} ago`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years > 1 ? 's' : ''} ago`;
+};
+
+// ✅ Audio booster — element থেকে create
+const createBoostedAudioFromElement = (audioElement, boostLevel = 10) => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    const source = audioCtx.createMediaElementSource(audioElement);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = boostLevel;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    return audioCtx;
+  } catch (err) {
+    console.error('Admin voice boost error:', err);
+    return null;
+  }
+};
+
 function AdminAudioPlayer({ src }) {
   const audioRef = useRef(null);
+  const audioCtxRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -29,13 +78,32 @@ function AdminAudioPlayer({ src }) {
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('loadedmetadata', onLoaded);
       audio.removeEventListener('timeupdate', onTimeUpdate);
+      // ✅ cleanup booster
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
     };
   }, []);
 
+  // ✅ Play button — booster + play একসাথে
   const toggle = () => {
     const audio = audioRef.current;
     if (!audio) return;
-    if (isPlaying) audio.pause(); else audio.play();
+
+    // ✅ booster create (একবারই)
+    if (!audioCtxRef.current) {
+      const audioCtx = createBoostedAudioFromElement(audio, 10);
+      if (audioCtx) audioCtxRef.current = audioCtx;
+    }
+
+    // ✅ suspended হলে resume
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+
+    if (isPlaying) audio.pause();
+    else audio.play();
   };
 
   const formatTime = (secs) => {
@@ -66,6 +134,13 @@ export default function AdminPanel() {
   const [dataLoading, setDataLoading] = useState(true); 
   const activeChatListenerRef = useRef(null);
   const [expandedPhoto, setExpandedPhoto] = useState(null);
+
+  // ✅ প্রতি মিনিটে re-render — time ago update
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const [hiddenRooms, setHiddenRooms] = useState(() => { 
     const saved = localStorage.getItem('admin_hidden_rooms'); 
@@ -431,7 +506,10 @@ export default function AdminPanel() {
                     <div key={msg.id || idx} style={{ display: 'flex', flexDirection: isUser1 ? 'row' : 'row-reverse', alignItems: 'flex-end', gap: '8px' }}>
                       <img src={(senderInfo.photo && senderInfo.photo.trim() !== '') ? senderInfo.photo : fallbackAvatar(senderInfo.name)} alt="" style={{ width: '26px', height: '26px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: isUser1 ? 'flex-start' : 'flex-end', maxWidth: '80%' }}>
-                        <small style={{ opacity: 0.6, fontSize: '10px', marginBottom: '2px' }}>{msg.senderName || senderInfo.name} · {msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : 'Live'}</small>
+                        {/* ✅ System লেখা সরানো, timeAgo দেখানো */}
+                        <small style={{ opacity: 0.6, fontSize: '10px', marginBottom: '2px' }}>
+                          {senderInfo.name} · {timeAgo(msg.createdAt)}
+                        </small>
                         <div className={`admin-msg-bubble ${isUser1 ? 'left' : 'right'}`}>
                           {msg.isDeleted && <span style={{ fontSize: '10px', fontStyle: 'italic', opacity: 0.8, display: 'block', marginBottom: '3px' }}>🚫 deleted by user</span>}
                           {msg.fileUrl && msg.fileType === 'image' && (
