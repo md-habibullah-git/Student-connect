@@ -133,8 +133,8 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
       </div>
       
       <div style={{ display: 'flex', gap: isMobile ? '6px' : '12px', alignItems: 'center' }}> 
-        <a href="https://student-connect-sand.vercel.app/" target="_blank" rel="noreferrer" style={{ backgroundColor: '#2e7d32', color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)', padding: isMobile ? '4px 8px' : '6px 14px', borderRadius: '15px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'all 0.2s ease', cursor: 'pointer' }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1b5e20'; e.currentTarget.style.transform = 'scale(1.03)'; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#2e7d32'; e.currentTarget.style.transform = 'scale(1)'; }}> 
-          🌐 {isMobile ? 'Web' : 'Web'}
+        <a href="https://github.com/md-habibullah-git/Student-connect/releases/download/v1.0.0/app-debug.apk" target="_blank" rel="noreferrer" style={{ backgroundColor: '#2e7d32', color: '#ffffff', border: '1px solid rgba(255,255,255,0.3)', padding: isMobile ? '4px 8px' : '6px 14px', borderRadius: '15px', textDecoration: 'none', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'all 0.2s ease', cursor: 'pointer' }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1b5e20'; e.currentTarget.style.transform = 'scale(1.03)'; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#2e7d32'; e.currentTarget.style.transform = 'scale(1)'; }}> 
+          📱 {isMobile ? 'Apk' : 'Apk'}
         </a> 
 
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}> 
