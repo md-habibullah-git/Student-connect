@@ -55,7 +55,7 @@ const PhoneDeclineIcon = () => (
 );
 
 // =====================================================
-// ✅ Receiver ringtone (জোরে) — অপরিবর্তিত
+// ✅ Receiver ringtone (জোরে)
 // =====================================================
 let ringtoneAudioCtx = null;
 let ringtoneOscillator = null;
@@ -93,7 +93,7 @@ const stopRingtone = () => {
 };
 
 // =====================================================
-// ✅ Caller ringback tone (হালকা) — অপরিবর্তিত
+// ✅ Caller ringback tone (হালকা)
 // =====================================================
 let callerToneAudioCtx = null;
 let callerToneOscillator = null;
@@ -167,7 +167,7 @@ const sendLocalNotification = async (title, body) => {
   }
 };
 
-// ✅ Preview text helper — voice/image/video handle করে
+// ✅ Preview text helper
 const getMessagePreview = (data) => {
   if (!data) return '';
   if (data.isCallSummary || (data.text && data.text.includes('missed'))) {
@@ -302,7 +302,7 @@ export default function GlobalAlerts() {
   }, [currentUid]);
 
   // =====================================================
-  // ✅ Ringtone control — Receiver ringtone (অপরিবর্তিত)
+  // ✅ Ringtone control
   // =====================================================
   useEffect(() => {
     if (incomingPersonalCall || incomingGlobalCall) startRingtone();
@@ -311,7 +311,7 @@ export default function GlobalAlerts() {
   }, [incomingPersonalCall, incomingGlobalCall]);
 
   // =====================================================
-  // ✅ Caller tone control — হালকা ringback (অপরিবর্তিত)
+  // ✅ Caller tone control
   // =====================================================
   useEffect(() => {
     if (outgoingPersonalCall || outgoingGlobalCall) startCallerTone();
@@ -320,7 +320,7 @@ export default function GlobalAlerts() {
   }, [outgoingPersonalCall, outgoingGlobalCall]);
 
   // =====================================================
-  // ✅ Outgoing Personal Call listener — caller-এর tone
+  // ✅ Outgoing Personal Call listener
   // =====================================================
   useEffect(() => {
     if (!currentUid) return;
@@ -342,7 +342,7 @@ export default function GlobalAlerts() {
   }, [currentUid]);
 
   // =====================================================
-  // ✅ Outgoing Global Call listener — caller-এর tone
+  // ✅ Outgoing Global Call listener
   // =====================================================
   useEffect(() => {
     if (!currentUid) return;
@@ -484,7 +484,7 @@ export default function GlobalAlerts() {
     };
   }, [currentUid]);
 
-  // ============ Personal rooms listener — অপরিবর্তিত ============
+  // ============ Personal rooms listener ============
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-rooms"), where("participants", "array-contains", currentUid));
@@ -552,57 +552,68 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ============ Global messages listener — ✅ সংশোধিত ============
+  // ============ Global messages listener — ✅ FIXED ============
+  // ✅ orderBy সরানো — mixed type সমস্যা নেই
+  // ✅ client-side sort — createdAt যেকোনো format handle
   useEffect(() => {
     if (!currentUid) return;
-    const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
+    
+    const q = query(collection(db, "global-room-messages"));
+    
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (snapshot.empty) return;
+
+      // ✅ client-side sort — newest first
+      const allMsgs = snapshot.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+
+      const data = allMsgs[0];
+      if (!data) return;
+
+      const msgTime = toMillis(data.createdAt);
       const isFirst = isFirstGlobalLoadRef.current;
-      if (!snapshot.empty) {
-        const data = snapshot.docs[0].data();
-        const msgTime = toMillis(data.createdAt);
 
-        if (!isFirst && msgTime > lastKnownGlobalMessageAtRef.current && data.senderUid && data.senderUid !== currentUid) {
-          const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
-          if (!onGlobalPage) {
-            playMessageSound();
+      if (!isFirst && msgTime > lastKnownGlobalMessageAtRef.current && data.senderUid && data.senderUid !== currentUid) {
+        const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
+        if (!onGlobalPage) {
+          playMessageSound();
 
-            // ✅ Preview text — সব type handle করে
-            const previewText = getMessagePreview(data);
+          const previewText = getMessagePreview(data);
 
-            // ✅ Notification — সব type handle করে
-            if (data.isCallSummary || (data.text && data.text.includes('missed'))) {
-              sendLocalNotification('Missed Group Call 🌐', 'You missed a group call');
-            } else {
-              sendLocalNotification(
-                'Global Room 💬',
-                `${data.senderName || 'Student'}: ${previewText}`
-              );
-            }
-
-            // ✅ Bubble — সব type-এর জন্য তৈরি হবে
-            setMessageBubbles((prev) => {
-              const existing = prev.find((b) => b.isGlobal && !b.isMissedCall);
-              if (existing) {
-                return prev.map((b) => (b.isGlobal && !b.isMissedCall)
-                  ? { ...b, count: b.count + 1, senderName: data.senderName, senderPhoto: data.senderPhoto }
-                  : b);
-              }
-              return [...prev, {
-                roomId: 'global', isGlobal: true, count: 1,
-                senderName: data.senderName, senderPhoto: data.senderPhoto
-              }].slice(-3);
-            });
+          if (data.isCallSummary || (data.text && data.text.includes('missed'))) {
+            sendLocalNotification('Missed Group Call 🌐', 'You missed a group call');
+          } else {
+            sendLocalNotification(
+              'Global Room 💬',
+              `${data.senderName || 'Student'}: ${previewText}`
+            );
           }
+
+          setMessageBubbles((prev) => {
+            const existing = prev.find((b) => b.isGlobal && !b.isMissedCall);
+            if (existing) {
+              return prev.map((b) => (b.isGlobal && !b.isMissedCall)
+                ? { ...b, count: b.count + 1, senderName: data.senderName, senderPhoto: data.senderPhoto }
+                : b);
+            }
+            return [...prev, {
+              roomId: 'global', isGlobal: true, count: 1,
+              senderName: data.senderName, senderPhoto: data.senderPhoto
+            }].slice(-3);
+          });
         }
-        lastKnownGlobalMessageAtRef.current = msgTime;
       }
+      lastKnownGlobalMessageAtRef.current = msgTime;
       isFirstGlobalLoadRef.current = false;
+    }, (error) => {
+      console.error('🔥 Global messages listener error:', error);
     });
+    
     return () => unsubscribe();
   }, [currentUid]);
 
-  // Personal call listener — receiver-এর জন্য (অপরিবর্তিত)
+  // Personal call listener
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-connections"), where("participants", "array-contains", currentUid));
@@ -653,7 +664,7 @@ export default function GlobalAlerts() {
     return () => { window.removeEventListener('native-call-accept', handleNativeAccept); };
   }, [navigate]);
 
-  // Global call listener — receiver-এর জন্য (অপরিবর্তিত)
+  // Global call listener
   useEffect(() => {
     if (!currentUid) return;
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
@@ -693,7 +704,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid, dismissedGlobalCalls]);
 
-  // Home page alerts — অপরিবর্তিত
+  // Home page alerts
   useEffect(() => {
     if (!currentUid) return;
     if (location.pathname !== '/') return;
@@ -766,10 +777,18 @@ export default function GlobalAlerts() {
 
       const lastReadGlobal = Number(localStorage.getItem('lastRead_global')) || 0;
       const globalMsgRef = collection(db, "global-room-messages");
-      const globalQ = query(globalMsgRef, orderBy("createdAt", "desc"), limit(1));
+      // ✅ orderBy সরানো — সব message আনি
+      const globalQ = query(globalMsgRef);
       getDocs(globalQ).then(snapshot => {
         if (!snapshot.empty) {
-          const globalData = snapshot.docs[0].data();
+          // ✅ client-side sort
+          const allMsgs = snapshot.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+
+          const globalData = allMsgs[0];
+          if (!globalData) return;
+
           const msgTime = toMillis(globalData.createdAt);
           if (msgTime > lastReadGlobal && globalData.senderUid !== currentUid) {
             const unreadBubble = {
