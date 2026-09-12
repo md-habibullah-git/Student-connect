@@ -93,7 +93,7 @@ const stopRingtone = () => {
 };
 
 // =====================================================
-// ✅ Caller ringback tone (হালকা) — নতুন
+// ✅ Caller ringback tone (হালকা) — অপরিবর্তিত
 // =====================================================
 let callerToneAudioCtx = null;
 let callerToneOscillator = null;
@@ -106,7 +106,6 @@ const startCallerTone = () => {
     callerToneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     callerToneGainNode = callerToneAudioCtx.createGain();
     callerToneGainNode.connect(callerToneAudioCtx.destination);
-    // ✅ হালকা শব্দ — receiver-এর চেয়ে অনেক কম
     callerToneGainNode.gain.value = 0.15;
 
     const playTone = () => {
@@ -114,7 +113,6 @@ const startCallerTone = () => {
         if (callerToneOscillator) callerToneOscillator.stop();
         callerToneOscillator = callerToneAudioCtx.createOscillator();
         callerToneOscillator.connect(callerToneGainNode);
-        // ✅ হালকা "ring ring" — 440Hz
         callerToneOscillator.frequency.value = 440;
         callerToneOscillator.type = 'sine';
         callerToneOscillator.start(callerToneAudioCtx.currentTime);
@@ -122,7 +120,6 @@ const startCallerTone = () => {
       } catch (err) {}
     };
 
-    // ✅ Ring pattern: ০.৪ সেকেন্ড beep, তারপর ২ সেকেন্ড silence
     playTone();
     callerToneIntervalRef = setInterval(playTone, 2400);
   } catch (err) {}
@@ -170,6 +167,19 @@ const sendLocalNotification = async (title, body) => {
   }
 };
 
+// ✅ Preview text helper — voice/image/video handle করে
+const getMessagePreview = (data) => {
+  if (!data) return '';
+  if (data.isCallSummary || (data.text && data.text.includes('missed'))) {
+    return 'Missed Group Call 🌐';
+  }
+  if (data.fileType === 'audio') return '🎤 Voice message';
+  if (data.fileType === 'image') return '📷 Photo';
+  if (data.fileType === 'video') return '🎥 Video';
+  if (data.fileType === 'file') return '📎 File';
+  return data.text || '';
+};
+
 export default function GlobalAlerts() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -185,7 +195,6 @@ export default function GlobalAlerts() {
     } catch (err) { return []; }
   });
 
-  // ✅ Caller-এর জন্য ringing state
   const [outgoingPersonalCall, setOutgoingPersonalCall] = useState(null);
   const [outgoingGlobalCall, setOutgoingGlobalCall] = useState(null);
 
@@ -228,7 +237,6 @@ export default function GlobalAlerts() {
           return deleted;
         };
 
-        // ✅ Global messages
         try {
           const globalQ = query(
             collection(db, "global-room-messages"),
@@ -249,7 +257,6 @@ export default function GlobalAlerts() {
           console.error("Global cleanup error:", err);
         }
 
-        // ✅ Personal rooms
         try {
           const roomsQ = query(
             collection(db, "personal-rooms"),
@@ -304,7 +311,7 @@ export default function GlobalAlerts() {
   }, [incomingPersonalCall, incomingGlobalCall]);
 
   // =====================================================
-  // ✅ Caller tone control — হালকা ringback (নতুন)
+  // ✅ Caller tone control — হালকা ringback (অপরিবর্তিত)
   // =====================================================
   useEffect(() => {
     if (outgoingPersonalCall || outgoingGlobalCall) startCallerTone();
@@ -325,7 +332,6 @@ export default function GlobalAlerts() {
       let found = null;
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        // ✅ আমি caller এবং status ringing → tone বাজাও
         if (data.hostId === currentUid && data.status === "ringing") {
           found = { roomId: docSnap.id };
         }
@@ -343,7 +349,6 @@ export default function GlobalAlerts() {
     const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        // ✅ আমি host এবং status ringing → tone বাজাও
         if (data.hostId === currentUid && data.status === "ringing") {
           setOutgoingGlobalCall({ roomId: GLOBAL_ROOM_ID });
           return;
@@ -479,7 +484,7 @@ export default function GlobalAlerts() {
     };
   }, [currentUid]);
 
-  // ============ Personal rooms listener ============
+  // ============ Personal rooms listener — অপরিবর্তিত ============
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "personal-rooms"), where("participants", "array-contains", currentUid));
@@ -547,7 +552,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid]);
 
-  // ============ Global messages listener ============
+  // ============ Global messages listener — ✅ সংশোধিত ============
   useEffect(() => {
     if (!currentUid) return;
     const q = query(collection(db, "global-room-messages"), orderBy("createdAt", "desc"), limit(1));
@@ -561,11 +566,21 @@ export default function GlobalAlerts() {
           const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
           if (!onGlobalPage) {
             playMessageSound();
-            if (data.text && data.text.includes('missed')) {
+
+            // ✅ Preview text — সব type handle করে
+            const previewText = getMessagePreview(data);
+
+            // ✅ Notification — সব type handle করে
+            if (data.isCallSummary || (data.text && data.text.includes('missed'))) {
               sendLocalNotification('Missed Group Call 🌐', 'You missed a group call');
             } else {
-              sendLocalNotification('Global Room 💬', `${data.senderName || 'Student'}: ${data.text || ''}`);
+              sendLocalNotification(
+                'Global Room 💬',
+                `${data.senderName || 'Student'}: ${previewText}`
+              );
             }
+
+            // ✅ Bubble — সব type-এর জন্য তৈরি হবে
             setMessageBubbles((prev) => {
               const existing = prev.find((b) => b.isGlobal && !b.isMissedCall);
               if (existing) {
@@ -610,7 +625,7 @@ export default function GlobalAlerts() {
       console.log('📞 Cancel call event received:', event.detail);
       stopRingtone();
       stopNativeRingtone();
-      stopCallerTone();   // ✅ Caller tone-ও বন্ধ
+      stopCallerTone();
       setIncomingPersonalCall(null);
       setIncomingGlobalCall(null);
       setOutgoingPersonalCall(null);
@@ -678,7 +693,7 @@ export default function GlobalAlerts() {
     return () => unsubscribe();
   }, [currentUid, dismissedGlobalCalls]);
 
-  // Home page alerts
+  // Home page alerts — অপরিবর্তিত
   useEffect(() => {
     if (!currentUid) return;
     if (location.pathname !== '/') return;
