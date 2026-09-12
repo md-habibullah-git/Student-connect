@@ -5,7 +5,8 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import { 
   collection, addDoc, query, onSnapshot, doc, updateDoc, 
-  arrayUnion, arrayRemove, deleteDoc, getDocs, where 
+  arrayUnion, arrayRemove, deleteDoc, getDocs, where,
+  writeBatch
 } from 'firebase/firestore';
 import { FilePicker } from '@capawesome/capacitor-file-picker';
 
@@ -13,11 +14,21 @@ const CLOUDINARY_CLOUD_NAME = 'hvdnthrl';
 const CLOUDINARY_UPLOAD_PRESET = 'student-connect';
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
+const SEVEN_DAYS_MS = 420 * 60 * 60 * 1000;
+
 const commentFormStyle = { display: 'flex', marginTop: '8px', position: 'relative', width: '100%', alignItems: 'center' };
 const commentInputStyle = { width: '100%', padding: '8px 40px 8px 10px', fontSize: '13px', borderRadius: '20px', border: '1px solid var(--border, #ccc)', backgroundColor: 'transparent', outline: 'none', boxSizing: 'border-box' };
 const commentIconBtnStyle = { position: 'absolute', right: '10px', background: 'none', border: 'none', color: '#0056b3', cursor: 'pointer', fontSize: '16px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' };
 
-// Cloudinary আপলোড ফাংশন
+const toMillis = (createdAt) => {
+  if (!createdAt) return 0;
+  if (typeof createdAt === 'number') return createdAt;
+  if (typeof createdAt === 'string') return new Date(createdAt).getTime() || 0;
+  if (typeof createdAt.toMillis === 'function') return createdAt.toMillis();
+  if (createdAt.seconds) return createdAt.seconds * 1000;
+  return 0;
+};
+
 function uploadMediaToCloudinary(fileOrBlob, resourceType, onProgress, fileName) {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
@@ -61,9 +72,8 @@ function uploadMediaToCloudinary(fileOrBlob, resourceType, onProgress, fileName)
   });
 }
 
-// Cloudinary delete ফাংশন
 async function deleteMediaFromCloudinary(publicId, resourceType) {
-  if (!publicId) return;
+  if (!publicId) return true;
   
   console.log('🗑️ Cloudinary delete:', publicId, resourceType);
   
@@ -79,11 +89,14 @@ async function deleteMediaFromCloudinary(publicId, resourceType) {
     
     if (data.success) {
       console.log('✅ Cloudinary delete done');
+      return true;
     } else {
       console.error('❌ Cloudinary delete failed:', data.error);
+      return false;
     }
   } catch (err) {
     console.error('❌ Error:', err.message);
+    return false;
   }
 }
 
@@ -118,6 +131,72 @@ export default function Home({ isAdmin }) {
 
   const [highlightedPostId, setHighlightedPostId] = useState(null);
   const hasScrolledRef = useRef(false);
+
+  const currentUid = auth.currentUser?.uid || 'guest';
+  const SEEN_POSTS_KEY = `seenPosts_${currentUid}`;
+  
+  // ✅ localStorage থেকে initial load
+  const [seenPosts] = useState(() => {
+    try {
+      const saved = localStorage.getItem(SEEN_POSTS_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch (err) { return {}; }
+  });
+
+  // ✅ Ref — সবসময় current value
+  const seenPostsRef = useRef(seenPosts);
+  const justPostedIdRef = useRef(null);
+
+  useEffect(() => {
+    seenPostsRef.current = seenPosts;
+  }, [seenPosts]);
+
+  const sortPosts = (postsList, seenMap, justPostedId) => {
+    return [...postsList].sort((a, b) => {
+      if (justPostedId) {
+        if (a.id === justPostedId) return -1;
+        if (b.id === justPostedId) return 1;
+      }
+      
+      const aSeenAt = seenMap[a.id];
+      const bSeenAt = seenMap[b.id];
+      
+      if (!aSeenAt && bSeenAt) return -1;
+      if (aSeenAt && !bSeenAt) return 1;
+      
+      if (!aSeenAt && !bSeenAt) {
+        return toMillis(b.createdAt) - toMillis(a.createdAt);
+      }
+      
+      // ✅ Seen posts — শেষ দেখা timestamp asc (পুরনো আগে)
+      return aSeenAt - bSeenAt;
+    });
+  };
+
+  // ✅ markPostAsSeen — শুধু localStorage update, state update না
+  const markPostAsSeen = (postId) => {
+    if (!postId) return;
+    if (postId === justPostedIdRef.current) return;
+    
+    try {
+      const saved = localStorage.getItem(SEEN_POSTS_KEY);
+      const currentSeen = saved ? JSON.parse(saved) : {};
+      
+      const now = Date.now();
+      const lastSeenAt = currentSeen[postId] || 0;
+      
+      // ✅ প্রতি ৩ সেকেন্ডে একবার update
+      if (now - lastSeenAt < 3000) return;
+      
+      currentSeen[postId] = now;
+      localStorage.setItem(SEEN_POSTS_KEY, JSON.stringify(currentSeen));
+      
+      // ✅ ref update — কিন্তু state update না
+      seenPostsRef.current = currentSeen;
+    } catch (err) {
+      console.error('markPostAsSeen error:', err);
+    }
+  };
 
   const resetFileInput = () => {
     setSelectedFile(null);
@@ -235,30 +314,41 @@ export default function Home({ isAdmin }) {
     }
   }, [targetPostId, posts]);
 
-  // ✅ FIXED: প্রতিটি ভিডিওর জন্য playVideo কল হবে
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
-        const videoEl = entry.target;
-        const postId = videoEl.dataset.postId;
-        if (!postId) return;
-
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-          playVideo(postId);
-        } else {
-          if (activeVideoIdRef.current === postId) {
-            pauseVideo(postId);
+        const target = entry.target;
+        
+        if (target.classList?.contains('dynamic-post-card')) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+            const id = target.id?.replace('post-', '');
+            if (id) markPostAsSeen(id);
+          }
+          return;
+        }
+        
+        const postId = target.dataset?.postId;
+        if (postId) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+            playVideo(postId);
+          } else {
+            if (activeVideoIdRef.current === postId) {
+              pauseVideo(postId);
+            }
           }
         }
       });
-    }, { threshold: [0.6] });
+    }, { threshold: [0.5, 0.6] });
 
+    const postElements = document.querySelectorAll('.dynamic-post-card');
+    postElements.forEach(el => observer.observe(el));
+    
     Object.values(videoElementsRef.current).forEach(v => {
       if (v) observer.observe(v);
     });
 
     return () => observer.disconnect();
-  }, [posts]);
+  }, [posts.length]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -284,25 +374,71 @@ export default function Home({ isAdmin }) {
   useEffect(() => {
     const cleanupOldPosts = async () => {
       try {
-        const sevenDaysAgo = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
-        const qOld = query(collection(db, "posts"), where("createdAt", "<", sevenDaysAgo));
-        const oldPostsSnapshot = await getDocs(qOld);
-        
-        for (const postDoc of oldPostsSnapshot.docs) {
+        const now = Date.now();
+        const cutoffTime = now - SEVEN_DAYS_MS;
+
+        const qAll = query(collection(db, "posts"));
+        const allPostsSnapshot = await getDocs(qAll);
+
+        const oldPosts = allPostsSnapshot.docs.filter(d => {
+          const ms = toMillis(d.data().createdAt);
+          return ms > 0 && ms < cutoffTime;
+        });
+
+        if (oldPosts.length === 0) {
+          console.log('🧹 No old posts to delete');
+          return;
+        }
+
+        console.log(`🧹 Found ${oldPosts.length} old posts to delete`);
+
+        const postsToDelete = [];
+        for (const postDoc of oldPosts) {
           const data = postDoc.data();
           
           if (data.mediaPublicId) {
-            await deleteMediaFromCloudinary(data.mediaPublicId, data.mediaResourceType);
+            const cloudinarySuccess = await deleteMediaFromCloudinary(
+              data.mediaPublicId,
+              data.mediaResourceType
+            );
+            
+            if (cloudinarySuccess) {
+              postsToDelete.push(postDoc);
+            } else {
+              console.warn(`⚠️ Cloudinary delete failed for ${postDoc.id} — skipping Firestore delete`);
+            }
+          } else {
+            postsToDelete.push(postDoc);
           }
-          
-          await deleteDoc(doc(db, "posts", postDoc.id));
+        }
+
+        if (postsToDelete.length > 0) {
+          const batchSize = 500;
+          let deleted = 0;
+          for (let i = 0; i < postsToDelete.length; i += batchSize) {
+            const batch = writeBatch(db);
+            const chunk = postsToDelete.slice(i, i + batchSize);
+            chunk.forEach(d => batch.delete(d.ref));
+            await batch.commit();
+            deleted += chunk.length;
+          }
+          console.log(`✅ Deleted ${deleted} old posts (Cloudinary + Firestore)`);
         }
       } catch (error) {
         console.error("Cleanup Error:", error);
       }
     };
-    cleanupOldPosts();
 
+    const initialTimer = setTimeout(cleanupOldPosts, 5000);
+    const hourlyInterval = setInterval(cleanupOldPosts, 60 * 60 * 1000);
+
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(hourlyInterval);
+    };
+  }, []);
+
+  useEffect(() => {
     const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
       const cache = {};
       snapshot.docs.forEach(doc => {
@@ -336,9 +472,8 @@ export default function Home({ isAdmin }) {
 
     const q = query(collection(db, "posts"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const sortedPosts = snapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .sort((a, b) => b.createdAt - a.createdAt);
+      const allPosts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const sortedPosts = sortPosts(allPosts, seenPostsRef.current, justPostedIdRef.current);
       setPosts(sortedPosts);
     });
 
@@ -464,7 +599,7 @@ export default function Home({ isAdmin }) {
         mediaResourceType = result.resourceType;
       }
 
-      await addDoc(collection(db, "posts"), {
+      const newPostRef = await addDoc(collection(db, "posts"), {
         text: text,
         mediaUrl: finalMediaUrl,
         mediaPublicId: mediaPublicId,
@@ -479,10 +614,31 @@ export default function Home({ isAdmin }) {
         createdAt: new Date().getTime()
       });
 
-      if (fileToUpload?.previewUrl && fileToUpload.previewUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(fileToUpload.previewUrl);
-      }
-      
+      justPostedIdRef.current = newPostRef.id;
+
+      setPosts(prev => {
+        const exists = prev.find(p => p.id === newPostRef.id);
+        if (exists) {
+          return sortPosts(prev, seenPostsRef.current, newPostRef.id);
+        }
+        const newPost = {
+          id: newPostRef.id,
+          text: text,
+          mediaUrl: finalMediaUrl,
+          mediaPublicId: mediaPublicId,
+          mediaResourceType: mediaResourceType,
+          fileName: fileToUpload?.fileName || null,
+          userName: auth.currentUser?.displayName || "Student",
+          userId: auth.currentUser?.uid,
+          likes: [],
+          loves: [],
+          wows: [],
+          comments: [],
+          createdAt: Date.now()
+        };
+        return sortPosts([newPost, ...prev], seenPostsRef.current, newPostRef.id);
+      });
+
       setText('');
       setMediaUrl('');
       resetFileInput();
@@ -490,10 +646,27 @@ export default function Home({ isAdmin }) {
       setShowPostModal(false);
       
       applyMuteToAll(false);
-      
+
       setTimeout(() => {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }, 500);
+        const el = document.getElementById(`post-${newPostRef.id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          setHighlightedPostId(newPostRef.id);
+          setTimeout(() => setHighlightedPostId(null), 3000);
+        } else {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      }, 300);
+
+      setTimeout(() => {
+        if (justPostedIdRef.current === newPostRef.id) {
+          justPostedIdRef.current = null;
+        }
+      }, 60000);
+
+      if (fileToUpload?.previewUrl && fileToUpload.previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(fileToUpload.previewUrl);
+      }
       
     } catch (error) {
       console.error("Posting Error:", error);
@@ -583,12 +756,16 @@ export default function Home({ isAdmin }) {
   const handleDeletePost = async (postId, mediaPublicId, mediaResourceType) => {
     if (window.confirm("Are you sure you want to delete this post?")) {
       if (mediaPublicId) {
-        await deleteMediaFromCloudinary(mediaPublicId, mediaResourceType);
+        const success = await deleteMediaFromCloudinary(mediaPublicId, mediaResourceType);
+        if (!success) {
+          alert("❌ Cloudinary থেকে delete করা যায়নি। আবার চেষ্টা করুন।");
+          return;
+        }
       }
       
       try {
         await deleteDoc(doc(db, "posts", postId));
-        console.log('✅ Post deleted');
+        console.log('✅ Post deleted (Cloudinary + Firestore)');
       } catch (error) {
         console.error('❌ Delete error:', error);
       }
@@ -599,8 +776,11 @@ export default function Home({ isAdmin }) {
     const el = e.target;
     if (el.dataset?.retried) {
       try {
+        if (post.mediaPublicId) {
+          await deleteMediaFromCloudinary(post.mediaPublicId, post.mediaResourceType);
+        }
         await deleteDoc(doc(db, "posts", post.id));
-        console.log('✅ Post removed (media missing)');
+        console.log('✅ Post removed (media missing — Cloudinary + Firestore)');
       } catch (error) {
         console.error('❌ Error:', error);
       }
@@ -776,7 +956,12 @@ export default function Home({ isAdmin }) {
       {posts.map(post => {
         const postAvatarFallback = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(post.userName || 'Student')}`;
         return (
-          <div key={post.id} id={`post-${post.id}`} className={`dynamic-post-card${highlightedPostId === post.id ? ' shared-highlight' : ''}`}>
+          <div 
+            key={post.id} 
+            id={`post-${post.id}`}
+            data-post-id={post.id}
+            className={`dynamic-post-card${highlightedPostId === post.id ? ' shared-highlight' : ''}`}
+          >
             
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '15px 15px 10px 15px', flexShrink: 0 }}>
@@ -792,7 +977,7 @@ export default function Home({ isAdmin }) {
               )}
             </div>
 
-            {/* Content — scrollable */}
+            {/* Content */}
             <div style={{ flex: 1, padding: '0 15px', overflowY: 'auto', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
               {post.text && <p style={{ margin: '0 0 12px 0', fontSize: '14px', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{post.text}</p>}
               
