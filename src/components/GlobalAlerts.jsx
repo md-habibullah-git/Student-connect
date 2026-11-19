@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
 import {
-  collection, doc, onSnapshot, query, where, orderBy, limit,
+  collection, doc, onSnapshot, query, where, orderBy,
   updateDoc, setDoc, getDocs, writeBatch
 } from 'firebase/firestore';
 import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
