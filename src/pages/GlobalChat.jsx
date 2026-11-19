@@ -302,6 +302,10 @@ export default function GlobalChat() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
   const [activeCallType, setActiveCallType] = useState('video');
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isFrontCamera, setIsFrontCamera] = useState(true);
+  const [callDuration, setCallDuration] = useState(0);
   const [showRejoinBtn, setShowRejoinBtn] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [avatarMenuFor, setAvatarMenuFor] = useState(null);
@@ -883,10 +887,100 @@ export default function GlobalChat() {
   const getLocalStream = async (callType = 'video') => {
     const s = ensureSession();
     if (s.localStream) return s.localStream;
-    const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: callType === 'video' ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } : false, 
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+    });
     s.localStream = stream;
     s.callType = callType;
     return stream;
+  };
+
+  useEffect(() => {
+    let timer;
+    if (inCall) {
+      timer = setInterval(() => setCallDuration(d => d + 1), 1000);
+    } else {
+      setCallDuration(0);
+      setIsMicMuted(false);
+      setIsVideoOff(false);
+      setIsFrontCamera(true);
+    }
+    return () => clearInterval(timer);
+  }, [inCall]);
+
+  const formatCallDuration = (secs) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
+  const toggleMic = () => {
+    const stream = sessionRef.current?.localStream;
+    if (stream) {
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        const nextEnabled = !audioTracks[0].enabled;
+        audioTracks.forEach(t => { t.enabled = nextEnabled; });
+        setIsMicMuted(!nextEnabled);
+      }
+    }
+  };
+
+  const toggleVideo = () => {
+    const stream = sessionRef.current?.localStream;
+    if (stream) {
+      const videoTracks = stream.getVideoTracks();
+      if (videoTracks.length > 0) {
+        const nextEnabled = !videoTracks[0].enabled;
+        videoTracks.forEach(t => { t.enabled = nextEnabled; });
+        setIsVideoOff(!nextEnabled);
+      }
+    }
+  };
+
+  const flipCamera = async () => {
+    try {
+      const stream = sessionRef.current?.localStream;
+      if (!stream || activeCallType !== 'video') return;
+      const targetFacing = isFrontCamera ? 'environment' : 'user';
+      let newStream;
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: targetFacing } },
+          audio: false
+        });
+      } catch {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: targetFacing },
+          audio: false
+        });
+      }
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (newVideoTrack) {
+        const oldTrack = stream.getVideoTracks()[0];
+        if (oldTrack) {
+          oldTrack.stop();
+          stream.removeTrack(oldTrack);
+        }
+        stream.addTrack(newVideoTrack);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+        }
+        const pcs = sessionRef.current?.peerConnections || {};
+        for (const pc of Object.values(pcs)) {
+          const senders = pc.getSenders ? pc.getSenders() : [];
+          const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+          if (videoSender) {
+            await videoSender.replaceTrack(newVideoTrack);
+          }
+        }
+        setIsFrontCamera(!isFrontCamera);
+        setIsVideoOff(false);
+      }
+    } catch (err) {
+      console.warn("Could not switch conference camera:", err);
+    }
   };
 
   useEffect(() => {
@@ -1351,15 +1445,30 @@ export default function GlobalChat() {
       `}</style>
 
       {inCall && (
-        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+          {/* Top Header Overlay */}
+          <div style={{ position: 'absolute', top: '16px', left: '16px', right: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10, background: 'rgba(0,0,0,0.5)', padding: '8px 14px', borderRadius: '30px', backdropFilter: 'blur(8px)' }}>
+            <div>
+              <strong style={{ color: '#fff', fontSize: '13px', display: 'block', lineHeight: 1.2 }}>🌐 Campus Conference</strong>
+              <span style={{ color: 'rgba(255,255,255,0.75)', fontSize: '11px' }}>
+                {Object.keys(remoteStreams).length + 1} participants · {formatCallDuration(callDuration)}
+              </span>
+            </div>
+            {isMicMuted && (
+              <span style={{ background: '#fa3e3e', color: '#fff', fontSize: '10px', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold' }}>
+                MIC MUTED
+              </span>
+            )}
+          </div>
+
           {activeCallType === 'audio' ? (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '18px', color: '#fff' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '18px', color: '#fff', padding: '60px 16px 90px 16px' }}>
               <div style={{ width: '90px', height: '90px', borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' }}>🎙️</div>
-              <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio conference — {Object.keys(remoteStreams).length + 1} in the call</p>
-              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', padding: '0 20px' }}>
-                <span style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>You</span>
+              <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio Conference — {Object.keys(remoteStreams).length + 1} in the room</p>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', padding: '0 20px' }}>
+                <span style={{ background: 'rgba(255,255,255,0.15)', padding: '5px 12px', borderRadius: '16px', fontSize: '12px' }}>You {isMicMuted ? '(Muted)' : ''}</span>
                 {Object.keys(remoteStreams).map(uid => (
-                  <span key={uid} style={{ background: 'rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: '20px', fontSize: '13px' }}>{usersCache[uid]?.name || 'Student'}</span>
+                  <span key={uid} style={{ background: 'rgba(255,255,255,0.15)', padding: '5px 12px', borderRadius: '16px', fontSize: '12px' }}>{usersCache[uid]?.name || 'Student'}</span>
                 ))}
               </div>
               {sessionRef.current?.localStream && <LocalAudioTile stream={sessionRef.current.localStream} />}
@@ -1368,19 +1477,102 @@ export default function GlobalChat() {
               ))}
             </div>
           ) : (
-            <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, Math.min(Math.ceil(Math.sqrt(Object.keys(remoteStreams).length + 1)), 3))}, 1fr)`, gap: '4px', padding: '4px', overflow: 'auto' }}>
+            <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, Math.min(Math.ceil(Math.sqrt(Object.keys(remoteStreams).length + 1)), 3))}, 1fr)`, gap: '4px', padding: '60px 4px 90px 4px', overflow: 'auto' }}>
               <div style={{ position: 'relative', background: '#111', borderRadius: '8px', overflow: 'hidden' }}>
-                <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.5)', padding: '2px 8px', borderRadius: '10px' }}>You</span>
+                <video 
+                  ref={localVideoRef} 
+                  autoPlay 
+                  playsInline 
+                  muted 
+                  style={{ 
+                    width: '100%', 
+                    height: '100%', 
+                    objectFit: 'cover',
+                    display: isVideoOff ? 'none' : 'block',
+                    transform: isFrontCamera ? 'scaleX(-1)' : 'none'
+                  }} 
+                />
+                {isVideoOff && (
+                  <div style={{ width: '100%', height: '100%', minHeight: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '26px', background: '#222' }}>
+                    🚫
+                  </div>
+                )}
+                <span style={{ position: 'absolute', bottom: '6px', left: '8px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,0.6)', padding: '2px 8px', borderRadius: '10px' }}>
+                  You {isMicMuted ? '🔇' : ''}
+                </span>
               </div>
               {Object.entries(remoteStreams).map(([uid, stream]) => (
                 <RemoteVideoTile key={uid} stream={stream} label={usersCache[uid]?.name || 'Student'} />
               ))}
             </div>
           )}
-          <button onClick={leaveGlobalCall} title="Leave call" style={{ alignSelf: 'center', margin: '14px 0', background: 'var(--fb-red)', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', flexShrink: 0 }}>
-            <HangUpIcon />
-          </button>
+
+          {/* Floating Messenger Call Controls Dock */}
+          <div style={{ 
+            position: 'absolute', bottom: '24px', left: '50%', transform: 'translateX(-50%)', 
+            display: 'flex', alignItems: 'center', gap: '14px', zIndex: 20,
+            background: 'rgba(20,20,25,0.78)', padding: '10px 18px', borderRadius: '35px',
+            backdropFilter: 'blur(12px)', boxShadow: '0 8px 24px rgba(0,0,0,0.5)'
+          }}>
+            {/* Mic Toggle Button */}
+            <button
+              onClick={toggleMic}
+              title={isMicMuted ? "Unmute Microphone" : "Mute Microphone"}
+              style={{
+                background: isMicMuted ? '#fa3e3e' : 'rgba(255,255,255,0.18)',
+                color: '#fff', border: 'none', width: '46px', height: '46px', borderRadius: '50%',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <span style={{ fontSize: '18px' }}>{isMicMuted ? '🔇' : '🎙️'}</span>
+            </button>
+
+            {/* Video Camera Toggle Button */}
+            {activeCallType === 'video' && (
+              <button
+                onClick={toggleVideo}
+                title={isVideoOff ? "Turn Camera On" : "Turn Camera Off"}
+                style={{
+                  background: isVideoOff ? '#fa3e3e' : 'rgba(255,255,255,0.18)',
+                  color: '#fff', border: 'none', width: '46px', height: '46px', borderRadius: '50%',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <span style={{ fontSize: '18px' }}>{isVideoOff ? '🚫' : '📹'}</span>
+              </button>
+            )}
+
+            {/* Flip Camera Button */}
+            {activeCallType === 'video' && (
+              <button
+                onClick={flipCamera}
+                title="Switch Camera (Front/Rear)"
+                style={{
+                  background: 'rgba(255,255,255,0.18)',
+                  color: '#fff', border: 'none', width: '46px', height: '46px', borderRadius: '50%',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <span style={{ fontSize: '18px' }}>🔄</span>
+              </button>
+            )}
+
+            {/* End Call Button */}
+            <button 
+              onClick={leaveGlobalCall} 
+              title="Leave call" 
+              style={{ 
+                background: '#dc3545', color: '#fff', border: 'none', width: '50px', height: '50px', 
+                borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                boxShadow: '0 4px 12px rgba(220,53,69,0.4)', transition: 'all 0.15s ease' 
+              }}
+            >
+              <HangUpIcon />
+            </button>
+          </div>
         </div>
       )}
 

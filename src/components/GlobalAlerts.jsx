@@ -55,98 +55,146 @@ const PhoneDeclineIcon = () => (
 );
 
 // =====================================================
-// ✅ Receiver ringtone (জোরে)
+// ✅ Facebook Messenger Incoming Call Melodic Chime
 // =====================================================
 let ringtoneAudioCtx = null;
-let ringtoneOscillator = null;
-let ringtoneGainNode = null;
 let ringtoneIntervalRef = null;
+
+const playMessengerIncomingChime = (ctx) => {
+  if (!ctx || ctx.state === 'closed') return;
+  if (ctx.state === 'suspended') ctx.resume();
+
+  // Signature Messenger melodic sequence (C5 - E5 - G5 - C6 - B5 - G5 - C6)
+  const notes = [
+    { freq: 523.25, delay: 0.00, dur: 0.22 }, // C5
+    { freq: 659.25, delay: 0.14, dur: 0.22 }, // E5
+    { freq: 783.99, delay: 0.28, dur: 0.24 }, // G5
+    { freq: 1046.50, delay: 0.44, dur: 0.35 }, // C6
+    { freq: 987.77, delay: 0.72, dur: 0.22 }, // B5
+    { freq: 783.99, delay: 0.88, dur: 0.22 }, // G5
+    { freq: 1046.50, delay: 1.04, dur: 0.45 }, // C6
+  ];
+
+  const now = ctx.currentTime;
+  notes.forEach(({ freq, delay, dur }) => {
+    try {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + delay);
+
+      gain.gain.setValueAtTime(0.001, now + delay);
+      gain.gain.linearRampToValueAtTime(0.4, now + delay + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + dur);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now + delay);
+      osc.stop(now + delay + dur + 0.05);
+    } catch {}
+  });
+};
 
 const startRingtone = () => {
   try {
     if (ringtoneAudioCtx) return;
     ringtoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    ringtoneGainNode = ringtoneAudioCtx.createGain();
-    ringtoneGainNode.connect(ringtoneAudioCtx.destination);
-    ringtoneGainNode.gain.value = 2.0;
-    const playBeep = () => {
-      try {
-        if (ringtoneOscillator) ringtoneOscillator.stop();
-        ringtoneOscillator = ringtoneAudioCtx.createOscillator();
-        ringtoneOscillator.connect(ringtoneGainNode);
-        ringtoneOscillator.frequency.value = 880;
-        ringtoneOscillator.type = 'square';
-        ringtoneOscillator.start(ringtoneAudioCtx.currentTime);
-        ringtoneOscillator.stop(ringtoneAudioCtx.currentTime + 0.5);
-      } catch (err) {}
-    };
-    playBeep();
-    ringtoneIntervalRef = setInterval(playBeep, 1000);
-  } catch (err) {}
+    playMessengerIncomingChime(ringtoneAudioCtx);
+    ringtoneIntervalRef = setInterval(() => {
+      playMessengerIncomingChime(ringtoneAudioCtx);
+    }, 2400);
+  } catch {}
 };
 
 const stopRingtone = () => {
   if (ringtoneIntervalRef) { clearInterval(ringtoneIntervalRef); ringtoneIntervalRef = null; }
-  if (ringtoneOscillator) { try { ringtoneOscillator.stop(); } catch (err) {} ringtoneOscillator = null; }
-  if (ringtoneAudioCtx) { ringtoneAudioCtx.close().catch(() => {}); ringtoneAudioCtx = null; }
-  ringtoneGainNode = null;
+  if (ringtoneAudioCtx) {
+    ringtoneAudioCtx.close().catch(() => {});
+    ringtoneAudioCtx = null;
+  }
 };
 
 // =====================================================
-// ✅ Caller ringback tone (হালকা)
+// ✅ Facebook Messenger Outgoing Caller Ringback Chime
 // =====================================================
 let callerToneAudioCtx = null;
-let callerToneOscillator = null;
-let callerToneGainNode = null;
 let callerToneIntervalRef = null;
+
+const playMessengerOutgoingPulse = (ctx) => {
+  if (!ctx || ctx.state === 'closed') return;
+  if (ctx.state === 'suspended') ctx.resume();
+
+  const now = ctx.currentTime;
+  // Soft gentle two-tone chime (440Hz -> 659Hz)
+  const pulses = [
+    { freq: 440, delay: 0.0, dur: 0.28 },
+    { freq: 659, delay: 0.22, dur: 0.35 }
+  ];
+
+  pulses.forEach(({ freq, delay, dur }) => {
+    try {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + delay);
+
+      gain.gain.setValueAtTime(0.0001, now + delay);
+      gain.gain.linearRampToValueAtTime(0.18, now + delay + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + dur);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now + delay);
+      osc.stop(now + delay + dur + 0.05);
+    } catch {}
+  });
+};
 
 const startCallerTone = () => {
   try {
     if (callerToneAudioCtx) return;
     callerToneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    callerToneGainNode = callerToneAudioCtx.createGain();
-    callerToneGainNode.connect(callerToneAudioCtx.destination);
-    callerToneGainNode.gain.value = 0.15;
-
-    const playTone = () => {
-      try {
-        if (callerToneOscillator) callerToneOscillator.stop();
-        callerToneOscillator = callerToneAudioCtx.createOscillator();
-        callerToneOscillator.connect(callerToneGainNode);
-        callerToneOscillator.frequency.value = 440;
-        callerToneOscillator.type = 'sine';
-        callerToneOscillator.start(callerToneAudioCtx.currentTime);
-        callerToneOscillator.stop(callerToneAudioCtx.currentTime + 0.4);
-      } catch (err) {}
-    };
-
-    playTone();
-    callerToneIntervalRef = setInterval(playTone, 2400);
-  } catch (err) {}
+    playMessengerOutgoingPulse(callerToneAudioCtx);
+    callerToneIntervalRef = setInterval(() => {
+      playMessengerOutgoingPulse(callerToneAudioCtx);
+    }, 2800);
+  } catch {}
 };
 
 const stopCallerTone = () => {
   if (callerToneIntervalRef) { clearInterval(callerToneIntervalRef); callerToneIntervalRef = null; }
-  if (callerToneOscillator) { try { callerToneOscillator.stop(); } catch (err) {} callerToneOscillator = null; }
-  if (callerToneAudioCtx) { callerToneAudioCtx.close().catch(() => {}); callerToneAudioCtx = null; }
-  callerToneGainNode = null;
+  if (callerToneAudioCtx) {
+    callerToneAudioCtx.close().catch(() => {});
+    callerToneAudioCtx = null;
+  }
 };
 
 const playMessageSound = () => {
   try {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
-    oscillator.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    oscillator.frequency.value = 1200;
-    oscillator.type = 'sine';
-    gainNode.gain.setValueAtTime(12.8, audioCtx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
-    oscillator.start(audioCtx.currentTime);
-    oscillator.stop(audioCtx.currentTime + 0.4);
-    oscillator.onended = () => { audioCtx.close().catch(() => {}); };
-  } catch (err) {}
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = 'sine';
+    const now = audioCtx.currentTime;
+    // Messenger style cheerful pop: 600Hz -> 1050Hz
+    osc.frequency.setValueAtTime(600, now);
+    osc.frequency.exponentialRampToValueAtTime(1050, now + 0.08);
+
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.35, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.25);
+    osc.onended = () => { audioCtx.close().catch(() => {}); };
+  } catch {}
 };
 
 const sendLocalNotification = async (title, body) => {

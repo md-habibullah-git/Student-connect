@@ -229,6 +229,10 @@ export default function PersonalChat() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [inCall, setInCall] = useState(false);
   const [activeCallType, setActiveCallType] = useState('video');
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isFrontCamera, setIsFrontCamera] = useState(true);
+  const [callDuration, setCallDuration] = useState(0);
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
 
@@ -892,7 +896,91 @@ export default function PersonalChat() {
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+    setIsMicMuted(false);
+    setIsVideoOff(false);
+    setIsFrontCamera(true);
+    setCallDuration(0);
     clearActiveCallSession();
+  };
+
+  useEffect(() => {
+    let timer;
+    if (inCall) {
+      timer = setInterval(() => setCallDuration(d => d + 1), 1000);
+    } else {
+      setCallDuration(0);
+    }
+    return () => clearInterval(timer);
+  }, [inCall]);
+
+  const formatCallDuration = (secs) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
+  const toggleMic = () => {
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      if (audioTracks.length > 0) {
+        const nextEnabled = !audioTracks[0].enabled;
+        audioTracks.forEach(t => { t.enabled = nextEnabled; });
+        setIsMicMuted(!nextEnabled);
+      }
+    }
+  };
+
+  const toggleVideo = () => {
+    if (localStreamRef.current) {
+      const videoTracks = localStreamRef.current.getVideoTracks();
+      if (videoTracks.length > 0) {
+        const nextEnabled = !videoTracks[0].enabled;
+        videoTracks.forEach(t => { t.enabled = nextEnabled; });
+        setIsVideoOff(!nextEnabled);
+      }
+    }
+  };
+
+  const flipCamera = async () => {
+    try {
+      if (!localStreamRef.current || activeCallType !== 'video') return;
+      const targetFacing = isFrontCamera ? 'environment' : 'user';
+      let newStream;
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: targetFacing } },
+          audio: false
+        });
+      } catch {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: targetFacing },
+          audio: false
+        });
+      }
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (newVideoTrack) {
+        const oldTrack = localStreamRef.current.getVideoTracks()[0];
+        if (oldTrack) {
+          oldTrack.stop();
+          localStreamRef.current.removeTrack(oldTrack);
+        }
+        localStreamRef.current.addTrack(newVideoTrack);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = localStreamRef.current;
+        }
+        if (peerConnectionRef.current) {
+          const senders = peerConnectionRef.current.getSenders();
+          const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+          if (videoSender) {
+            await videoSender.replaceTrack(newVideoTrack);
+          }
+        }
+        setIsFrontCamera(!isFrontCamera);
+        setIsVideoOff(false);
+      }
+    } catch (err) {
+      console.warn("Camera flip not supported on this device:", err);
+    }
   };
 
   useEffect(() => {
@@ -947,7 +1035,10 @@ export default function PersonalChat() {
       peerConnectionRef.current = pc;
       registerPeerConnectionListeners(pc);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: callType === 'video' ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } : false, 
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+      });
       localStreamRef.current = stream;
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
@@ -1071,7 +1162,10 @@ export default function PersonalChat() {
       peerConnectionRef.current = pc;
       registerPeerConnectionListeners(pc);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: callType === 'video' ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } : false, 
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+      });
       localStreamRef.current = stream;
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
@@ -1359,23 +1453,152 @@ export default function PersonalChat() {
       </div>
 
       {inCall ? (
-        <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+        <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#0b0c10', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
           <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
-          <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }} />
+          <video 
+            ref={remoteVideoRef} 
+            autoPlay 
+            playsInline 
+            style={{ 
+              width: '100%', 
+              height: '100%', 
+              objectFit: 'cover', 
+              background: '#000',
+              display: activeCallType === 'video' ? 'block' : 'none'
+            }} 
+          />
+
+          {/* Caller / Receiver Header Overlay */}
+          <div style={{ position: 'absolute', top: '16px', left: '16px', right: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10, background: 'rgba(0,0,0,0.5)', padding: '8px 14px', borderRadius: '30px', backdropFilter: 'blur(8px)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <img 
+                src={usersCache[targetUid] || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(receiverName || 'Student')}&backgroundColor=1877f2`}
+                alt="" 
+                style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover', border: '1.5px solid #fff' }}
+              />
+              <div>
+                <strong style={{ color: '#fff', fontSize: '13px', display: 'block', lineHeight: 1.2 }}>{receiverName}</strong>
+                <span style={{ color: 'rgba(255,255,255,0.75)', fontSize: '11px' }}>
+                  {activeCallType === 'video' ? '📹 Video Call' : '🎙️ Audio Call'} · {formatCallDuration(callDuration)}
+                </span>
+              </div>
+            </div>
+            {isMicMuted && (
+              <span style={{ background: '#fa3e3e', color: '#fff', fontSize: '10px', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold' }}>
+                MIC MUTED
+              </span>
+            )}
+          </div>
+
+          {/* Audio call avatar view */}
           {activeCallType === 'audio' && (
-            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', color: '#fff', background: '#111' }}>
-              <div style={{ width: '90px', height: '90px', borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' }}>🎙️</div>
-              <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio call with {receiverName}</p>
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px', color: '#fff', background: 'linear-gradient(180deg, #182848 0%, #0b0c10 100%)' }}>
+              <div style={{ position: 'relative' }}>
+                <img 
+                  src={usersCache[targetUid] || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(receiverName || 'Student')}&backgroundColor=1877f2`}
+                  alt="" 
+                  style={{ width: '100px', height: '100px', borderRadius: '50%', objectFit: 'cover', border: '3px solid #1877f2', boxShadow: '0 0 25px rgba(24,119,242,0.4)' }}
+                />
+                <div style={{ position: 'absolute', bottom: '2px', right: '2px', width: '28px', height: '28px', borderRadius: '50%', background: '#1877f2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px' }}>
+                  🎙️
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', color: '#fff' }}>{receiverName}</h3>
+                <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: 'rgba(255,255,255,0.7)' }}>{formatCallDuration(callDuration)}</p>
+              </div>
             </div>
           )}
-          <video ref={localVideoRef} autoPlay playsInline muted style={{ position: 'absolute', bottom: '16px', right: '16px', width: '110px', height: '150px', objectFit: 'cover', borderRadius: '10px', border: '2px solid #fff', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', background: '#000', display: activeCallType === 'audio' ? 'none' : 'block' }} />
-          <button
-            onClick={endCall}
-            title="Hang up"
-            style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)' }}
-          >
-            <HangUpIcon />
-          </button>
+
+          {/* Local Picture-in-Picture Video */}
+          <video 
+            ref={localVideoRef} 
+            autoPlay 
+            playsInline 
+            muted 
+            style={{ 
+              position: 'absolute', 
+              top: '70px', 
+              right: '16px', 
+              width: '105px', 
+              height: '140px', 
+              objectFit: 'cover', 
+              borderRadius: '12px', 
+              border: '2px solid rgba(255,255,255,0.85)', 
+              boxShadow: '0 4px 14px rgba(0,0,0,0.5)', 
+              background: '#000', 
+              display: (activeCallType === 'video' && !isVideoOff) ? 'block' : 'none',
+              transform: isFrontCamera ? 'scaleX(-1)' : 'none',
+              zIndex: 10
+            }} 
+          />
+
+          {/* Messenger Style In-Call Controls Dock */}
+          <div style={{ 
+            position: 'absolute', bottom: '24px', left: '50%', transform: 'translateX(-50%)', 
+            display: 'flex', alignItems: 'center', gap: '14px', zIndex: 20,
+            background: 'rgba(20,20,25,0.78)', padding: '10px 18px', borderRadius: '35px',
+            backdropFilter: 'blur(12px)', boxShadow: '0 8px 24px rgba(0,0,0,0.5)'
+          }}>
+            {/* Mic Toggle Button */}
+            <button
+              onClick={toggleMic}
+              title={isMicMuted ? "Unmute Microphone" : "Mute Microphone"}
+              style={{
+                background: isMicMuted ? '#fa3e3e' : 'rgba(255,255,255,0.18)',
+                color: '#fff', border: 'none', width: '46px', height: '46px', borderRadius: '50%',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <span style={{ fontSize: '18px' }}>{isMicMuted ? '🔇' : '🎙️'}</span>
+            </button>
+
+            {/* Video Camera Toggle Button */}
+            {activeCallType === 'video' && (
+              <button
+                onClick={toggleVideo}
+                title={isVideoOff ? "Turn Camera On" : "Turn Camera Off"}
+                style={{
+                  background: isVideoOff ? '#fa3e3e' : 'rgba(255,255,255,0.18)',
+                  color: '#fff', border: 'none', width: '46px', height: '46px', borderRadius: '50%',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <span style={{ fontSize: '18px' }}>{isVideoOff ? '🚫' : '📹'}</span>
+              </button>
+            )}
+
+            {/* Flip Camera Button */}
+            {activeCallType === 'video' && (
+              <button
+                onClick={flipCamera}
+                title="Switch Camera (Front/Rear)"
+                style={{
+                  background: 'rgba(255,255,255,0.18)',
+                  color: '#fff', border: 'none', width: '46px', height: '46px', borderRadius: '50%',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <span style={{ fontSize: '18px' }}>🔄</span>
+              </button>
+            )}
+
+            {/* End Call Button */}
+            <button
+              onClick={endCall}
+              title="End Call"
+              style={{
+                background: '#dc3545', color: '#fff', border: 'none', width: '50px', height: '50px',
+                borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 4px 12px rgba(220,53,69,0.4)', transition: 'all 0.15s ease'
+              }}
+            >
+              <HangUpIcon />
+            </button>
+          </div>
         </div>
       ) : (
         <>
