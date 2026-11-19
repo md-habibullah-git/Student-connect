@@ -227,6 +227,7 @@ export default function PersonalChat() {
   const [usersCache, setUsersCache] = useState({}); 
   
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [lightboxUrl, setLightboxUrl] = useState(null); // ✅ Lightbox state
   const [inCall, setInCall] = useState(false);
   const [activeCallType, setActiveCallType] = useState('video');
   const [isMicMuted, setIsMicMuted] = useState(false);
@@ -529,7 +530,9 @@ export default function PersonalChat() {
       }
 
       setSelectedFiles([]); 
-      setReplyToMessage(null); 
+      setReplyToMessage(null);
+      // ✅ Reset the file input so mobile preview closes immediately
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (error) {
       console.error("Error sending message:", error);
     }
@@ -1674,7 +1677,12 @@ export default function PersonalChat() {
                             )}
 
                             {getMsg.fileUrl && getMsg.fileType === 'image' && (
-                              <img src={getMsg.fileUrl} alt="Shared" style={{ maxWidth: '100%', width: '280px', borderRadius: '12px', maxHeight: '320px', objectFit: 'cover', display: 'block' }} />
+                              <img
+                                src={getMsg.fileUrl}
+                                alt="Shared"
+                                onClick={() => setLightboxUrl(getMsg.fileUrl)}
+                                style={{ maxWidth: '100%', width: '280px', borderRadius: '12px', maxHeight: '320px', objectFit: 'cover', display: 'block', cursor: 'pointer' }}
+                              />
                             )}
 
                             {getMsg.fileUrl && getMsg.fileType === 'video' && (
@@ -1808,6 +1816,29 @@ export default function PersonalChat() {
             )}
           </form>
         </>
+      )}
+
+      {/* ✅ Lightbox overlay — click background to close */}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 9999, cursor: 'zoom-out'
+          }}
+        >
+          <img
+            src={lightboxUrl}
+            alt="Full size"
+            style={{ maxWidth: '95vw', maxHeight: '92vh', borderRadius: '8px', objectFit: 'contain', boxShadow: '0 8px 40px rgba(0,0,0,0.6)' }}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setLightboxUrl(null)}
+            style={{ position: 'absolute', top: '16px', right: '20px', background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', fontSize: '22px', borderRadius: '50%', width: '36px', height: '36px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >✕</button>
+        </div>
       )}
     </div>
   );

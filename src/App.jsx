@@ -104,7 +104,7 @@ export default function App() {
           SC
         </div>
         <div style={{ fontSize: '15px', fontWeight: '600', letterSpacing: '0.3px' }}>
-          StudentConnect Lite
+          StudentConnect
         </div>
       </div>
     );

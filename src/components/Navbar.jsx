@@ -42,6 +42,17 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
 
     return () => unsubscribe();
   }, [currentUid]);
+
+  // ✅ When user navigates to a chat room, mark it as read immediately
+  useEffect(() => {
+    const match = location.pathname.match(/^\/chat\/([^/]+)\//);
+    if (match) {
+      const roomId = [currentUid, match[1]].sort().join('_');
+      const lastReadKey = `lastRead_personal_${roomId}`;
+      localStorage.setItem(lastReadKey, String(Date.now()));
+      setUnreadTotal(0);
+    }
+  }, [location.pathname, currentUid]);
   
   useEffect(() => { 
     const closeDropdown = () => { 
@@ -117,6 +128,7 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
 
           <Link
             to="/"
+            onClick={() => window.location.reload()}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -147,16 +159,6 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
               display: 'inline-block'
             }}>
               StudentConnect
-            </span>
-            <span style={{
-              fontSize: '10px',
-              background: 'rgba(255, 255, 255, 0.25)',
-              padding: '1px 5px',
-              borderRadius: '4px',
-              fontWeight: 'bold',
-              textTransform: 'uppercase'
-            }}>
-              Lite
             </span>
           </Link>
         </div>
