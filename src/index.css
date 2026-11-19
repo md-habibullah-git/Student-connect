@@ -1,0 +1,257 @@
+/* ==========================================================================
+   StudentConnect — Facebook Lite Theme Stylesheet
+   Clean, ultra-lightweight, snappy, low-data mobile & desktop experience
+   ========================================================================== */
+
+:root {
+  /* Facebook Lite Light Theme Palette */
+  --fb-blue: #1877f2;
+  --fb-blue-dark: #166fe5;
+  --fb-blue-light: #e7f3ff;
+  --fb-header: #1877f2;
+  --fb-header-text: #ffffff;
+  --fb-bg: #f0f2f5;
+  --fb-card: #ffffff;
+  --fb-card-border: #ccd0d5;
+  --fb-card-border-subtle: #e4e6eb;
+  --fb-text: #050505;
+  --fb-text-secondary: #65676b;
+  --fb-text-muted: #8a8d91;
+  --fb-divider: #e4e6eb;
+  --fb-hover: #f2f3f5;
+  --fb-active: #e4e6eb;
+  --fb-green: #31a24c;
+  --fb-red: #fa383e;
+  --fb-yellow: #f7b125;
+  --fb-like: #1877f2;
+  --fb-love: #f02849;
+  --fb-wow: #f7b125;
+  --fb-chat-me: #0084ff;
+  --fb-chat-them: #e4e6eb;
+  --fb-chat-them-text: #050505;
+  --fb-input-bg: #f0f2f5;
+  --fb-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --fb-shadow-md: 0 2px 6px rgba(0, 0, 0, 0.15);
+
+  /* Legacy variable fallbacks */
+  --bg: var(--fb-bg);
+  --text: var(--fb-text);
+  --text-h: var(--fb-text);
+  --border: var(--fb-divider);
+  --code-bg: var(--fb-card);
+  --accent: var(--fb-blue);
+  --accent-bg: var(--fb-blue-light);
+  --social-bg: var(--fb-hover);
+  --shadow: var(--fb-shadow);
+
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  /* Facebook Lite Dark Theme Palette */
+  --fb-blue: #2d88ff;
+  --fb-blue-dark: #1b74e4;
+  --fb-blue-light: #263951;
+  --fb-header: #242526;
+  --fb-header-text: #e4e6eb;
+  --fb-bg: #18191a;
+  --fb-card: #242526;
+  --fb-card-border: #393a3b;
+  --fb-card-border-subtle: #2f3031;
+  --fb-text: #e4e6eb;
+  --fb-text-secondary: #b0b3b8;
+  --fb-text-muted: #8a8d91;
+  --fb-divider: #393a3b;
+  --fb-hover: #3a3b3c;
+  --fb-active: #4e4f50;
+  --fb-chat-me: #0084ff;
+  --fb-chat-them: #3a3b3c;
+  --fb-chat-them-text: #e4e6eb;
+  --fb-input-bg: #3a3b3c;
+  --fb-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --fb-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.5);
+
+  --bg: var(--fb-bg);
+  --text: var(--fb-text);
+  --text-h: var(--fb-text);
+  --border: var(--fb-divider);
+  --code-bg: var(--fb-card);
+  --accent: var(--fb-blue);
+  --accent-bg: var(--fb-blue-light);
+  --social-bg: var(--fb-hover);
+  --shadow: var(--fb-shadow);
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--fb-bg);
+  color: var(--fb-text);
+  font-family: var(--font-family);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100%;
+}
+
+#root {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  text-align: left;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--fb-bg);
+  position: relative;
+  box-shadow: 0 0 15px rgba(0, 0, 0, 0.05);
+}
+
+@media (min-width: 681px) {
+  #root {
+    border-inline: 1px solid var(--fb-card-border-subtle);
+  }
+}
+
+a {
+  color: var(--fb-blue);
+  text-decoration: none;
+}
+
+button, input, textarea, select {
+  font-family: inherit;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--fb-card-border);
+  border-radius: 3px;
+}
+
+/* FB Lite Common Components */
+.fb-lite-header {
+  background-color: var(--fb-header);
+  color: var(--fb-header-text);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.fb-lite-card {
+  background-color: var(--fb-card);
+  border: 1px solid var(--fb-card-border-subtle);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  box-shadow: var(--fb-shadow);
+  overflow: hidden;
+}
+
+@media (max-width: 680px) {
+  .fb-lite-card {
+    border-radius: 0;
+    border-inline: none;
+    margin-bottom: 8px;
+  }
+}
+
+.fb-lite-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+  user-select: none;
+}
+
+.fb-lite-btn-primary {
+  background-color: var(--fb-blue);
+  color: #ffffff;
+}
+.fb-lite-btn-primary:hover {
+  background-color: var(--fb-blue-dark);
+}
+
+.fb-lite-btn-secondary {
+  background-color: var(--fb-hover);
+  color: var(--fb-text);
+}
+.fb-lite-btn-secondary:hover {
+  background-color: var(--fb-active);
+}
+
+.fb-lite-btn-success {
+  background-color: var(--fb-green);
+  color: #ffffff;
+}
+
+.fb-lite-btn-danger {
+  background-color: var(--fb-red);
+  color: #ffffff;
+}
+
+.fb-avatar {
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background-color: var(--fb-hover);
+  display: block;
+}
+
+.fb-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--fb-red);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: bold;
+  border-radius: 10px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 2px solid var(--fb-card);
+}
+
+.online-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: var(--fb-green);
+  border: 2px solid var(--fb-card);
+  position: absolute;
+  bottom: 0;
+  right: 0;
+}
+
+/* Chat Input fix */
+.dynamic-chat-input {
+  color: var(--fb-text) !important;
+  background-color: var(--fb-input-bg) !important;
+}
+.dynamic-chat-input::placeholder {
+  color: var(--fb-text-secondary) !important;
+  opacity: 0.7 !important;
+}

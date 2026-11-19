@@ -1,0 +1,115 @@
+/* ==========================================================================
+   StudentConnect App Utility Styles (Facebook Lite Edition)
+   ========================================================================== */
+
+/* Main layout container */
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--fb-bg);
+  position: relative;
+}
+
+.main-content {
+  flex: 1;
+  padding-bottom: 20px;
+}
+
+/* Post card transitions */
+.dynamic-post-card {
+  background-color: var(--fb-card);
+  border: 1px solid var(--fb-card-border-subtle);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  box-shadow: var(--fb-shadow);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 680px) {
+  .dynamic-post-card {
+    border-radius: 0;
+    border-inline: none;
+    margin-bottom: 8px;
+  }
+}
+
+.dynamic-post-card.shared-highlight {
+  box-shadow: 0 0 0 2px var(--fb-blue), 0 4px 14px rgba(24, 119, 242, 0.25);
+  animation: pulseHighlight 2.5s ease-out;
+}
+
+@keyframes pulseHighlight {
+  0% { box-shadow: 0 0 0 3px var(--fb-blue); }
+  50% { box-shadow: 0 0 0 4px var(--fb-blue), 0 0 12px rgba(24, 119, 242, 0.4); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* FB Lite Inline Popup for Reactions */
+.inline-reaction-popup {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  background-color: var(--fb-card);
+  color: var(--fb-text);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  z-index: 100;
+  width: 250px;
+  box-shadow: var(--fb-shadow-md);
+  text-align: left;
+  border: 1px solid var(--fb-card-border);
+  box-sizing: border-box;
+}
+
+.popup-user-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 3px 0;
+}
+
+.popup-avatar {
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 50% !important;
+  object-fit: cover !important;
+  border: 1px solid var(--fb-blue);
+  background-color: var(--fb-hover);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.comment-user-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.comment-avatar {
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 50% !important;
+  object-fit: cover !important;
+  border: 1px solid var(--fb-blue);
+  background-color: var(--fb-hover);
+  flex-shrink: 0;
+  margin-top: 2px;
+  cursor: pointer;
+}
+
+.comment-bubble {
+  flex: 1;
+  background-color: var(--fb-hover);
+  padding: 8px 12px;
+  border-radius: 16px;
+  position: relative;
+  border: 1px solid var(--fb-card-border-subtle);
+}

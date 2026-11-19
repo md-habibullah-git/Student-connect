@@ -1,0 +1,1010 @@
+// File Name: src/components/GlobalAlerts.jsx
+
+import React, { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { db, auth } from '../firebase';
+import {
+  collection, doc, onSnapshot, query, where, orderBy, limit,
+  updateDoc, setDoc, getDocs, writeBatch
+} from 'firebase/firestore';
+import { getActiveCallSession, clearActiveCallSession, subscribeActiveCallSession, getActiveGlobalCallSession, clearActiveGlobalCallSession, subscribeActiveGlobalCallSession } from '../callSession';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
+import { LocalNotifications } from '@capacitor/local-notifications';
+import { initPushNotifications } from '../pushNotifications';
+
+const GLOBAL_ROOM_ID = "campus_global_conference_room";
+
+// ✅ ৪২০ ঘণ্টা = ৭ দিন
+const SEVEN_DAYS_MS = 420 * 60 * 60 * 1000;
+
+// ✅ createdAt যেকোনো format handle করে
+const toMillis = (createdAt) => {
+  if (!createdAt) return 0;
+  if (typeof createdAt === 'number') return createdAt;
+  if (typeof createdAt === 'string') return new Date(createdAt).getTime() || 0;
+  if (typeof createdAt.toMillis === 'function') return createdAt.toMillis();
+  if (createdAt.seconds) return createdAt.seconds * 1000;
+  return 0;
+};
+
+const RingtoneControl = Capacitor.isNativePlatform()
+  ? registerPlugin('RingtoneControl')
+  : null;
+
+const stopNativeRingtone = async () => {
+  if (RingtoneControl) {
+    try {
+      await RingtoneControl.stopRingtone();
+      console.log('✅ Native ringtone stopped');
+    } catch (err) {
+      console.error('❌ Stop native ringtone error:', err);
+    }
+  }
+};
+
+const PhoneAcceptIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.4 21 3 13.6 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.46.57 3.58a1 1 0 0 1-.24 1.01l-2.21 2.2z" />
+  </svg>
+);
+const PhoneDeclineIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-1 1c-1.24 0-2.45-.2-3.57-.57a1 1 0 0 1-.68-.95v-3.5a1 1 0 0 1 .74-.97A17.9 17.9 0 0 1 12 7c1.99 0 3.91.31 5.71.88a1 1 0 0 1 .74.97v3.5a1 1 0 0 1-.68.95 11.9 11.9 0 0 1-3.57.57 1 1 0 0 1-1-1v-3.1A17.9 17.9 0 0 0 12 9z" />
+  </svg>
+);
+
+// =====================================================
+// ✅ Receiver ringtone (জোরে)
+// =====================================================
+let ringtoneAudioCtx = null;
+let ringtoneOscillator = null;
+let ringtoneGainNode = null;
+let ringtoneIntervalRef = null;
+
+const startRingtone = () => {
+  try {
+    if (ringtoneAudioCtx) return;
+    ringtoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    ringtoneGainNode = ringtoneAudioCtx.createGain();
+    ringtoneGainNode.connect(ringtoneAudioCtx.destination);
+    ringtoneGainNode.gain.value = 2.0;
+    const playBeep = () => {
+      try {
+        if (ringtoneOscillator) ringtoneOscillator.stop();
+        ringtoneOscillator = ringtoneAudioCtx.createOscillator();
+        ringtoneOscillator.connect(ringtoneGainNode);
+        ringtoneOscillator.frequency.value = 880;
+        ringtoneOscillator.type = 'square';
+        ringtoneOscillator.start(ringtoneAudioCtx.currentTime);
+        ringtoneOscillator.stop(ringtoneAudioCtx.currentTime + 0.5);
+      } catch (err) {}
+    };
+    playBeep();
+    ringtoneIntervalRef = setInterval(playBeep, 1000);
+  } catch (err) {}
+};
+
+const stopRingtone = () => {
+  if (ringtoneIntervalRef) { clearInterval(ringtoneIntervalRef); ringtoneIntervalRef = null; }
+  if (ringtoneOscillator) { try { ringtoneOscillator.stop(); } catch (err) {} ringtoneOscillator = null; }
+  if (ringtoneAudioCtx) { ringtoneAudioCtx.close().catch(() => {}); ringtoneAudioCtx = null; }
+  ringtoneGainNode = null;
+};
+
+// =====================================================
+// ✅ Caller ringback tone (হালকা)
+// =====================================================
+let callerToneAudioCtx = null;
+let callerToneOscillator = null;
+let callerToneGainNode = null;
+let callerToneIntervalRef = null;
+
+const startCallerTone = () => {
+  try {
+    if (callerToneAudioCtx) return;
+    callerToneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    callerToneGainNode = callerToneAudioCtx.createGain();
+    callerToneGainNode.connect(callerToneAudioCtx.destination);
+    callerToneGainNode.gain.value = 0.15;
+
+    const playTone = () => {
+      try {
+        if (callerToneOscillator) callerToneOscillator.stop();
+        callerToneOscillator = callerToneAudioCtx.createOscillator();
+        callerToneOscillator.connect(callerToneGainNode);
+        callerToneOscillator.frequency.value = 440;
+        callerToneOscillator.type = 'sine';
+        callerToneOscillator.start(callerToneAudioCtx.currentTime);
+        callerToneOscillator.stop(callerToneAudioCtx.currentTime + 0.4);
+      } catch (err) {}
+    };
+
+    playTone();
+    callerToneIntervalRef = setInterval(playTone, 2400);
+  } catch (err) {}
+};
+
+const stopCallerTone = () => {
+  if (callerToneIntervalRef) { clearInterval(callerToneIntervalRef); callerToneIntervalRef = null; }
+  if (callerToneOscillator) { try { callerToneOscillator.stop(); } catch (err) {} callerToneOscillator = null; }
+  if (callerToneAudioCtx) { callerToneAudioCtx.close().catch(() => {}); callerToneAudioCtx = null; }
+  callerToneGainNode = null;
+};
+
+const playMessageSound = () => {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.frequency.value = 1200;
+    oscillator.type = 'sine';
+    gainNode.gain.setValueAtTime(12.8, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+    oscillator.start(audioCtx.currentTime);
+    oscillator.stop(audioCtx.currentTime + 0.4);
+    oscillator.onended = () => { audioCtx.close().catch(() => {}); };
+  } catch (err) {}
+};
+
+const sendLocalNotification = async (title, body) => {
+  try {
+    const permStatus = await LocalNotifications.requestPermissions();
+    if (permStatus.display === 'granted') {
+      await LocalNotifications.schedule({
+        notifications: [{
+          title, body,
+          id: Math.floor(Math.random() * 1000000),
+          schedule: { at: new Date(Date.now() + 500) },
+          sound: null,
+        }]
+      });
+    }
+  } catch (err) {
+    console.error("Notification error:", err);
+  }
+};
+
+// ✅ Preview text helper
+const getMessagePreview = (data) => {
+  if (!data) return '';
+  if (data.isCallSummary || (data.text && data.text.includes('missed'))) {
+    return 'Missed Group Call 🌐';
+  }
+  if (data.fileType === 'audio') return '🎤 Voice message';
+  if (data.fileType === 'image') return '📷 Photo';
+  if (data.fileType === 'video') return '🎥 Video';
+  if (data.fileType === 'file') return '📎 File';
+  return data.text || '';
+};
+
+export default function GlobalAlerts() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const currentUid = auth.currentUser?.uid || null;
+
+  const [messageBubbles, setMessageBubbles] = useState([]);
+  const [incomingPersonalCall, setIncomingPersonalCall] = useState(null);
+  const [incomingGlobalCall, setIncomingGlobalCall] = useState(null);
+  const [dismissedGlobalCalls, setDismissedGlobalCalls] = useState(() => {
+    try {
+      const saved = localStorage.getItem(`dismissedGlobalCalls_${auth.currentUser?.uid || 'guest'}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch (err) { return []; }
+  });
+
+  const [outgoingPersonalCall, setOutgoingPersonalCall] = useState(null);
+  const [outgoingGlobalCall, setOutgoingGlobalCall] = useState(null);
+
+  const [activeSession, setActiveSession] = useState(() => getActiveCallSession());
+  useEffect(() => {
+    const unsubscribe = subscribeActiveCallSession(setActiveSession);
+    return unsubscribe;
+  }, []);
+
+  // ✅ Push Notification Initialize
+  useEffect(() => {
+    if (currentUid) {
+      console.log('🔔 GlobalAlerts: currentUid found:', currentUid);
+      console.log('🔔 GlobalAlerts: Is Native:', Capacitor.isNativePlatform());
+      initPushNotifications();
+    }
+  }, [currentUid]);
+
+  // =====================================================
+  // ✅ Cleanup — প্রতি ১ ঘণ্টায় ৪২০ ঘণ্টা (৭ দিন) পুরনো মেসেজ delete
+  // =====================================================
+  useEffect(() => {
+    if (!currentUid) return;
+
+    const cleanupOldMessages = async () => {
+      try {
+        const now = Date.now();
+        const cutoffTime = now - SEVEN_DAYS_MS;
+
+        const batchDelete = async (docs) => {
+          const batchSize = 500;
+          let deleted = 0;
+          for (let i = 0; i < docs.length; i += batchSize) {
+            const batch = writeBatch(db);
+            const chunk = docs.slice(i, i + batchSize);
+            chunk.forEach(d => batch.delete(d.ref));
+            await batch.commit();
+            deleted += chunk.length;
+          }
+          return deleted;
+        };
+
+        try {
+          const globalQ = query(
+            collection(db, "global-room-messages"),
+            orderBy("createdAt", "asc")
+          );
+          const globalSnap = await getDocs(globalQ);
+
+          const oldDocs = globalSnap.docs.filter(d => {
+            const ms = toMillis(d.data().createdAt);
+            return ms > 0 && ms < cutoffTime;
+          });
+
+          if (oldDocs.length > 0) {
+            const deleted = await batchDelete(oldDocs);
+            console.log(`🧹 Deleted ${deleted} old global messages`);
+          }
+        } catch (err) {
+          console.error("Global cleanup error:", err);
+        }
+
+        try {
+          const roomsQ = query(
+            collection(db, "personal-rooms"),
+            where("participants", "array-contains", currentUid)
+          );
+          const roomsSnap = await getDocs(roomsQ);
+
+          for (const roomDoc of roomsSnap.docs) {
+            const roomId = roomDoc.id;
+            const msgsQ = query(
+              collection(db, "personal-rooms", roomId, "messages"),
+              orderBy("createdAt", "asc")
+            );
+            const msgsSnap = await getDocs(msgsQ);
+
+            const oldDocs = msgsSnap.docs.filter(d => {
+              const ms = toMillis(d.data().createdAt);
+              return ms > 0 && ms < cutoffTime;
+            });
+
+            if (oldDocs.length > 0) {
+              const deleted = await batchDelete(oldDocs);
+              console.log(`🧹 Deleted ${deleted} from room ${roomId}`);
+            }
+          }
+        } catch (err) {
+          console.error("Personal cleanup error:", err);
+        }
+
+        console.log('✅ Cleanup complete at', new Date(now).toLocaleTimeString());
+      } catch (error) {
+        console.error("Cleanup error:", error);
+      }
+    };
+
+    const initialTimer = setTimeout(cleanupOldMessages, 5000);
+    const hourlyInterval = setInterval(cleanupOldMessages, 60 * 60 * 1000);
+
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(hourlyInterval);
+    };
+  }, [currentUid]);
+
+  // =====================================================
+  // ✅ Ringtone control
+  // =====================================================
+  useEffect(() => {
+    if (incomingPersonalCall || incomingGlobalCall) startRingtone();
+    else stopRingtone();
+    return () => { stopRingtone(); };
+  }, [incomingPersonalCall, incomingGlobalCall]);
+
+  // =====================================================
+  // ✅ Caller tone control
+  // =====================================================
+  useEffect(() => {
+    if (outgoingPersonalCall || outgoingGlobalCall) startCallerTone();
+    else stopCallerTone();
+    return () => { stopCallerTone(); };
+  }, [outgoingPersonalCall, outgoingGlobalCall]);
+
+  // =====================================================
+  // ✅ Outgoing Personal Call listener
+  // =====================================================
+  useEffect(() => {
+    if (!currentUid) return;
+    const q = query(
+      collection(db, "personal-connections"),
+      where("participants", "array-contains", currentUid)
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let found = null;
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.hostId === currentUid && data.status === "ringing") {
+          found = { roomId: docSnap.id };
+        }
+      });
+      setOutgoingPersonalCall(found);
+    });
+    return () => unsubscribe();
+  }, [currentUid]);
+
+  // =====================================================
+  // ✅ Outgoing Global Call listener
+  // =====================================================
+  useEffect(() => {
+    if (!currentUid) return;
+    const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.hostId === currentUid && data.status === "ringing") {
+          setOutgoingGlobalCall({ roomId: GLOBAL_ROOM_ID });
+          return;
+        }
+      }
+      setOutgoingGlobalCall(null);
+    });
+    return () => unsubscribe();
+  }, [currentUid]);
+
+  useEffect(() => {
+    if (!activeSession || activeSession.type !== 'personal') return;
+    if (!activeSession.chatRoomId) return;
+    const unsubscribe = onSnapshot(doc(db, "personal-connections", activeSession.chatRoomId), (snap) => {
+      const data = snap.data();
+      if (!snap.exists() || data?.status === 'ended' || data?.status === 'missed') {
+        const current = getActiveCallSession();
+        if (current && current.chatRoomId === activeSession.chatRoomId) {
+          if (current.peerConnection) current.peerConnection.close();
+          if (current.localStream) current.localStream.getTracks().forEach(t => t.stop());
+          if (current.remoteStream) current.remoteStream.getTracks().forEach(t => t.stop());
+          clearActiveCallSession();
+        }
+      }
+    });
+    return unsubscribe;
+  }, [activeSession?.chatRoomId]);
+
+  const [bubblePos, setBubblePos] = useState(() => {
+    try {
+      const saved = localStorage.getItem('floatingBubblePos');
+      return saved ? JSON.parse(saved) : null;
+    } catch (err) { return null; }
+  });
+  const draggingRef = useRef(false);
+  const dragMovedRef = useRef(false);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+
+  const locationRef = useRef(location);
+  useEffect(() => { locationRef.current = location; }, [location]);
+
+  const lastKnownRoomStateRef = useRef({});
+  const isFirstRoomsLoadRef = useRef(true);
+  const lastKnownGlobalMessageAtRef = useRef(0);
+  const isFirstGlobalLoadRef = useRef(true);
+
+  const [activeGlobalSession, setActiveGlobalSession] = useState(() => getActiveGlobalCallSession());
+  useEffect(() => {
+    const unsubscribe = subscribeActiveGlobalCallSession(setActiveGlobalSession);
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!activeGlobalSession || !currentUid) return;
+    const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
+      const data = snap.data();
+      const stillIn = snap.exists() && (data.participants || []).includes(currentUid);
+      if (!stillIn) {
+        const current = getActiveGlobalCallSession();
+        if (current) {
+          Object.values(current.peerConnections || {}).forEach(pc => pc.close());
+          Object.values(current.peerUnsubscribers || {}).forEach(fns => fns.forEach(f => f && f()));
+          if (current.localStream) current.localStream.getTracks().forEach(t => t.stop());
+          Object.values(current.remoteStreams || {}).forEach(s => s.getTracks().forEach(t => t.stop()));
+          clearActiveGlobalCallSession();
+        }
+      }
+    });
+    return unsubscribe;
+  }, [!!activeGlobalSession, currentUid]);
+
+  useEffect(() => {
+    if (!currentUid) return;
+    const selfRef = doc(db, "users", currentUid);
+    const OFFLINE_GRACE_MS = 5 * 60 * 1000;
+    const HEARTBEAT_MS = 60 * 1000;
+    let offlineTimer = null;
+    let heartbeatInterval = null;
+
+    const goOnline = () => {
+      if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
+      setDoc(selfRef, { online: true, lastSeen: Date.now() }, { merge: true }).catch(() => {});
+      if (!heartbeatInterval) {
+        heartbeatInterval = setInterval(() => {
+          updateDoc(selfRef, { lastSeen: Date.now() }).catch(() => {});
+        }, HEARTBEAT_MS);
+      }
+    };
+
+    const stopHeartbeat = () => {
+      if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+    };
+
+    const scheduleGoOffline = () => {
+      stopHeartbeat();
+      if (offlineTimer) clearTimeout(offlineTimer);
+      offlineTimer = setTimeout(() => {
+        updateDoc(selfRef, { online: false }).catch(() => {});
+        offlineTimer = null;
+      }, OFFLINE_GRACE_MS);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) scheduleGoOffline();
+      else goOnline();
+    };
+
+    goOnline();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const handleBeforeUnload = () => {
+      updateDoc(selfRef, { online: false }).catch(() => {});
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    let appStateListenerHandle = null;
+    if (Capacitor.isNativePlatform()) {
+      CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) goOnline();
+        else scheduleGoOffline();
+      }).then((handle) => { appStateListenerHandle = handle; }).catch((err) => {
+        console.error("Capacitor App lifecycle listener error:", err);
+      });
+    }
+
+    return () => {
+      stopHeartbeat();
+      if (offlineTimer) clearTimeout(offlineTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (appStateListenerHandle) appStateListenerHandle.remove();
+      updateDoc(selfRef, { online: false }).catch(() => {});
+    };
+  }, [currentUid]);
+
+  // ============ Personal rooms listener ============
+  useEffect(() => {
+    if (!currentUid) return;
+    const q = query(collection(db, "personal-rooms"), where("participants", "array-contains", currentUid));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const isFirst = isFirstRoomsLoadRef.current;
+
+      snapshot.docChanges().forEach((change) => {
+        const data = change.doc.data();
+        const roomId = change.doc.id;
+        const prevLastMessageAt = lastKnownRoomStateRef.current[roomId] || 0;
+
+        if (
+          !isFirst && data.lastMessageText && data.lastMessageText.includes('missed') &&
+          data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
+          data.lastMessageSenderId === 'system'
+        ) {
+          const otherUid = (data.participants || []).find((id) => id !== currentUid);
+          const onThisChatPage = otherUid && locationRef.current.pathname.startsWith(`/chat/${otherUid}/`);
+          if (!onThisChatPage) {
+            playMessageSound();
+            sendLocalNotification('Missed Call 📞', `You missed a ${data.lastMessageText.includes('video') ? 'video' : 'audio'} call`);
+            setMessageBubbles((prev) => {
+              const existing = prev.find((b) => b.roomId === `missed_${roomId}`);
+              if (!existing) {
+                return [...prev, {
+                  roomId: `missed_${roomId}`, otherUid, isGlobal: false, count: 1,
+                  senderName: 'Missed Call', senderPhoto: '', isMissedCall: true,
+                  callTypeIcon: data.lastMessageText.includes('video') ? '📹' : '🎙️'
+                }].slice(-3);
+              }
+              return prev;
+            });
+          }
+        }
+
+        if (
+          !isFirst && data.lastMessageAt && data.lastMessageAt > prevLastMessageAt &&
+          data.lastMessageSenderId && data.lastMessageSenderId !== currentUid &&
+          data.lastMessageSenderId !== 'system'
+        ) {
+          const otherUid = (data.participants || []).find((id) => id !== currentUid);
+          const onThisChatPage = otherUid && locationRef.current.pathname.startsWith(`/chat/${otherUid}/`);
+          if (!onThisChatPage) {
+            playMessageSound();
+            sendLocalNotification('New Message 💬', `${data.lastMessageSenderName || 'Student'}: ${data.lastMessageText || ''}`);
+            setMessageBubbles((prev) => {
+              const existing = prev.find((b) => b.roomId === roomId);
+              if (existing) {
+                return prev.map((b) => b.roomId === roomId
+                  ? { ...b, count: b.count + 1, senderName: data.lastMessageSenderName, senderPhoto: data.lastMessageSenderPhoto }
+                  : b);
+              }
+              return [...prev, {
+                roomId, otherUid, isGlobal: false, count: 1,
+                senderName: data.lastMessageSenderName, senderPhoto: data.lastMessageSenderPhoto
+              }].slice(-3);
+            });
+          }
+        }
+        lastKnownRoomStateRef.current[roomId] = data.lastMessageAt || prevLastMessageAt;
+      });
+
+      isFirstRoomsLoadRef.current = false;
+    });
+    return () => unsubscribe();
+  }, [currentUid]);
+
+  // ============ Global messages listener — ✅ FIXED ============
+  // ✅ orderBy সরানো — mixed type সমস্যা নেই
+  // ✅ client-side sort — createdAt যেকোনো format handle
+  useEffect(() => {
+    if (!currentUid) return;
+    
+    const q = query(collection(db, "global-room-messages"));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (snapshot.empty) return;
+
+      // ✅ client-side sort — newest first
+      const allMsgs = snapshot.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+
+      const data = allMsgs[0];
+      if (!data) return;
+
+      const msgTime = toMillis(data.createdAt);
+      const isFirst = isFirstGlobalLoadRef.current;
+
+      if (!isFirst && msgTime > lastKnownGlobalMessageAtRef.current && data.senderUid && data.senderUid !== currentUid) {
+        const onGlobalPage = locationRef.current.pathname === '/chat/global/Global-Chatroom';
+        if (!onGlobalPage) {
+          playMessageSound();
+
+          const previewText = getMessagePreview(data);
+
+          if (data.isCallSummary || (data.text && data.text.includes('missed'))) {
+            sendLocalNotification('Missed Group Call 🌐', 'You missed a group call');
+          } else {
+            sendLocalNotification(
+              'Global Room 💬',
+              `${data.senderName || 'Student'}: ${previewText}`
+            );
+          }
+
+          setMessageBubbles((prev) => {
+            const existing = prev.find((b) => b.isGlobal && !b.isMissedCall);
+            if (existing) {
+              return prev.map((b) => (b.isGlobal && !b.isMissedCall)
+                ? { ...b, count: b.count + 1, senderName: data.senderName, senderPhoto: data.senderPhoto }
+                : b);
+            }
+            return [...prev, {
+              roomId: 'global', isGlobal: true, count: 1,
+              senderName: data.senderName, senderPhoto: data.senderPhoto
+            }].slice(-3);
+          });
+        }
+      }
+      lastKnownGlobalMessageAtRef.current = msgTime;
+      isFirstGlobalLoadRef.current = false;
+    }, (error) => {
+      console.error('🔥 Global messages listener error:', error);
+    });
+    
+    return () => unsubscribe();
+  }, [currentUid]);
+
+  // Personal call listener
+  useEffect(() => {
+    if (!currentUid) return;
+    const q = query(collection(db, "personal-connections"), where("participants", "array-contains", currentUid));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let found = null;
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.status === "ringing" && data.hostId !== currentUid) {
+          found = { roomId: docSnap.id, hostId: data.hostId, hostName: data.hostName, hostPhoto: data.hostPhoto };
+        }
+      });
+      setIncomingPersonalCall(found);
+    });
+    return () => unsubscribe();
+  }, [currentUid]);
+
+  // Cancel Call Listener
+  useEffect(() => {
+    const handleCancelCall = (event) => {
+      console.log('📞 Cancel call event received:', event.detail);
+      stopRingtone();
+      stopNativeRingtone();
+      stopCallerTone();
+      setIncomingPersonalCall(null);
+      setIncomingGlobalCall(null);
+      setOutgoingPersonalCall(null);
+      setOutgoingGlobalCall(null);
+    };
+    window.addEventListener('cancel-call', handleCancelCall);
+    return () => { window.removeEventListener('cancel-call', handleCancelCall); };
+  }, []);
+
+  // Native Accept Listener
+  useEffect(() => {
+    const handleNativeAccept = (event) => {
+      console.log('📞 Native accept event received:', event.detail);
+      stopRingtone();
+      stopNativeRingtone();
+      stopCallerTone();
+      const { roomId, callerName } = event.detail || {};
+      if (roomId && callerName) {
+        navigate(`/chat/${roomId}/${encodeURIComponent(callerName)}`, { state: { autoJoinCall: true } });
+      }
+      setIncomingPersonalCall(null);
+      setIncomingGlobalCall(null);
+    };
+    window.addEventListener('native-call-accept', handleNativeAccept);
+    return () => { window.removeEventListener('native-call-accept', handleNativeAccept); };
+  }, [navigate]);
+
+  // Global call listener
+  useEffect(() => {
+    if (!currentUid) return;
+    const unsubscribe = onSnapshot(doc(db, "global-calls", GLOBAL_ROOM_ID), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        const callId = String(data.callStartedAt || '0');
+
+        if (data.status === "ringing" && data.hostId !== currentUid) {
+          const alreadyDismissed = dismissedGlobalCalls.includes(callId);
+          if (!alreadyDismissed) {
+            setIncomingGlobalCall({ hostName: data.hostName, callId });
+            sendLocalNotification('Incoming Call 📞', `${data.hostName || 'Student'} started a conference`);
+            return;
+          }
+        }
+
+        if (data.status !== "ringing" && data.callStartedAt && data.hostId !== currentUid) {
+          const memberCount = Object.keys(data.callHistory || {}).filter(k => k !== 'totalDuration').length;
+          if (memberCount <= 1) {
+            const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
+            const globalCallId = `global_${callId}`;
+            const alreadySaved = missedCallsStorage.some(call => call.callId === globalCallId);
+            if (!alreadySaved) {
+              missedCallsStorage.push({
+                callId: globalCallId, hostId: data.hostId,
+                hostName: data.hostName || 'Unknown', hostPhoto: '',
+                callType: data.callType || 'video',
+                missedAt: Date.now(), isGlobal: true
+              });
+              localStorage.setItem(`missedCalls_${currentUid}`, JSON.stringify(missedCallsStorage));
+            }
+          }
+        }
+      }
+      setIncomingGlobalCall(null);
+    });
+    return () => unsubscribe();
+  }, [currentUid, dismissedGlobalCalls]);
+
+  // Home page alerts
+  useEffect(() => {
+    if (!currentUid) return;
+    if (location.pathname !== '/') return;
+
+    const checkAllAlerts = () => {
+      const missedCallsStorage = JSON.parse(localStorage.getItem(`missedCalls_${currentUid}`) || '[]');
+      const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
+      const unseenMissedCalls = missedCallsStorage.filter(call => !seenCallsStorage.includes(call.callId));
+
+      if (unseenMissedCalls.length > 0) {
+        const missedBubbles = unseenMissedCalls.map(call => ({
+          roomId: call.isGlobal ? `missed_global_${call.callId.replace('global_', '')}` : `missed_${call.callId}`,
+          otherUid: call.hostId,
+          isGlobal: call.isGlobal || false,
+          count: 1,
+          senderName: call.hostName || 'Unknown',
+          senderPhoto: call.hostPhoto || '',
+          isMissedCall: true,
+          callTypeIcon: call.callType === 'audio' ? '🎙️' : '📹'
+        }));
+        setMessageBubbles(prev => {
+          const merged = [...prev];
+          missedBubbles.forEach(bubble => {
+            const existing = merged.find(b => b.roomId === bubble.roomId);
+            if (!existing) merged.push(bubble);
+          });
+          return merged.slice(-5);
+        });
+        playMessageSound();
+      }
+
+      const personalRoomsRef = collection(db, "personal-rooms");
+      const personalQ = query(personalRoomsRef, where("participants", "array-contains", currentUid));
+      getDocs(personalQ).then(snapshot => {
+        const unreadBubbles = [];
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data();
+          const roomId = docSnap.id;
+          const lastReadKey = `lastRead_personal_${roomId}`;
+          const lastRead = Number(localStorage.getItem(lastReadKey)) || 0;
+          if (data.lastMessageAt && data.lastMessageAt > lastRead && data.lastMessageSenderId !== currentUid) {
+            const otherUid = (data.participants || []).find((id) => id !== currentUid);
+            if (data.lastMessageText && data.lastMessageText.includes('missed')) {
+              unreadBubbles.push({
+                roomId: `missed_${roomId}`, otherUid, isGlobal: false, count: 1,
+                senderName: 'Missed Call', senderPhoto: '', isMissedCall: true,
+                callTypeIcon: data.lastMessageText.includes('video') ? '📹' : '🎙️'
+              });
+            } else {
+              unreadBubbles.push({
+                roomId, otherUid, isGlobal: false, count: 1,
+                senderName: data.lastMessageSenderName || 'Unknown',
+                senderPhoto: data.lastMessageSenderPhoto || '',
+              });
+            }
+          }
+        });
+        if (unreadBubbles.length > 0) {
+          setMessageBubbles(prev => {
+            const merged = [...prev];
+            unreadBubbles.forEach(bubble => {
+              const existing = merged.find(b => b.roomId === bubble.roomId);
+              if (!existing) merged.push(bubble);
+            });
+            return merged.slice(-5);
+          });
+          playMessageSound();
+        }
+      }).catch(err => console.error("Error checking personal unread:", err));
+
+      const lastReadGlobal = Number(localStorage.getItem('lastRead_global')) || 0;
+      const globalMsgRef = collection(db, "global-room-messages");
+      // ✅ orderBy সরানো — সব message আনি
+      const globalQ = query(globalMsgRef);
+      getDocs(globalQ).then(snapshot => {
+        if (!snapshot.empty) {
+          // ✅ client-side sort
+          const allMsgs = snapshot.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+
+          const globalData = allMsgs[0];
+          if (!globalData) return;
+
+          const msgTime = toMillis(globalData.createdAt);
+          if (msgTime > lastReadGlobal && globalData.senderUid !== currentUid) {
+            const unreadBubble = {
+              roomId: 'global', isGlobal: true, count: 1,
+              senderName: globalData.senderName || 'Unknown',
+              senderPhoto: globalData.senderPhoto || '',
+            };
+            setMessageBubbles(prev => {
+              const existing = prev.find(b => b.roomId === 'global' && !b.isMissedCall);
+              if (!existing) return [...prev, unreadBubble].slice(-5);
+              return prev;
+            });
+            playMessageSound();
+          }
+        }
+      }).catch(err => console.error("Error checking global unread:", err));
+    };
+
+    checkAllAlerts();
+  }, [currentUid, location.pathname]);
+
+  useEffect(() => {
+    setMessageBubbles((prev) => prev.filter((b) => {
+      if (b.isGlobal) return location.pathname !== '/chat/global/Global-Chatroom';
+      return !(b.otherUid && location.pathname.startsWith(`/chat/${b.otherUid}/`));
+    }));
+  }, [location.pathname]);
+
+  const activeCall = incomingPersonalCall
+    ? { type: 'personal', ...incomingPersonalCall }
+    : (incomingGlobalCall ? { type: 'global', ...incomingGlobalCall } : null);
+
+  const showMinimizedCallBubble = activeSession
+    && activeSession.type === 'personal'
+    && !location.pathname.startsWith(`/chat/${activeSession.otherUid}/`);
+
+  const handleReceive = () => {
+    if (!activeCall) return;
+    stopRingtone();
+    stopNativeRingtone();
+    stopCallerTone();
+    if (activeCall.type === 'personal') {
+      navigate(`/chat/${activeCall.hostId}/${encodeURIComponent(activeCall.hostName || 'Student')}`, { state: { autoJoinCall: true } });
+    } else {
+      if (activeCall.callId) {
+        const updatedList = [...dismissedGlobalCalls, activeCall.callId];
+        setDismissedGlobalCalls(updatedList);
+        localStorage.setItem(`dismissedGlobalCalls_${currentUid}`, JSON.stringify(updatedList));
+      }
+      setIncomingGlobalCall(null);
+      navigate('/chat/global/Global-Chatroom', { state: { autoJoinCall: true } });
+    }
+  };
+
+  const handleDecline = async () => {
+    if (!activeCall) return;
+    stopRingtone();
+    stopNativeRingtone();
+    stopCallerTone();
+    if (activeCall.type === 'personal') {
+      try {
+        await updateDoc(doc(db, "personal-connections", activeCall.roomId), { status: "ended" });
+      } catch (err) { console.error("Error declining personal call:", err); }
+      setIncomingPersonalCall(null);
+    } else {
+      if (activeCall.callId) {
+        const updatedList = [...dismissedGlobalCalls, activeCall.callId];
+        setDismissedGlobalCalls(updatedList);
+        localStorage.setItem(`dismissedGlobalCalls_${currentUid}`, JSON.stringify(updatedList));
+      }
+      setIncomingGlobalCall(null);
+    }
+  };
+
+  const handleMinimizedCallClick = () => {
+    if (!activeSession) return;
+    navigate(`/chat/${activeSession.otherUid}/${encodeURIComponent(activeSession.otherName || 'Student')}`);
+  };
+
+  const handleBubbleClick = (bubble) => {
+    if (dragMovedRef.current) { dragMovedRef.current = false; return; }
+    if (bubble.isMissedCall) {
+      const callId = bubble.roomId.replace('missed_global_', 'global_').replace('missed_', '');
+      const seenCallsStorage = JSON.parse(localStorage.getItem(`seenCalls_${currentUid}`) || '[]');
+      if (!seenCallsStorage.includes(callId)) {
+        seenCallsStorage.push(callId);
+        localStorage.setItem(`seenCalls_${currentUid}`, JSON.stringify(seenCallsStorage));
+      }
+    }
+    if (!bubble.isMissedCall && !bubble.isGlobal) {
+      localStorage.setItem(`lastRead_personal_${bubble.roomId}`, String(Date.now()));
+    }
+    if (bubble.isGlobal && !bubble.isMissedCall) {
+      localStorage.setItem('lastRead_global', String(Date.now()));
+    }
+    if (bubble.isGlobal) navigate('/chat/global/Global-Chatroom');
+    else navigate(`/chat/${bubble.otherUid}/${encodeURIComponent(bubble.senderName || 'Student')}`);
+    setMessageBubbles((prev) => prev.filter((b) => b !== bubble));
+  };
+
+  const handleDragStart = (e) => {
+    draggingRef.current = true;
+    dragMovedRef.current = false;
+    const rect = e.currentTarget.getBoundingClientRect();
+    dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleDragMove = (e) => {
+    if (!draggingRef.current) return;
+    dragMovedRef.current = true;
+    const stackWidth = 56;
+    const stackHeight = 56 * (messageBubbles.length || 1) + 10 * (messageBubbles.length - 1);
+    let newX = e.clientX - dragOffsetRef.current.x;
+    let newY = e.clientY - dragOffsetRef.current.y;
+    newX = Math.max(4, Math.min(window.innerWidth - stackWidth - 4, newX));
+    newY = Math.max(4, Math.min(window.innerHeight - stackHeight - 4, newY));
+    setBubblePos({ x: newX, y: newY });
+  };
+
+  const handleDragEnd = () => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    setBubblePos((pos) => {
+      if (pos) localStorage.setItem('floatingBubblePos', JSON.stringify(pos));
+      return pos;
+    });
+    setTimeout(() => { dragMovedRef.current = false; }, 150);
+  };
+
+  const fallbackAvatar = (name) => `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name || 'Student')}`;
+
+  if (!currentUid) return null;
+
+  const bubbleContainerStyle = bubblePos
+    ? { position: 'fixed', left: `${bubblePos.x}px`, top: `${bubblePos.y}px`, zIndex: 1900, display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-end', touchAction: 'none' }
+    : { position: 'fixed', bottom: '20px', right: '16px', zIndex: 1900, display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-end', touchAction: 'none' };
+
+  return (
+    <>
+      {activeCall && (
+        <div style={{
+          position: 'fixed', top: '8px', left: '50%', transform: 'translateX(-50%)',
+          zIndex: 2000, background: '#0056b3', color: '#fff', borderRadius: '30px',
+          padding: '6px 14px', boxShadow: '0 6px 18px rgba(0,0,0,0.25)',
+          display: 'flex', alignItems: 'center', gap: '10px', maxWidth: '92vw'
+        }}>
+          <button onClick={handleDecline} title="Decline" style={{ background: '#dc3545', border: 'none', color: '#fff', width: '30px', height: '30px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <PhoneDeclineIcon />
+          </button>
+          <img src={(activeCall.hostPhoto && activeCall.hostPhoto.trim() !== "") ? activeCall.hostPhoto : fallbackAvatar(activeCall.hostName)} alt="" style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', flexShrink: 0 }} />
+          <span style={{ fontSize: '12px', fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            📞 {activeCall.hostName} {activeCall.type === 'global' ? 'started a conference' : 'is calling'}
+          </span>
+          <button onClick={handleReceive} title="Receive" style={{ background: '#28a745', border: 'none', color: '#fff', width: '30px', height: '30px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <PhoneAcceptIcon />
+          </button>
+        </div>
+      )}
+
+      {showMinimizedCallBubble && (
+        <button onClick={handleMinimizedCallClick} title={`Return to call with ${activeSession.otherName || 'Student'}`} style={{
+          position: 'fixed', top: '8px', left: '16px', zIndex: 1950,
+          background: '#28a745', border: 'none', borderRadius: '30px', padding: '5px 14px 5px 5px',
+          display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+          boxShadow: '0 6px 18px rgba(0,0,0,0.3)'
+        }}>
+          <img src={(activeSession.otherPhoto && activeSession.otherPhoto.trim() !== "") ? activeSession.otherPhoto : fallbackAvatar(activeSession.otherName)} alt="" style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', flexShrink: 0 }} />
+          <span style={{ color: '#fff', fontSize: '12px', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+            {activeSession.callType === 'audio' ? '🎙️' : '📹'} {activeSession.otherName || 'Student'}
+          </span>
+        </button>
+      )}
+
+      {activeGlobalSession && location.pathname !== '/chat/global/Global-Chatroom' && (
+        <button onClick={() => navigate('/chat/global/Global-Chatroom')} title="Return to the Global Room call" style={{
+          position: 'fixed', top: '8px', right: '16px', zIndex: 1950,
+          background: '#0056b3', border: 'none', borderRadius: '30px', padding: '5px 14px 5px 5px',
+          display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+          boxShadow: '0 6px 18px rgba(0,0,0,0.3)'
+        }}>
+          <span style={{ width: '30px', height: '30px', borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px', flexShrink: 0 }}>🌐</span>
+          <span style={{ color: '#fff', fontSize: '12px', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+            {activeGlobalSession.callType === 'audio' ? '🎙️' : '📹'} Global Room
+          </span>
+        </button>
+      )}
+
+      {messageBubbles.length > 0 && (
+        <div style={bubbleContainerStyle}>
+          {messageBubbles.map((bubble) => (
+            <button
+              key={bubble.roomId}
+              onPointerDown={handleDragStart}
+              onPointerMove={handleDragMove}
+              onPointerUp={handleDragEnd}
+              onClick={() => handleBubbleClick(bubble)}
+              title={`${bubble.senderName || 'Student'} — ${bubble.count} new message${bubble.count > 1 ? 's' : ''} (drag to move)`}
+              style={{
+                position: 'relative', width: '52px', height: '52px', borderRadius: '50%',
+                border: 'none', padding: 0, cursor: 'grab', boxShadow: '0 4px 14px rgba(0,0,0,0.3)', touchAction: 'none'
+              }}
+            >
+              <img src={(bubble.senderPhoto && bubble.senderPhoto.trim() !== "") ? bubble.senderPhoto : fallbackAvatar(bubble.senderName)} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover', border: '2px solid #0056b3', background: '#e4e6eb', display: 'block', pointerEvents: 'none' }} />
+              <span style={{
+                position: 'absolute', top: '-4px', right: '-4px', background: '#dc3545', color: '#fff',
+                fontSize: '11px', fontWeight: 'bold', minWidth: '20px', height: '20px', borderRadius: '10px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px', border: '2px solid #fff',
+                pointerEvents: 'none'
+              }}>
+                {bubble.count > 9 ? '9+' : bubble.count}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}

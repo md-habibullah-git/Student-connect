@@ -1,0 +1,1591 @@
+// File Name: src/pages/PersonalChat.jsx
+
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { db, auth } from '../firebase';
+import { isUserOnline } from '../presence';
+import { 
+  collection, addDoc, query, orderBy, onSnapshot, doc, 
+  setDoc, updateDoc, getDoc, getDocs, deleteDoc 
+} from 'firebase/firestore';
+import { getActiveCallSession, setActiveCallSession, clearActiveCallSession, subscribeActiveCallSession } from '../callSession';
+import { sendPushNotification, sendCallNotification, sendCancelCallNotification } from '../pushNotifications';
+import { FilePicker } from '@capawesome/capacitor-file-picker';
+
+const rtcConfiguration = {
+  iceServers: [
+    { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+  ],
+  iceCandidatePoolSize: 10,
+};
+
+const MAX_VOICE_BASE64_LENGTH = 1100000;
+const MAX_VIDEO_BASE64_LENGTH = 1100000;
+const MAX_VIDEO_RAW_BYTES = 750000;
+const MAX_RECORDING_SECONDS = 30;
+
+// ✅ createdAt যেকোনো format handle করে
+const toMillis = (createdAt) => {
+  if (!createdAt) return 0;
+  if (typeof createdAt === 'number') return createdAt;
+  if (typeof createdAt === 'string') return new Date(createdAt).getTime() || 0;
+  if (typeof createdAt.toMillis === 'function') return createdAt.toMillis();
+  if (createdAt.seconds) return createdAt.seconds * 1000;
+  return 0;
+};
+
+// ✅ Time Ago — কত সময় আগে পাঠানো হয়েছে
+const timeAgo = (createdAt) => {
+  const ms = toMillis(createdAt);
+  if (!ms) return '';
+  const seconds = Math.floor((Date.now() - ms) / 1000);
+  if (seconds < 10) return 'just now';
+  if (seconds < 60) return `${seconds} seconds ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} day${days > 1 ? 's' : ''} ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months > 1 ? 's' : ''} ago`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years > 1 ? 's' : ''} ago`;
+};
+
+// ✅ Audio Volume Boost Helper — Call stream-এর জন্য
+const createBoostedAudio = (stream, boostLevel = 10) => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = boostLevel;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    return audioCtx;
+  } catch (err) {
+    console.error('Volume boost error:', err);
+    return null;
+  }
+};
+
+// ✅ Voice Message Boost Helper — Audio element (src) থেকে boost
+const createBoostedAudioFromElement = (audioElement, boostLevel = 10) => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    const source = audioCtx.createMediaElementSource(audioElement);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = boostLevel;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    return audioCtx;
+  } catch (err) {
+    console.error('Voice message boost error:', err);
+    return null;
+  }
+};
+
+// ✅ VoiceMessageBubble — Play button-এ click করলে boost হবে
+function VoiceMessageBubble({ src, isMe }) {
+  const audioRef = useRef(null);
+  const canvasRef = useRef(null);
+  const analyserRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const rafRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  const activeBarColor = isMe ? 'rgba(255,255,255,0.95)' : '#0056b3';
+  const idleBarColor = isMe ? 'rgba(255,255,255,0.35)' : 'rgba(0,86,179,0.3)';
+
+  const drawIdleBars = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    const barCount = 24;
+    const barWidth = w / barCount - 2;
+    ctx.fillStyle = idleBarColor;
+    for (let i = 0; i < barCount; i++) {
+      const barHeight = 3 + Math.abs(Math.sin(i * 1.3)) * 5;
+      ctx.fillRect(i * (barWidth + 2), (h - barHeight) / 2, barWidth, barHeight);
+    }
+  };
+
+  const drawLiveBars = () => {
+    const canvas = canvasRef.current;
+    const analyser = analyserRef.current;
+    if (!canvas || !analyser) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyser.getByteFrequencyData(dataArray);
+
+    ctx.clearRect(0, 0, w, h);
+    const barCount = 24;
+    const step = Math.max(1, Math.floor(bufferLength / barCount));
+    const barWidth = w / barCount - 2;
+    ctx.fillStyle = activeBarColor;
+    for (let i = 0; i < barCount; i++) {
+      const value = dataArray[i * step] || 0;
+      const barHeight = Math.max(2, (value / 255) * h);
+      ctx.fillRect(i * (barWidth + 2), (h - barHeight) / 2, barWidth, barHeight);
+    }
+    rafRef.current = requestAnimationFrame(drawLiveBars);
+  };
+
+  useEffect(() => {
+    drawIdleBars();
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    };
+  }, []);
+
+  const togglePlay = () => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+    
+    if (!audioCtxRef.current) {
+      const audioCtx = createBoostedAudioFromElement(audioEl, 10);
+      if (audioCtx) {
+        audioCtxRef.current = audioCtx;
+      }
+    }
+    
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+    
+    if (isPlaying) {
+      audioEl.pause();
+    } else {
+      audioEl.play();
+    }
+  };
+
+  useEffect(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+    const onPlay = () => { setIsPlaying(true); drawLiveBars(); };
+    const onPause = () => { setIsPlaying(false); cancelAnimationFrame(rafRef.current); drawIdleBars(); };
+    const onEnded = () => { setIsPlaying(false); cancelAnimationFrame(rafRef.current); drawIdleBars(); setCurrentTime(0); };
+    const onLoaded = () => setDuration(audioEl.duration || 0);
+    const onTimeUpdate = () => setCurrentTime(audioEl.currentTime || 0);
+    audioEl.addEventListener('play', onPlay);
+    audioEl.addEventListener('pause', onPause);
+    audioEl.addEventListener('ended', onEnded);
+    audioEl.addEventListener('loadedmetadata', onLoaded);
+    audioEl.addEventListener('timeupdate', onTimeUpdate);
+    return () => {
+      audioEl.removeEventListener('play', onPlay);
+      audioEl.removeEventListener('pause', onPause);
+      audioEl.removeEventListener('ended', onEnded);
+      audioEl.removeEventListener('loadedmetadata', onLoaded);
+      audioEl.removeEventListener('timeupdate', onTimeUpdate);
+    };
+  }, []);
+
+  const formatTime = (secs) => {
+    if (!isFinite(secs) || secs < 0) return '0:00';
+    return `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`;
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', minWidth: '210px' }}>
+      <audio ref={audioRef} src={src} preload="metadata" style={{ display: 'none' }} />
+      <button type="button" onClick={togglePlay} style={{ width: '30px', height: '30px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: isMe ? 'rgba(255,255,255,0.25)' : 'rgba(0,86,179,0.12)', color: isMe ? '#fff' : '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '13px' }}>
+        {isPlaying ? '⏸️' : '▶️'}
+      </button>
+      <canvas ref={canvasRef} width={120} height={28} style={{ flex: 1 }} />
+      <span style={{ fontSize: '10px', opacity: 0.8, flexShrink: 0, minWidth: '30px', textAlign: 'right' }}>
+        {formatTime(isPlaying || currentTime > 0 ? currentTime : duration)}
+      </span>
+    </div>
+  );
+}
+
+export default function PersonalChat() {
+  const { receiverId, receiverName } = useParams(); 
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [usersCache, setUsersCache] = useState({}); 
+  
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [inCall, setInCall] = useState(false);
+  const [activeCallType, setActiveCallType] = useState('video');
+  const [activeMenuId, setActiveMenuId] = useState(null);
+  const [replyToMessage, setReplyToMessage] = useState(null);
+
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const discardRecordingRef = useRef(false);
+  const capturedReplyRef = useRef(null);
+  const maxDurationTimeoutRef = useRef(null);
+
+  const recordingCanvasRef = useRef(null);
+  const recordingAnalyserRef = useRef(null);
+  const recordingAudioCtxRef = useRef(null);
+  const recordingRafRef = useRef(null);
+
+  const [receiverOnline, setReceiverOnline] = useState(false);
+
+  // ✅ প্রতি মিনিটে re-render — time ago update করার জন্য
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const remoteAudioRef = useRef(null);
+  const remoteAudioCtxRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const unsubscribeCallSignalRef = useRef(null);
+  const unsubscribeCandidatesRef = useRef(null);
+  const callStartTimeRef = useRef(null);
+  const callHistorySavedRef = useRef(false);
+  const callAnsweredTimeRef = useRef(null);
+
+  const initialMessagesLoadedRef = useRef(false);
+
+  const [localDeletedIds, setLocalDeletedIds] = useState(() => {
+    const saved = localStorage.getItem(`deleted_msgs_${auth.currentUser?.uid || 'guest'}`);
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null); 
+
+  const currentUid = auth.currentUser?.uid || "unknown_user";
+  const currentUserName = auth.currentUser?.displayName || "Student";
+  const targetUid = receiverId || "unknown_receiver";
+
+  const chatRoomId = currentUid < targetUid 
+    ? `${currentUid}_${targetUid}` 
+    : `${targetUid}_${currentUid}`;
+
+  const formatDuration = (ms) => {
+    if (!ms) return '0:00';
+    const totalSeconds = Math.floor(ms / 1000);
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+  };
+
+  useEffect(() => {
+    const unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
+      const cache = {};
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        const uidKey = data.uid || doc.id;
+        if (uidKey) {
+          cache[uidKey] = data.photo || ""; 
+        }
+      });
+      setUsersCache(cache);
+    });
+
+    return () => unsubscribeUsers();
+  }, []);
+
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!targetUid) return;
+    const unsubscribePresence = onSnapshot(doc(db, "users", targetUid), (snap) => {
+      setReceiverOnline(snap.exists() && isUserOnline(snap.data()));
+    });
+    return () => unsubscribePresence();
+  }, [targetUid]);
+
+  useEffect(() => {
+    let interval;
+    if (isRecording) {
+      setRecordingSeconds(0);
+      interval = setInterval(() => setRecordingSeconds((s) => s + 1), 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isRecording]);
+
+  useEffect(() => {
+    if (location.state?.autoJoinCall) {
+      answerIncomingCall();
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state]);
+
+  useEffect(() => {
+    if (!receiverId) return;
+
+    initialMessagesLoadedRef.current = false;
+
+    const q = query(collection(db, "personal-rooms", chatRoomId, "messages"), orderBy("createdAt", "asc"));
+    const unsubscribeMsg = onSnapshot(q, (snapshot) => {
+      const newMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setMessages(newMessages);
+      scrollToBottom();
+
+      localStorage.setItem(`lastRead_personal_${chatRoomId}`, String(Date.now()));
+
+      if (initialMessagesLoadedRef.current) {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            const msgData = change.doc.data();
+            if (msgData.senderId !== currentUid && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+              new Notification(msgData.senderName || 'New message', {
+                body: msgData.isDeleted ? '' : (msgData.text || (msgData.fileType === 'audio' ? '🎤 Voice message' : (msgData.fileUrl ? '📷 Photo' : ''))),
+              });
+            }
+          }
+        });
+      } else {
+        initialMessagesLoadedRef.current = true;
+      }
+    });
+
+    const handleOutsideClick = () => setActiveMenuId(null);
+    window.addEventListener('click', handleOutsideClick);
+
+    return () => { 
+      unsubscribeMsg(); 
+      window.removeEventListener('click', handleOutsideClick);
+    };
+  }, [chatRoomId, receiverId, currentUid]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const saveCallHistory = async (callType, startedAt, endedAt, wasMissed = false) => {
+    if (callHistorySavedRef.current) return;
+    callHistorySavedRef.current = true;
+    
+    try {
+      const callTypeIcon = callType === 'audio' ? '🎙️' : '📹';
+      const callTypeLabel = callType === 'audio' ? 'Audio call' : 'Video call';
+      let callSummaryText;
+      
+      if (wasMissed) {
+        callSummaryText = `❌ You missed a ${callTypeLabel.toLowerCase()} • ${new Date(startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      } else {
+        const answerTime = callAnsweredTimeRef.current || startedAt;
+        const duration = endedAt - answerTime;
+        callSummaryText = `${callTypeIcon} ${callTypeLabel} • ${new Date(answerTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(endedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n📞 Call • ${formatDuration(duration)} min`;
+      }
+      
+      const roomRef = doc(db, "personal-rooms", chatRoomId);
+      await setDoc(roomRef, {
+        roomId: chatRoomId,
+        participants: [currentUid, targetUid],
+        lastActive: new Date().getTime(),
+        lastMessageText: callSummaryText,
+        lastMessageSenderId: 'system',
+        lastMessageSenderName: 'System',
+        lastMessageSenderPhoto: '',
+        lastMessageAt: new Date().getTime()
+      }, { merge: true });
+      
+      await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
+        text: callSummaryText,
+        senderId: 'system',
+        senderName: 'System',
+        senderPhoto: '',
+        createdAt: endedAt || startedAt,
+        isEdited: false,
+        isDeleted: false,
+        replyTo: null,
+        isCallSummary: true
+      });
+    } catch (err) {
+      console.error("Error saving call history:", err);
+    }
+  };
+
+  const sendMessagePushNotification = async (title, body) => {
+    try {
+      const receiverDoc = await getDoc(doc(db, "users", targetUid));
+      if (receiverDoc.exists()) {
+        const receiverData = receiverDoc.data();
+        if (receiverData.pushToken) {
+          await sendPushNotification(
+            receiverData.pushToken,
+            title,
+            body,
+            { type: 'message', senderId: currentUid, roomId: chatRoomId }
+          );
+        }
+      }
+    } catch (pushErr) {
+      console.error("Message push notification error:", pushErr);
+    }
+  };
+
+  const sendMessage = async (e) => {
+    e.preventDefault();
+    if (!input.trim() && selectedFiles.length === 0) return;
+
+    try {
+      const roomRef = doc(db, "personal-rooms", chatRoomId);
+      const latestPreviewText = input.trim() ? input.trim() : '📷 Photo';
+      await setDoc(roomRef, {
+        roomId: chatRoomId,
+        participants: [currentUid, targetUid],
+        lastActive: new Date().getTime(),
+        lastMessageText: latestPreviewText,
+        lastMessageSenderId: currentUid,
+        lastMessageSenderName: currentUserName,
+        lastMessageSenderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+        lastMessageAt: new Date().getTime()
+      }, { merge: true });
+
+      const replyData = replyToMessage ? {
+        text: replyToMessage.fileUrl ? "" : (replyToMessage.text || ""), 
+        fileUrl: replyToMessage.fileUrl || "", 
+        fileType: replyToMessage.fileType || "",
+        senderName: replyToMessage.senderName,
+        msgId: replyToMessage.id
+      } : null;
+
+      if (input.trim()) {
+        await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
+          text: input,
+          senderId: currentUid,
+          senderName: currentUserName,
+          senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+          createdAt: new Date().getTime(),
+          isEdited: false,
+          isDeleted: false,
+          replyTo: replyData
+        });
+
+        await sendMessagePushNotification(
+          'New Message 💬',
+          `${currentUserName}: ${input.trim()}`
+        );
+
+        setInput('');
+      }
+
+      if (selectedFiles.length > 0) {
+        await Promise.all(selectedFiles.map((fileData) =>
+          addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
+            text: "", 
+            fileUrl: fileData.url,
+            fileType: fileData.type,
+            senderId: currentUid,
+            senderName: currentUserName,
+            senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+            createdAt: new Date().getTime(),
+            isEdited: false,
+            isDeleted: false,
+            replyTo: replyData
+          })
+        ));
+
+        const fileCount = selectedFiles.length;
+        const firstType = selectedFiles[0]?.type;
+        const typeLabel = firstType === 'image' ? '📷 Photo' 
+                        : firstType === 'video' ? '🎥 Video' 
+                        : '📎 File';
+        const countLabel = fileCount > 1 ? ` (${fileCount})` : '';
+
+        await sendMessagePushNotification(
+          'New Message 💬',
+          `${currentUserName}: ${typeLabel}${countLabel}`
+        );
+      }
+
+      setSelectedFiles([]); 
+      setReplyToMessage(null); 
+    } catch (error) {
+      console.error("Error sending message:", error);
+    }
+  };
+
+  const handleEditMessage = async (msgId, currentText) => {
+    setActiveMenuId(null); 
+    const newText = prompt("Edit your private message:", currentText);
+    if (newText !== null && newText.trim() !== "") {
+      try {
+        const msgDocRef = doc(db, "personal-rooms", chatRoomId, "messages", msgId);
+        await updateDoc(msgDocRef, {
+          text: newText,
+          isEdited: true
+        });
+      } catch (error) {
+        console.error("Error editing message:", error);
+      }
+    }
+  };
+
+  const handleDeleteMessage = async (msgId, isSenderMe) => {
+    setActiveMenuId(null); 
+    if (window.confirm("Are you sure you want to delete this message?")) {
+      if (isSenderMe) {
+        try {
+          const msgDocRef = doc(db, "personal-rooms", chatRoomId, "messages", msgId);
+          await updateDoc(msgDocRef, { isDeleted: true });
+        } catch (error) {
+          console.error("Error deleting message globally:", error);
+        }
+      } else {
+        const updatedDeletedIds = [...localDeletedIds, msgId];
+        setLocalDeletedIds(updatedDeletedIds);
+        localStorage.setItem(`deleted_msgs_${currentUid}`, JSON.stringify(updatedDeletedIds));
+      }
+    }
+  };
+
+  const handleFileChange = async (e) => {
+    if (window.Capacitor?.isNativePlatform?.()) {
+      try {
+        const result = await FilePicker.pickFiles({
+          types: ['image/*', 'video/*'],
+          readData: true,
+          multiple: true,
+        });
+        
+        if (result && result.files && result.files.length > 0) {
+          for (const pickedFile of result.files) {
+            let blob = null;
+            const fileType = pickedFile.mimeType || 'image/jpeg';
+            const fileName = pickedFile.name || `file-${Date.now()}.jpg`;
+            
+            if (pickedFile.data) {
+              const base64Data = pickedFile.data.replace(/^data:.*;base64,/, '');
+              const byteCharacters = atob(base64Data);
+              const byteNumbers = new Array(byteCharacters.length);
+              for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+              }
+              const byteArray = new Uint8Array(byteNumbers);
+              blob = new Blob([byteArray], { type: fileType });
+            }
+            
+            if (!blob) continue;
+            
+            const file = new File([blob], fileName, { type: fileType });
+            
+            if (fileType.startsWith('image/')) {
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                  const canvas = document.createElement('canvas');
+                  const max_width = 800;
+                  const scaleResolution = max_width / img.width;
+                  canvas.width = max_width;
+                  canvas.height = img.height * scaleResolution;
+                  const ctx = canvas.getContext('2d');
+                  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                  const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+                  setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: compressedBase64, type: 'image' }]);
+                };
+                img.src = event.target.result;
+              };
+              reader.readAsDataURL(file);
+            } else if (fileType.startsWith('video/')) {
+              if (file.size > MAX_VIDEO_RAW_BYTES) {
+                alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`);
+                continue;
+              }
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                const base64Result = event.target.result;
+                if (base64Result.length > MAX_VIDEO_BASE64_LENGTH) {
+                  alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`);
+                  return;
+                }
+                setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: base64Result, type: 'video' }]);
+              };
+              reader.readAsDataURL(file);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("File picker error:", err);
+      }
+      return;
+    }
+    
+    if (!e.target.files || e.target.files.length === 0) return;
+    const filesArray = Array.from(e.target.files);
+
+    filesArray.forEach((file) => {
+      const fileName = file.name;
+      const fileType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'file');
+
+      if (fileType === 'image') {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const max_width = 800; 
+            const scaleResolution = max_width / img.width;
+            canvas.width = max_width;
+            canvas.height = img.height * scaleResolution;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+            setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: compressedBase64, type: 'image' }]);
+          };
+          img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+      } else if (fileType === 'video') {
+        if (file.size > MAX_VIDEO_RAW_BYTES) {
+          alert(`⚠️ "${fileName}" is too large to send as a video message (max ~750KB). Please choose a shorter/smaller clip.`);
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const base64Result = event.target.result;
+          if (base64Result.length > MAX_VIDEO_BASE64_LENGTH) {
+            alert(`⚠️ "${fileName}" is too large to send even after encoding. Please choose a shorter/smaller clip.`);
+            return;
+          }
+          setSelectedFiles((prev) => [...prev, { id: Date.now() + Math.random(), name: fileName, url: base64Result, type: 'video' }]);
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    e.target.value = null;
+  };
+
+  const removeSelectedFile = (id) => {
+    setSelectedFiles((prev) => prev.filter(file => file.id !== id));
+  };
+
+  const sendVoiceMessage = async (audioUrl) => {
+    try {
+      const roomRef = doc(db, "personal-rooms", chatRoomId);
+      const reply = capturedReplyRef.current;
+      const replyData = reply ? {
+        text: reply.fileUrl ? "" : (reply.text || ""),
+        fileUrl: reply.fileUrl || "",
+        fileType: reply.fileType || "",
+        senderName: reply.senderName,
+        msgId: reply.id
+      } : null;
+
+      await setDoc(roomRef, {
+        roomId: chatRoomId,
+        participants: [currentUid, targetUid],
+        lastActive: new Date().getTime(),
+        lastMessageText: '🎤 Voice message',
+        lastMessageSenderId: currentUid,
+        lastMessageSenderName: currentUserName,
+        lastMessageSenderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+        lastMessageAt: new Date().getTime()
+      }, { merge: true });
+
+      await addDoc(collection(db, "personal-rooms", chatRoomId, "messages"), {
+        text: "",
+        fileUrl: audioUrl,
+        fileType: 'audio',
+        senderId: currentUid,
+        senderName: currentUserName,
+        senderPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+        createdAt: new Date().getTime(),
+        isEdited: false,
+        isDeleted: false,
+        replyTo: replyData
+      });
+
+      await sendMessagePushNotification(
+        '🎤 Voice Message',
+        `${currentUserName} sent a voice message`
+      );
+
+      setReplyToMessage(null);
+      capturedReplyRef.current = null;
+    } catch (error) {
+      console.error("Error sending voice message:", error);
+    }
+  };
+
+  const drawRecordingBars = () => {
+    const canvas = recordingCanvasRef.current;
+    const analyser = recordingAnalyserRef.current;
+    if (!canvas || !analyser) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyser.getByteFrequencyData(dataArray);
+
+    ctx.clearRect(0, 0, w, h);
+    const barCount = 28;
+    const step = Math.max(1, Math.floor(bufferLength / barCount));
+    const barWidth = w / barCount - 2;
+    ctx.fillStyle = '#dc3545';
+    for (let i = 0; i < barCount; i++) {
+      const value = dataArray[i * step] || 0;
+      const barHeight = Math.max(2, (value / 255) * h);
+      ctx.fillRect(i * (barWidth + 2), (h - barHeight) / 2, barWidth, barHeight);
+    }
+    recordingRafRef.current = requestAnimationFrame(drawRecordingBars);
+  };
+
+  const stopRecordingVisualizer = () => {
+    cancelAnimationFrame(recordingRafRef.current);
+    if (recordingAudioCtxRef.current) {
+      recordingAudioCtxRef.current.close().catch(() => {});
+      recordingAudioCtxRef.current = null;
+    }
+    recordingAnalyserRef.current = null;
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      });
+
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContextClass();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64;
+        source.connect(analyser);
+        recordingAudioCtxRef.current = audioCtx;
+        recordingAnalyserRef.current = analyser;
+        drawRecordingBars();
+      } catch {}
+
+      let recorderOptions = { audioBitsPerSecond: 128000 };
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        recorderOptions.mimeType = 'audio/webm;codecs=opus';
+      }
+      const recorder = new MediaRecorder(stream, recorderOptions);
+      audioChunksRef.current = [];
+      discardRecordingRef.current = false;
+      capturedReplyRef.current = replyToMessage;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      recorder.onstop = () => {
+        stream.getTracks().forEach(track => track.stop());
+        stopRecordingVisualizer();
+        clearTimeout(maxDurationTimeoutRef.current);
+
+        if (discardRecordingRef.current) {
+          audioChunksRef.current = [];
+          return;
+        }
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const audioUrl = event.target.result;
+          if (audioUrl.length > MAX_VOICE_BASE64_LENGTH) {
+            alert("This voice message is too large to send, even after compression. Please record a shorter message.");
+            return;
+          }
+          sendVoiceMessage(audioUrl);
+        };
+        reader.readAsDataURL(audioBlob);
+      };
+
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+
+      maxDurationTimeoutRef.current = setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          discardRecordingRef.current = true;
+          mediaRecorderRef.current.stop();
+          setIsRecording(false);
+          alert("Voice messages can be up to 30 seconds long. Recording has been stopped and discarded — please try again.");
+        }
+      }, MAX_RECORDING_SECONDS * 1000);
+    } catch (error) {
+      console.error("Microphone access error:", error);
+      alert("🎤 Microphone access was denied or is unavailable.");
+    }
+  };
+
+  const stopAndSendRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      clearTimeout(maxDurationTimeoutRef.current);
+      discardRecordingRef.current = false;
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      clearTimeout(maxDurationTimeoutRef.current);
+      discardRecordingRef.current = true;
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const renderMessageText = (text) => {
+    const urlPattern = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlPattern);
+    return parts.map((part, i) =>
+      urlPattern.test(part) ? (
+        <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline', wordBreak: 'break-all' }}>
+          {part}
+        </a>
+      ) : (
+        <React.Fragment key={i}>{part}</React.Fragment>
+      )
+    );
+  };
+
+  const registerPeerConnectionListeners = (pc) => {
+    pc.addEventListener('icegatheringstatechange', () => {});
+    pc.addEventListener('connectionstatechange', () => {});
+    pc.addEventListener('signalingstatechange', () => {});
+    pc.addEventListener('iceconnectionstatechange', () => {});
+  };
+
+  const cleanupCallLocally = () => {
+    if (unsubscribeCallSignalRef.current) { unsubscribeCallSignalRef.current(); unsubscribeCallSignalRef.current = null; }
+    if (unsubscribeCandidatesRef.current) { unsubscribeCandidatesRef.current(); unsubscribeCandidatesRef.current = null; }
+    if (remoteAudioCtxRef.current) { remoteAudioCtxRef.current.close().catch(() => {}); remoteAudioCtxRef.current = null; }
+    if (peerConnectionRef.current) { peerConnectionRef.current.close(); peerConnectionRef.current = null; }
+    if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
+    if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach(track => track.stop()); remoteStreamRef.current = null; }
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+    clearActiveCallSession();
+  };
+
+  useEffect(() => {
+    const existing = getActiveCallSession();
+    if (existing && existing.type === 'personal' && existing.chatRoomId === chatRoomId) {
+      peerConnectionRef.current = existing.peerConnection;
+      localStreamRef.current = existing.localStream;
+      remoteStreamRef.current = existing.remoteStream;
+      setActiveCallType(existing.callType);
+      setInCall(true);
+    }
+  }, [chatRoomId]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeActiveCallSession((session) => {
+      if (!session || session.chatRoomId !== chatRoomId) {
+        peerConnectionRef.current = null;
+        localStreamRef.current = null;
+        remoteStreamRef.current = null;
+        if (localVideoRef.current) localVideoRef.current.srcObject = null;
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+        if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+        setInCall(false);
+        setActiveCallType('video');
+      }
+    });
+    return unsubscribe;
+  }, [chatRoomId]);
+
+  useEffect(() => {
+    if (inCall) {
+      if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current;
+      if (remoteVideoRef.current && remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      if (remoteAudioRef.current && remoteStreamRef.current) {
+        remoteAudioRef.current.srcObject = remoteStreamRef.current;
+        remoteAudioRef.current.play().catch(() => {});
+        
+        if (!remoteAudioCtxRef.current) {
+          remoteAudioCtxRef.current = createBoostedAudio(remoteStreamRef.current, 10);
+        }
+      }
+    }
+  }, [inCall]);
+
+  const initiateCall = async (callType = 'video') => {
+    try {
+      cleanupCallLocally();
+      callHistorySavedRef.current = false;
+      callAnsweredTimeRef.current = null;
+      
+      const pc = new RTCPeerConnection(rtcConfiguration);
+      peerConnectionRef.current = pc;
+      registerPeerConnectionListeners(pc);
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
+      localStreamRef.current = stream;
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      remoteStreamRef.current = new MediaStream();
+      pc.addEventListener('track', (event) => {
+        event.streams[0].getTracks().forEach(track => remoteStreamRef.current.addTrack(track));
+      });
+
+      const callRef = doc(db, "personal-connections", chatRoomId);
+      const callerCandidatesRef = collection(callRef, "callerCandidates");
+      pc.addEventListener('icecandidate', (event) => {
+        if (event.candidate) addDoc(callerCandidatesRef, event.candidate.toJSON());
+      });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const startedAt = new Date().getTime();
+      callStartTimeRef.current = startedAt;
+
+      await setDoc(callRef, {
+        status: "ringing",
+        callType,
+        hostName: currentUserName,
+        hostId: currentUid,
+        hostPhoto: usersCache[currentUid] || auth.currentUser?.photoURL || "",
+        receiverId: targetUid,
+        receiverName: receiverName,
+        participants: [currentUid, targetUid],
+        roomId: chatRoomId,
+        callStartedAt: startedAt,
+        offer: { type: offer.type, sdp: offer.sdp }
+      });
+
+      try {
+        const receiverDoc = await getDoc(doc(db, "users", targetUid));
+        if (receiverDoc.exists()) {
+          const receiverData = receiverDoc.data();
+          if (receiverData.pushToken) {
+            await sendCallNotification(
+              receiverData.pushToken,
+              currentUserName,
+              callType,
+              chatRoomId
+            );
+          }
+        }
+      } catch (pushErr) {
+        console.error("Call notification error:", pushErr);
+      }
+
+      unsubscribeCallSignalRef.current = onSnapshot(callRef, async (snap) => {
+        const data = snap.data();
+        if (!snap.exists()) {
+          cleanupCallLocally();
+          setInCall(false);
+          setActiveCallType('video');
+          return;
+        }
+        if (data.answer && pc.signalingState !== 'closed' && !pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          if (!callAnsweredTimeRef.current) {
+            callAnsweredTimeRef.current = new Date().getTime();
+          }
+        }
+        if (data.status === 'ended') {
+          cleanupCallLocally();
+          setInCall(false);
+          setActiveCallType('video');
+        }
+        if (data.status === 'missed') {
+          const endedAt = new Date().getTime();
+          await saveCallHistory(callType, startedAt, endedAt, true);
+          cleanupCallLocally();
+          setInCall(false);
+          setActiveCallType('video');
+        }
+      });
+
+      const calleeCandidatesRef = collection(callRef, "calleeCandidates");
+      unsubscribeCandidatesRef.current = onSnapshot(calleeCandidatesRef, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
+          }
+        });
+      });
+
+      setActiveCallType(callType);
+      setInCall(true);
+      setActiveCallSession({
+        type: 'personal', chatRoomId, otherUid: targetUid, otherName: receiverName,
+        otherPhoto: usersCache[targetUid] || '', callType,
+        peerConnection: pc, localStream: stream, remoteStream: remoteStreamRef.current,
+      });
+    } catch (err) {
+      console.error("Error starting call:", err);
+      alert("🎤 Could not start the call. Camera/microphone permission may be needed.");
+      cleanupCallLocally();
+    }
+  };
+
+  const answerIncomingCall = async () => {
+    try {
+      cleanupCallLocally();
+      callHistorySavedRef.current = false;
+      callAnsweredTimeRef.current = null;
+      
+      const callRef = doc(db, "personal-connections", chatRoomId);
+      const callSnap = await getDoc(callRef);
+      if (!callSnap.exists() || !callSnap.data().offer) {
+        return;
+      }
+      const callData = callSnap.data();
+      const offer = callData.offer;
+      const callType = callData.callType || 'video';
+      const startedAt = callData.callStartedAt || new Date().getTime();
+      callStartTimeRef.current = startedAt;
+
+      const pc = new RTCPeerConnection(rtcConfiguration);
+      peerConnectionRef.current = pc;
+      registerPeerConnectionListeners(pc);
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
+      localStreamRef.current = stream;
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      remoteStreamRef.current = new MediaStream();
+      pc.addEventListener('track', (event) => {
+        event.streams[0].getTracks().forEach(track => remoteStreamRef.current.addTrack(track));
+      });
+
+      const calleeCandidatesRef = collection(callRef, "calleeCandidates");
+      pc.addEventListener('icecandidate', (event) => {
+        if (event.candidate) addDoc(calleeCandidatesRef, event.candidate.toJSON());
+      });
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      callAnsweredTimeRef.current = new Date().getTime();
+
+      await updateDoc(callRef, {
+        status: "accepted",
+        answer: { type: answer.type, sdp: answer.sdp }
+      });
+
+      const callerCandidatesRef = collection(callRef, "callerCandidates");
+      unsubscribeCandidatesRef.current = onSnapshot(callerCandidatesRef, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
+          }
+        });
+      });
+
+      unsubscribeCallSignalRef.current = onSnapshot(callRef, (snap) => {
+        if (!snap.exists()) {
+          cleanupCallLocally();
+          setInCall(false);
+          setActiveCallType('video');
+          return;
+        }
+        if (snap.data()?.status === 'ended') {
+          const endedAt = new Date().getTime();
+          saveCallHistory(callType, startedAt, endedAt, false);
+          cleanupCallLocally();
+          setInCall(false);
+          setActiveCallType('video');
+        }
+      });
+
+      setActiveCallType(callType);
+      setInCall(true);
+      setActiveCallSession({
+        type: 'personal', chatRoomId, otherUid: targetUid, otherName: receiverName,
+        otherPhoto: usersCache[targetUid] || '', callType,
+        peerConnection: pc, localStream: stream, remoteStream: remoteStreamRef.current,
+      });
+    } catch (err) {
+      console.error("Error answering call:", err);
+      alert("🎤 Could not join the call. Camera/microphone permission may be needed.");
+      cleanupCallLocally();
+    }
+  };
+
+  const endCall = async () => {
+    const callRef = doc(db, "personal-connections", chatRoomId);
+    const startedAt = callStartTimeRef.current || new Date().getTime();
+    const endedAt = new Date().getTime();
+    const callType = activeCallType;
+    
+    try {
+      if (targetUid && chatRoomId) {
+        const receiverDoc = await getDoc(doc(db, "users", targetUid));
+        if (receiverDoc.exists()) {
+          const receiverData = receiverDoc.data();
+          if (receiverData.pushToken) {
+            await sendCancelCallNotification(receiverData.pushToken, chatRoomId);
+          }
+        }
+      }
+    } catch (cancelErr) {
+      console.error("❌ Cancel notification error:", cancelErr);
+    }
+    
+    try {
+      const callSnap = await getDoc(callRef);
+      if (callSnap.exists()) {
+        const callData = callSnap.data();
+        const wasAnswered = callData.answer ? true : false;
+        const isCaller = callData.hostId === currentUid;
+        
+        const [callerCandidates, calleeCandidates] = await Promise.all([
+          getDocs(collection(callRef, "callerCandidates")),
+          getDocs(collection(callRef, "calleeCandidates"))
+        ]);
+        await Promise.all([
+          ...callerCandidates.docs.map(c => deleteDoc(c.ref)),
+          ...calleeCandidates.docs.map(c => deleteDoc(c.ref))
+        ]);
+        
+        if (wasAnswered) {
+          if (!isCaller) {
+            await saveCallHistory(callType, startedAt, endedAt, false);
+          }
+          await updateDoc(callRef, { status: "ended" }).catch(() => {});
+        } else {
+          if (isCaller) {
+            await saveCallHistory(callType, startedAt, endedAt, true);
+          }
+          await updateDoc(callRef, { status: "missed", answer: false }).catch(() => {});
+        }
+        
+        await deleteDoc(callRef).catch(() => {});
+      }
+    } catch (err) {
+      console.error("Error ending call:", err);
+    }
+    
+    cleanupCallLocally();
+    setInCall(false);
+    setActiveCallType('video');
+  };
+
+  const toggleMenu = (e, msgId) => {
+    e.stopPropagation();
+    setActiveMenuId(activeMenuId === msgId ? null : msgId);
+  };
+
+  const MicIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+      <line x1="12" y1="19" x2="12" y2="23"></line>
+      <line x1="8" y1="23" x2="16" y2="23"></line>
+    </svg>
+  );
+
+  const HangUpIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-1 1c-1.24 0-2.45-.2-3.57-.57a1 1 0 0 1-.68-.95v-3.5a1 1 0 0 1 .74-.97A17.9 17.9 0 0 1 12 7c1.99 0 3.91.31 5.71.88a1 1 0 0 1 .74.97v3.5a1 1 0 0 1-.68.95 11.9 11.9 0 0 1-3.57.57 1 1 0 0 1-1-1v-3.1A17.9 17.9 0 0 0 12 9z" />
+    </svg>
+  );
+
+  const VideoCallIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="23 7 16 12 23 17 23 7"></polygon>
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+    </svg>
+  );
+
+  const AudioCallIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path>
+    </svg>
+  );
+
+  const formatRecordingTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+
+  return (
+    <div style={{ 
+      maxWidth: '600px', margin: '0 auto', fontFamily: 'inherit', height: 'calc(100vh - 60px)', 
+      display: 'flex', flexDirection: 'column', background: 'var(--fb-bg)', 
+      border: '1px solid var(--fb-card-border-subtle)', borderRadius: '8px', 
+      boxShadow: 'var(--fb-shadow)', overflow: 'hidden', position: 'relative'
+    }}>
+      
+      <style>{`
+        .dynamic-chat-input { color: var(--fb-text) !important; }
+        .dynamic-chat-input::placeholder { color: var(--fb-text-secondary) !important; opacity: 0.7; }
+        
+        .threedot-dropdown-menu {
+          position: absolute; bottom: 100%; right: 0; background: var(--fb-card); 
+          border: 1px solid var(--fb-card-border); border-radius: 8px; box-shadow: var(--fb-shadow-md);
+          padding: 5px 0; z-index: 10; min-width: 100px; text-align: left; display: flex; flex-direction: column;
+        }
+        .threedot-menu-item {
+          background: none; border: none; padding: 6px 12px; font-size: 12px;
+          cursor: pointer; text-align: left; width: 100%; font-weight: 600;
+          color: var(--fb-text);
+        }
+        .threedot-menu-item.reply-btn { color: var(--fb-green); }
+        .threedot-menu-item.edit-btn { color: var(--fb-blue); }
+        .threedot-menu-item.delete-btn { color: var(--fb-red); }
+        .threedot-menu-item:hover { background: var(--fb-hover); }
+
+        @keyframes recordPulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }
+        .recording-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--fb-red); animation: recordPulse 1.2s infinite; display: inline-block; flex-shrink: 0; }
+        .recording-label { color: var(--fb-red) !important; font-weight: bold; font-size: 13px; }
+        .call-summary-msg { background: var(--fb-card) !important; border: 1px solid var(--fb-card-border) !important; text-align: center; color: var(--fb-text-secondary); }
+      `}</style>
+
+      {/* ── FB Lite Messenger Chat Header ── */}
+      <div style={{
+        padding: '10px 14px',
+        background: 'var(--fb-header, #1877f2)',
+        color: '#ffffff',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            onClick={() => navigate(-1)}
+            style={{
+              background: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              color: '#ffffff',
+              width: '32px',
+              height: '32px',
+              borderRadius: '50%',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '15px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0
+            }}
+          >
+            ←
+          </button>
+
+          <div
+            onClick={() => navigate(`/profile/${targetUid}`)}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
+          >
+            <div style={{ position: 'relative' }}>
+              <img
+                src={(usersCache[targetUid] && usersCache[targetUid].trim() !== '') ? usersCache[targetUid] : `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(receiverName || 'Student')}`}
+                alt=""
+                style={{ width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover', border: '1.5px solid #ffffff' }}
+              />
+              {receiverOnline && <span className="online-dot" style={{ border: '2px solid #1877f2' }} />}
+            </div>
+
+            <div>
+              <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '700', color: '#ffffff', lineHeight: 1.2 }}>{receiverName}</h3>
+              <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.85)' }}>
+                {receiverOnline ? 'Active now' : 'Offline'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {!inCall && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              onClick={() => initiateCall('audio')}
+              title="Voice call"
+              style={{
+                background: 'rgba(255,255,255,0.2)',
+                color: '#ffffff',
+                border: 'none',
+                width: '34px',
+                height: '34px',
+                borderRadius: '50%',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+            >
+              <AudioCallIcon />
+            </button>
+            <button
+              onClick={() => initiateCall('video')}
+              title="Video call"
+              style={{
+                background: 'rgba(255,255,255,0.2)',
+                color: '#ffffff',
+                border: 'none',
+                width: '34px',
+                height: '34px',
+                borderRadius: '50%',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+            >
+              <VideoCallIcon />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {inCall ? (
+        <div style={{ width: '100%', height: 'calc(100% - 5px)', background: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+          <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
+          <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }} />
+          {activeCallType === 'audio' && (
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', color: '#fff', background: '#111' }}>
+              <div style={{ width: '90px', height: '90px', borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '34px' }}>🎙️</div>
+              <p style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>Audio call with {receiverName}</p>
+            </div>
+          )}
+          <video ref={localVideoRef} autoPlay playsInline muted style={{ position: 'absolute', bottom: '16px', right: '16px', width: '110px', height: '150px', objectFit: 'cover', borderRadius: '10px', border: '2px solid #fff', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', background: '#000', display: activeCallType === 'audio' ? 'none' : 'block' }} />
+          <button
+            onClick={endCall}
+            title="Hang up"
+            style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: '#dc3545', color: '#fff', border: 'none', width: '56px', height: '56px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.45)' }}
+          >
+            <HangUpIcon />
+          </button>
+        </div>
+      ) : (
+        <>
+          <div style={{ 
+            flex: 1, padding: '16px 14px', overflowY: 'auto', background: 'var(--fb-card)', 
+            display: 'flex', flexDirection: 'column', gap: '10px' 
+          }}>
+            {messages.map((getMsg) => {
+              if (localDeletedIds.includes(getMsg.id)) return null;
+
+              const isMe = getMsg.senderId === currentUid;
+              const isSystem = getMsg.isCallSummary === true;
+              const firestoreProfilePhoto = usersCache[getMsg.senderId] || getMsg.senderPhoto;
+              const defaultFallbackAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(getMsg.senderName || 'Student')}&backgroundColor=1877f2`;
+
+              if (isSystem) {
+                return (
+                  <div key={getMsg.id} style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div className="call-summary-msg" style={{ 
+                      padding: '8px 14px', 
+                      borderRadius: '12px', 
+                      fontSize: '12px', 
+                      whiteSpace: 'pre-line',
+                      background: 'var(--fb-hover)',
+                      border: '1px solid var(--fb-card-border-subtle)',
+                      textAlign: 'center',
+                      maxWidth: '85%'
+                    }}>
+                      {getMsg.text}
+                      <div style={{ fontSize: '10px', opacity: 0.6, marginTop: '3px' }}>
+                        {timeAgo(getMsg.createdAt)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div key={getMsg.id} style={{ display: 'flex', flexDirection: isMe ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: '8px' }}>
+                  
+                  <img 
+                    src={firestoreProfilePhoto && firestoreProfilePhoto.trim() !== "" ? firestoreProfilePhoto : defaultFallbackAvatar} 
+                    alt="Profile" 
+                    onClick={() => navigate(`/profile/${getMsg.senderId}`)}
+                    onError={(e) => { e.target.onerror = null; e.target.src = defaultFallbackAvatar; }}
+                    style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover', background: 'var(--fb-hover)', flexShrink: 0, cursor: 'pointer' }} 
+                  />
+                  <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
+                    
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexDirection: isMe ? 'row-reverse' : 'row' }}>
+                      
+                      <div style={{ 
+                        background: getMsg.isDeleted ? 'var(--fb-hover)' : (isMe ? 'var(--fb-chat-me, #0084ff)' : 'var(--fb-chat-them, #e4e6eb)'), 
+                        color: getMsg.isDeleted ? 'var(--fb-text-muted)' : (isMe ? '#ffffff' : 'var(--fb-chat-them-text, #050505)'), 
+                        padding: (getMsg.fileUrl || getMsg.fileType === 'audio') ? '4px' : '9px 14px', 
+                        borderRadius: isMe ? '18px 18px 4px 18px' : '18px 18px 18px 4px', 
+                        fontSize: '14px', border: 'none', wordBreak: 'break-word',
+                        display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden'
+                      }}>
+                        
+                        {getMsg.isDeleted ? (
+                          <p style={{ margin: 0, fontStyle: 'italic', fontSize: '12px', padding: '8px 12px' }}>🚫 This message was deleted</p>
+                        ) : (
+                          <>
+                            {getMsg.replyTo && (
+                              <div style={{ background: isMe ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.06)', padding: '5px 8px', borderRadius: '6px', borderLeft: '3px solid #1877f2', fontSize: '11px', margin: getMsg.fileUrl ? '4px 4px 0 4px' : '0 0 2px 0', color: isMe ? '#ffeb3b' : 'var(--fb-text)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '240px' }}>
+                                {getMsg.replyTo.fileUrl && getMsg.replyTo.fileType !== 'audio' && <img src={getMsg.replyTo.fileUrl} alt="Reply preview" style={{ width: '32px', height: '32px', objectFit: 'cover', borderRadius: '4px', flexShrink: 0 }} />}
+                                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  <strong style={{ color: isMe ? '#fff' : 'var(--fb-blue)', display: 'block', fontSize: '10px', fontStyle: 'normal' }}>↩️ {getMsg.replyTo.senderName}:</strong>
+                                  {getMsg.replyTo.text || (getMsg.replyTo.fileType === 'audio' ? "🎤 Voice message" : (getMsg.replyTo.fileUrl ? "📷 Photo" : ""))}
+                                </div>
+                              </div>
+                            )}
+
+                            {getMsg.fileUrl && getMsg.fileType === 'image' && (
+                              <img src={getMsg.fileUrl} alt="Shared" style={{ maxWidth: '100%', width: '280px', borderRadius: '12px', maxHeight: '320px', objectFit: 'cover', display: 'block' }} />
+                            )}
+
+                            {getMsg.fileUrl && getMsg.fileType === 'video' && (
+                              <video src={getMsg.fileUrl} controls style={{ maxWidth: '100%', width: '280px', borderRadius: '12px', maxHeight: '300px', display: 'block' }} />
+                            )}
+
+                            {getMsg.fileUrl && getMsg.fileType === 'audio' && (
+                              <VoiceMessageBubble src={getMsg.fileUrl} isMe={isMe} />
+                            )}
+
+                            {getMsg.text && (
+                              <p style={{ margin: 0, fontSize: '14px', textAlign: 'left', lineHeight: '1.4' }}>
+                                {renderMessageText(getMsg.text)}
+                                {getMsg.isEdited && <span style={{ fontSize: '10px', opacity: 0.7, marginLeft: '4px', fontStyle: 'italic' }}>(edited)</span>}
+                              </p>
+                            )}
+
+                            {/* ✅ Time Stamp */}
+                            <div style={{ fontSize: '10px', opacity: 0.75, textAlign: isMe ? 'right' : 'left', marginTop: '1px' }}>
+                              {timeAgo(getMsg.createdAt)}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {!getMsg.isDeleted && !isSystem && (
+                        <div style={{ position: 'relative' }}>
+                          <span 
+                            onClick={(e) => toggleMenu(e, getMsg.id)}
+                            style={{ fontSize: '16px', color: 'var(--fb-text-muted)', cursor: 'pointer', padding: '0 4px', userSelect: 'none', fontWeight: 'bold' }}
+                          >
+                            ⋮
+                          </span>
+                          {activeMenuId === getMsg.id && (
+                            <div className="threedot-dropdown-menu">
+                              <button type="button" className="threedot-menu-item reply-btn" onClick={() => { setReplyToMessage(getMsg); setActiveMenuId(null); }}>↩️ Reply</button>
+                              {isMe && !getMsg.fileUrl && <button type="button" className="threedot-menu-item edit-btn" onClick={() => handleEditMessage(getMsg.id, getMsg.text)}>✏️ Edit</button>}
+                              <button type="button" className="threedot-menu-item delete-btn" onClick={() => handleDeleteMessage(getMsg.id, isMe)}>🗑️ Delete</button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <form onSubmit={sendMessage} style={{ padding: '8px 12px', background: 'var(--fb-card)', borderTop: '1px solid var(--fb-divider)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {replyToMessage && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'var(--fb-hover)', borderLeft: '3px solid var(--fb-blue)', borderRadius: '6px', fontSize: '12px' }}>
+                <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {replyToMessage.fileUrl && replyToMessage.fileType !== 'audio' && <img src={replyToMessage.fileUrl} alt="Reply" style={{ width: '28px', height: '28px', objectFit: 'cover', borderRadius: '4px' }} />}
+                  <div>
+                    <span style={{ fontWeight: 'bold', color: 'var(--fb-blue)' }}>↩️ Replying to {replyToMessage.senderName}: </span>
+                    <span style={{ color: 'var(--fb-text-secondary)', fontStyle: 'italic' }}>{replyToMessage.text || (replyToMessage.fileType === 'audio' ? "🎤 Voice message" : (replyToMessage.fileUrl ? "📷 Photo" : ""))}</span>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setReplyToMessage(null)} style={{ background: 'none', border: 'none', color: 'var(--fb-red)', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>✕</button>
+              </div>
+            )}
+
+            {selectedFiles.length > 0 && (
+              <div style={{ display: 'flex', gap: '8px', padding: '6px 8px', background: 'var(--fb-hover)', borderRadius: '8px', overflowX: 'auto', alignItems: 'center' }}>
+                {selectedFiles.map((file) => (
+                  <div key={file.id} style={{ position: 'relative', width: '50px', height: '50px', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--fb-blue)' }}>
+                    <img src={file.url} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <button type="button" onClick={() => removeSelectedFile(file.id)} style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(0,0,0,0.7)', color: '#fff', border: 'none', width: '16px', height: '16px', borderRadius: '50%', fontSize: '9px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileChange} 
+              multiple 
+              style={{ display: 'none' }} 
+            />
+
+            {isRecording ? (
+              <div style={{ display: 'flex', alignItems: 'center', background: 'var(--fb-input-bg)', borderRadius: '24px', padding: '3px 8px', border: '1px solid var(--fb-red)' }}>
+                <button
+                  type="button"
+                  onClick={cancelRecording}
+                  title="Cancel recording"
+                  style={{ background: 'rgba(250, 56, 62, 0.15)', color: 'var(--fb-red)', border: 'none', width: '32px', height: '32px', borderRadius: '50%', cursor: 'pointer', fontSize: '14px', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '6px', flexShrink: 0 }}
+                >
+                  🗑️
+                </button>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0' }}>
+                  <span className="recording-dot" />
+                  <canvas ref={recordingCanvasRef} width={120} height={24} style={{ flex: 1 }} />
+                  <span className="recording-label">{formatRecordingTime(recordingSeconds)}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={stopAndSendRecording}
+                  title="Send voice message"
+                  style={{ background: 'var(--fb-blue)', color: '#fff', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}
+                >
+                  ➤
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', background: 'var(--fb-input-bg)', borderRadius: '24px', padding: '2px 6px', border: '1px solid var(--fb-card-border-subtle)' }}>
+                <button type="button" onClick={() => {
+                  if (window.Capacitor?.isNativePlatform?.()) {
+                    handleFileChange();
+                  } else {
+                    fileInputRef.current?.click();
+                  }
+                }} style={{ background: 'none', color: 'var(--fb-blue)', border: 'none', width: '32px', height: '32px', borderRadius: '50%', cursor: 'pointer', fontSize: '18px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}>➕</button>
+
+                <button
+                  type="button"
+                  onClick={startRecording}
+                  title="Record a voice message"
+                  style={{ background: 'none', color: 'var(--fb-blue)', border: 'none', width: '32px', height: '32px', borderRadius: '50%', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', marginRight: '4px', flexShrink: 0 }}
+                >
+                  <MicIcon />
+                </button>
+
+                <input type="text" className="dynamic-chat-input" placeholder="Aa" value={input} onChange={(e) => setInput(e.target.value)} style={{ flex: 1, padding: '8px 4px', border: 'none', outline: 'none', fontSize: '14px', background: 'transparent' }} />
+                <button type="submit" style={{ background: 'none', color: input.trim() || selectedFiles.length > 0 ? 'var(--fb-blue)' : 'var(--fb-text-muted)', border: 'none', width: '34px', height: '34px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}>➤</button>
+              </div>
+            )}
+          </form>
+        </>
+      )}
+    </div>
+  );
+}
