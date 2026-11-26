@@ -355,7 +355,9 @@ export default function PersonalChat() {
       setMessages(newMessages);
       scrollToBottom();
 
-      localStorage.setItem(`lastRead_personal_${chatRoomId}`, String(Date.now()));
+      const latestMsgTime = newMessages.length > 0 ? toMillis(newMessages[newMessages.length - 1].createdAt) : 0;
+      localStorage.setItem(`lastRead_personal_${chatRoomId}`, String(Math.max(Date.now(), latestMsgTime)));
+      window.dispatchEvent(new CustomEvent('unreadReadUpdated'));
 
       if (initialMessagesLoadedRef.current) {
         snapshot.docChanges().forEach((change) => {
@@ -383,7 +385,7 @@ export default function PersonalChat() {
   }, [chatRoomId, receiverId, currentUid]);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   };
 
   useEffect(() => {
@@ -1328,7 +1330,7 @@ export default function PersonalChat() {
 
   return (
     <div style={{ 
-      maxWidth: '600px', margin: '0 auto', fontFamily: 'inherit', height: 'calc(100vh - 60px)', 
+      maxWidth: '600px', margin: '0 auto', fontFamily: 'inherit', height: 'calc(100dvh - 88px)', maxHeight: 'calc(100dvh - 88px)',
       display: 'flex', flexDirection: 'column', background: 'var(--fb-bg)', 
       border: '1px solid var(--fb-card-border-subtle)', borderRadius: '8px', 
       boxShadow: 'var(--fb-shadow)', overflow: 'hidden', position: 'relative'
@@ -1367,7 +1369,11 @@ export default function PersonalChat() {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+        position: 'sticky',
+        top: 0,
+        zIndex: 30,
+        flexShrink: 0
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
@@ -1606,7 +1612,7 @@ export default function PersonalChat() {
       ) : (
         <>
           <div style={{ 
-            flex: 1, padding: '16px 14px', overflowY: 'auto', background: 'var(--fb-card)', 
+            flex: 1, minHeight: 0, padding: '16px 14px', overflowY: 'auto', background: 'var(--fb-card)', 
             display: 'flex', flexDirection: 'column', gap: '10px' 
           }}>
             {messages.map((getMsg) => {

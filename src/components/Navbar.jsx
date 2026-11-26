@@ -1,5 +1,5 @@
 // File Name: src/components/Navbar.jsx
-import React, { useState, useEffect } from 'react'; 
+import React, { useState, useEffect, useRef } from 'react'; 
 import { Link, useNavigate, useLocation } from 'react-router-dom'; 
 import { signOut } from 'firebase/auth'; 
 import { auth, db } from '../firebase'; 
@@ -13,8 +13,39 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
   const [showDropdown, setShowDropdown] = useState(false); 
   const [showSettingsSub, setShowSettingsSub] = useState(false);
   const [unreadTotal, setUnreadTotal] = useState(0);
+  const roomsDocsRef = useRef([]);
+  const pathnameRef = useRef(location.pathname);
 
   const currentUid = auth.currentUser?.uid;
+
+  useEffect(() => {
+    pathnameRef.current = location.pathname;
+  }, [location.pathname]);
+
+  const recomputeUnread = (docs, pathname) => {
+    if (!currentUid) return;
+    const chatMatch = (pathname || '').match(/^\/chat\/([^/]+)\//);
+    const activeOtherUid = chatMatch && chatMatch[1] !== 'global' ? chatMatch[1] : null;
+    const activeRoomId = activeOtherUid ? [currentUid, activeOtherUid].sort().join('_') : null;
+
+    let count = 0;
+    docs.forEach((docSnap) => {
+      const data = docSnap.data();
+      const roomId = docSnap.id;
+      const lastReadKey = `lastRead_personal_${roomId}`;
+
+      if (activeRoomId && roomId === activeRoomId) {
+        localStorage.setItem(lastReadKey, String(Math.max(Date.now(), data.lastMessageAt || 0)));
+        return;
+      }
+
+      const lastRead = Number(localStorage.getItem(lastReadKey)) || 0;
+      if (data.lastMessageAt && data.lastMessageAt > lastRead && data.lastMessageSenderId !== currentUid) {
+        count += 1;
+      }
+    });
+    setUnreadTotal(count);
+  };
 
   // Unread badge counter for messenger tab
   useEffect(() => {
@@ -26,32 +57,25 @@ export default function Navbar({ isAdmin, theme, toggleTheme }) {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      let count = 0;
-      snapshot.docs.forEach((docSnap) => {
-        const data = docSnap.data();
-        const roomId = docSnap.id;
-        const lastReadKey = `lastRead_personal_${roomId}`;
-        const lastRead = Number(localStorage.getItem(lastReadKey)) || 0;
-
-        if (data.lastMessageAt && data.lastMessageAt > lastRead && data.lastMessageSenderId !== currentUid) {
-          count += 1;
-        }
-      });
-      setUnreadTotal(count);
+      roomsDocsRef.current = snapshot.docs;
+      recomputeUnread(snapshot.docs, pathnameRef.current);
     }, () => {});
 
-    return () => unsubscribe();
+    const handleReadUpdated = () => {
+      recomputeUnread(roomsDocsRef.current, pathnameRef.current);
+    };
+    window.addEventListener('unreadReadUpdated', handleReadUpdated);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('unreadReadUpdated', handleReadUpdated);
+    };
   }, [currentUid]);
 
-  // ✅ When user navigates to a chat room, mark it as read immediately
+  // ✅ When user navigates to a chat room, mark it as read and recompute badge immediately
   useEffect(() => {
-    const match = location.pathname.match(/^\/chat\/([^/]+)\//);
-    if (match) {
-      const roomId = [currentUid, match[1]].sort().join('_');
-      const lastReadKey = `lastRead_personal_${roomId}`;
-      localStorage.setItem(lastReadKey, String(Date.now()));
-      setUnreadTotal(0);
-    }
+    if (!currentUid) return;
+    recomputeUnread(roomsDocsRef.current, location.pathname);
   }, [location.pathname, currentUid]);
   
   useEffect(() => { 

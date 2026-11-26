@@ -493,7 +493,7 @@ export default function GlobalChat() {
     };
   }, [currentUid, inCall]);
 
-  const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
+  const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
 
   const sendMessage = async (e) => {
@@ -1428,7 +1428,7 @@ export default function GlobalChat() {
   const formatRecordingTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto', fontFamily: 'inherit', height: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column', background: 'var(--fb-bg)', border: '1px solid var(--fb-card-border-subtle)', borderRadius: '8px', boxShadow: 'var(--fb-shadow)', overflow: 'hidden', position: 'relative' }}>
+    <div style={{ maxWidth: '600px', margin: '0 auto', fontFamily: 'inherit', height: 'calc(100dvh - 88px)', maxHeight: 'calc(100dvh - 88px)', display: 'flex', flexDirection: 'column', background: 'var(--fb-bg)', border: '1px solid var(--fb-card-border-subtle)', borderRadius: '8px', boxShadow: 'var(--fb-shadow)', overflow: 'hidden', position: 'relative' }}>
       <style>{`
         @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
         .dynamic-chat-input { color: var(--fb-text) !important; }
@@ -1445,7 +1445,7 @@ export default function GlobalChat() {
       `}</style>
 
       {inCall && (
-        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 999, backgroundColor: '#000', display: 'flex', flexDirection: 'column' }}>
           {/* Top Header Overlay */}
           <div style={{ position: 'absolute', top: '16px', left: '16px', right: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10, background: 'rgba(0,0,0,0.5)', padding: '8px 14px', borderRadius: '30px', backdropFilter: 'blur(8px)' }}>
             <div>
@@ -1577,7 +1577,7 @@ export default function GlobalChat() {
       )}
 
       {/* ── FB Lite Group Header ── */}
-      <div style={{ padding: '10px 14px', background: 'var(--fb-header, #1877f2)', color: '#ffffff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+      <div style={{ padding: '10px 14px', background: 'var(--fb-header, #1877f2)', color: '#ffffff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', position: 'sticky', top: 0, zIndex: 30, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button onClick={() => navigate(-1)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#ffffff', width: '32px', height: '32px', borderRadius: '50%', cursor: 'pointer', fontWeight: 'bold', fontSize: '15px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
             ←
@@ -1604,7 +1604,7 @@ export default function GlobalChat() {
       </div>
       {!inCall && (
         <>
-          <div style={{ flex: 1, padding: '16px 14px', overflowY: 'auto', background: 'var(--fb-card)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ flex: 1, minHeight: 0, padding: '16px 14px', overflowY: 'auto', background: 'var(--fb-card)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {messages.map((getMsg) => {
               if (localDeletedIds.includes(getMsg.id)) return null;
               const isMe = getMsg.senderUid === currentUid;

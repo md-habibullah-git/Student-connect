@@ -1,8 +1,8 @@
 // File Name: src/pages/Login.jsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { auth, db } from '../firebase'; 
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, sendEmailVerification } from 'firebase/auth';
+import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
 
 export default function Login() {
   const [isRegister, setIsRegister] = useState(false);
@@ -14,6 +14,16 @@ export default function Login() {
   const [dept, setDept] = useState('');
   const [tempPhoto, setTempPhoto] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [pendingVerification, setPendingVerification] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [verificationMsg, setVerificationMsg] = useState('');
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setTimeout(() => setResendCooldown(c => c - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [resendCooldown]);
   
   const EyeIcon = () => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -98,6 +108,12 @@ export default function Login() {
           return;
         }
 
+        if (userData.requiresEmailVerification && !user.emailVerified) {
+          setPendingVerification(true);
+          setVerificationMsg("📧 Please verify your email address first. Check your Inbox or Spam folder for the verification link.");
+          return;
+        }
+
         if (!isApprovedTrue) {
           alert("⏳ Your application is pending admin approval. Please wait for approval.");
           await auth.signOut(); 
@@ -157,13 +173,16 @@ export default function Login() {
         email: email,
         photo: tempPhoto,
         approved: false,
+        requiresEmailVerification: true,
+        emailVerified: false,
         role: "student",
         createdAt: Date.now()
       });
 
-      alert("🚀 Your Campus ID application has been sent to admin for approval!");
-      await auth.signOut();
-      setTimeout(() => { window.location.reload(); }, 400);
+      await sendEmailVerification(user);
+      setPendingVerification(true);
+      setResendCooldown(30);
+      setVerificationMsg(`📧 Verification link sent to ${email}. Check your Inbox or Spam folder.`);
 
     } catch (error) {
       if (error.code === 'auth/email-already-in-use') {
@@ -192,14 +211,23 @@ export default function Login() {
             studentClass: studentClass,
             email: email,
             photo: tempPhoto,
-            approved: false, 
+            approved: false,
+            requiresEmailVerification: !existingUser.emailVerified,
+            emailVerified: existingUser.emailVerified,
             role: "student",
             createdAt: Date.now()
           });
 
-          alert("🚀 Re-application sent to admin! ID will activate once approved.");
-          await auth.signOut();
-          setTimeout(() => { window.location.reload(); }, 400);
+          if (!existingUser.emailVerified) {
+            await sendEmailVerification(existingUser);
+            setPendingVerification(true);
+            setResendCooldown(30);
+            setVerificationMsg(`📧 Verification link sent to ${email}. Check your Inbox or Spam folder.`);
+          } else {
+            alert("🚀 Re-application sent to admin! ID will activate once approved.");
+            await auth.signOut();
+            setTimeout(() => { window.location.reload(); }, 400);
+          }
         } catch {
           alert("❌ Failed to send request: The password must match your old ID password.");
         }
@@ -207,6 +235,49 @@ export default function Login() {
         alert("❌ Registration failed: " + error.message);
       }
     }
+  };
+
+  const handleCheckVerified = async () => {
+    if (!auth.currentUser) {
+      setPendingVerification(false);
+      return;
+    }
+    setVerifying(true);
+    try {
+      await auth.currentUser.reload();
+      if (auth.currentUser.emailVerified) {
+        await updateDoc(doc(db, "users", auth.currentUser.uid), {
+          emailVerified: true
+        });
+        alert("🎉 Email verified! Your Campus ID application has been sent to admin for approval.");
+        await auth.signOut();
+        setPendingVerification(false);
+        setTimeout(() => { window.location.reload(); }, 300);
+      } else {
+        setVerificationMsg("⏳ Not verified yet. Please open the link in your email (check Spam too) and try again.");
+      }
+    } catch (err) {
+      setVerificationMsg("❌ Error checking verification: " + err.message);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    if (!auth.currentUser || resendCooldown > 0) return;
+    try {
+      await sendEmailVerification(auth.currentUser);
+      setResendCooldown(30);
+      setVerificationMsg(`📧 New verification link sent to ${auth.currentUser.email || email}. Check Inbox or Spam.`);
+    } catch (err) {
+      setVerificationMsg("❌ Could not resend right now: " + err.message);
+    }
+  };
+
+  const handleCancelVerification = async () => {
+    await auth.signOut().catch(() => {});
+    setPendingVerification(false);
+    setVerificationMsg('');
   };
 
   const handleTabSwitch = (registerMode) => {
@@ -253,6 +324,41 @@ export default function Login() {
         padding: '24px 20px',
         margin: '0 auto'
       }}>
+        {pendingVerification ? (
+          <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ fontSize: '42px', lineHeight: 1 }}>📧</div>
+            <h2 style={{ margin: 0, fontSize: '18px', color: 'var(--fb-text)' }}>Verify Your Email</h2>
+            <p style={{ margin: 0, fontSize: '13px', color: 'var(--fb-text-secondary)', lineHeight: 1.5 }}>
+              {verificationMsg || `We sent a verification link to ${email}. Click the link in your email, then tap the button below.`}
+            </p>
+            <button
+              type="button"
+              onClick={handleCheckVerified}
+              disabled={verifying}
+              className="fb-lite-btn fb-lite-btn-success"
+              style={{ padding: '12px', fontSize: '14px', fontWeight: '700' }}
+            >
+              {verifying ? 'Checking...' : '✅ I Have Verified My Email'}
+            </button>
+            <button
+              type="button"
+              onClick={handleResendVerification}
+              disabled={resendCooldown > 0}
+              className="fb-lite-btn fb-lite-btn-secondary"
+              style={{ padding: '10px', fontSize: '13px' }}
+            >
+              {resendCooldown > 0 ? `🔄 Resend Email (${resendCooldown}s)` : '🔄 Resend Verification Email'}
+            </button>
+            <button
+              type="button"
+              onClick={handleCancelVerification}
+              style={{ background: 'none', border: 'none', color: 'var(--fb-blue)', cursor: 'pointer', fontSize: '13px', fontWeight: '600', marginTop: '4px' }}
+            >
+              ← Back to Log In
+            </button>
+          </div>
+        ) : (
+        <>
         {/* Switch tab */}
         <div style={{
           display: 'flex',
@@ -405,7 +511,7 @@ export default function Login() {
 
           <input
             type="email"
-            placeholder="Mobile number or email"
+            placeholder={isRegister ? "Email address (verification required)" : "Email address"}
             value={email}
             onChange={e => setEmail(e.target.value)}
             required
@@ -498,6 +604,8 @@ export default function Login() {
             </button>
           )}
         </div>
+        </>
+        )}
 
       </div>
     </div>
