@@ -3,6 +3,17 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 
+// ✅ Suppress noisy Firestore AbortError (happens on listener cleanup — harmless)
+window.addEventListener('unhandledrejection', (event) => {
+  if (
+    event?.reason?.name === 'AbortError' ||
+    event?.reason?.message?.includes('aborted') ||
+    event?.reason?.message?.includes('signal is aborted')
+  ) {
+    event.preventDefault();
+  }
+});
+
 // 🔥 Browser Extension Block — element remove
 const removeExtensionElements = () => {
   const selectors = [
@@ -74,7 +85,5 @@ setInterval(removeExtensionElements, 1000);
 window.addEventListener('load', removeExtensionElements);
 
 createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
+  <App />
 )
