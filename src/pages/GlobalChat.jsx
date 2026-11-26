@@ -337,6 +337,7 @@ export default function GlobalChat() {
   });
 
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const fileInputRef = useRef(null);
   const inCallRef = useRef(false);
   const localVideoRef = useRef(null);
@@ -493,7 +494,11 @@ export default function GlobalChat() {
     };
   }, [currentUid, inCall]);
 
-  const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); };
+  const scrollToBottom = () => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
+  };
   useEffect(() => { scrollToBottom(); }, [messages]);
 
   const sendMessage = async (e) => {
@@ -1428,7 +1433,7 @@ export default function GlobalChat() {
   const formatRecordingTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto', fontFamily: 'inherit', height: 'calc(100dvh - 88px)', maxHeight: 'calc(100dvh - 88px)', display: 'flex', flexDirection: 'column', background: 'var(--fb-bg)', border: '1px solid var(--fb-card-border-subtle)', borderRadius: '8px', boxShadow: 'var(--fb-shadow)', overflow: 'hidden', position: 'relative' }}>
+    <div style={{ maxWidth: '600px', margin: '0 auto -20px auto', fontFamily: 'inherit', height: 'calc(100dvh - 88px)', maxHeight: 'calc(100dvh - 88px)', display: 'flex', flexDirection: 'column', background: 'var(--fb-bg)', border: '1px solid var(--fb-card-border-subtle)', borderRadius: '8px', boxShadow: 'var(--fb-shadow)', overflow: 'hidden', position: 'relative' }}>
       <style>{`
         @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
         .dynamic-chat-input { color: var(--fb-text) !important; }
@@ -1604,7 +1609,7 @@ export default function GlobalChat() {
       </div>
       {!inCall && (
         <>
-          <div style={{ flex: 1, minHeight: 0, padding: '16px 14px', overflowY: 'auto', background: 'var(--fb-card)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div ref={messagesContainerRef} style={{ flex: 1, minHeight: 0, padding: '16px 14px', overflowY: 'auto', background: 'var(--fb-card)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {messages.map((getMsg) => {
               if (localDeletedIds.includes(getMsg.id)) return null;
               const isMe = getMsg.senderUid === currentUid;

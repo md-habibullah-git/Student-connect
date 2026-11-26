@@ -1,7 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import './IDCard.css';
 
 export default function IDCard({ userData }) {
+  const [isFlipped, setIsFlipped] = useState(false);
+  const navigate = useNavigate();
   // Live data is being loaded from the database (if not available, it will show default text)
   const user = userData || {
     uid: "dummy_uid",
@@ -21,12 +24,35 @@ export default function IDCard({ userData }) {
 
   // Fallback avatar if photo is missing or invalid
   const fallbackPhoto = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name || 'Student')}`;
+  const isAdminUser = user.role === 'admin' || String(user.role || '').toLowerCase().trim() === 'admin';
+  const profileUniqueId = user.uid || user.id || '';
+
+  const handleCopyCardLink = (e) => {
+    e.stopPropagation();
+    const shareUrl = `${window.location.origin}${window.location.pathname}#/profile/${profileUniqueId}`;
+    navigator.clipboard.writeText(shareUrl)
+      .then(() => alert("📋 ID card profile link copied to clipboard!"))
+      .catch((err) => console.error("Link copy failed: ", err));
+  };
+
+  const openSocialLink = (e, url, label) => {
+    e.stopPropagation();
+    if (!url || !url.trim()) {
+      alert(`ℹ️ ${label} link not set by user.`);
+      return;
+    }
+    const targetUrl = url.includes('http') ? url : `https://${url}`;
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  };
 
   return (
     <div className="profile-container">
       
       {/* 3D Flip ID Card */}
-      <div className="id-card-flip">
+      <div
+        className={`id-card-flip ${isFlipped ? 'is-flipped' : ''}`}
+        onClick={() => setIsFlipped(prev => !prev)}
+      >
         <div className="id-card-inner">
           
           {/* 💳 Front Side of the CARD */}
@@ -67,7 +93,7 @@ export default function IDCard({ userData }) {
                 onError={(e) => { e.target.onerror = null; e.target.style.display = 'none'; }}
               />
               <div className="signature">
-                <p className="sig-line">Admin</p>
+                <p className="sig-line">{isAdminUser ? 'Admin' : 'Student'}</p>
                 <span>Authorized Sign</span>
               </div>
             </div>
@@ -89,6 +115,33 @@ export default function IDCard({ userData }) {
                 <p>* If found, please return to the admin panel.</p>
               </div>
             </div>
+
+            <div className="card-back-actions">
+              <button
+                type="button"
+                className="card-back-btn"
+                onClick={(e) => openSocialLink(e, user.fbLink, 'Facebook')}
+                title="Facebook"
+              >
+                🌐 Facebook
+              </button>
+              <button
+                type="button"
+                className="card-back-btn"
+                onClick={(e) => openSocialLink(e, user.instaLink, 'Instagram')}
+                title="Instagram"
+              >
+                📷 Instagram
+              </button>
+              <button
+                type="button"
+                className="card-back-btn"
+                onClick={handleCopyCardLink}
+                title="Copy Profile Link"
+              >
+                🔗 Copy Link
+              </button>
+            </div>
           </div>
 
         </div>
@@ -98,7 +151,7 @@ export default function IDCard({ userData }) {
       <div className="lite-action-buttons">
         <button 
           className="btn-msg" 
-          onClick={() => window.location.href = `/chat/${user.uid}/${user.name}`}
+          onClick={() => navigate(`/chat/${profileUniqueId}/${encodeURIComponent(user.name || 'Student')}`)}
           style={{ width: '100%', padding: '10px', background: '#0056b3', color: 'white', border: 'none', borderRadius: '5px', fontWeight: 'bold', cursor: 'pointer', marginTop: '15px' }}
         >
           📩 Private Message & Call

@@ -11,6 +11,7 @@ export default function Profile() {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [show3DCardMap, setShow3DCardMap] = useState({});
+  const [lightboxPhoto, setLightboxPhoto] = useState(null);
 
   useEffect(() => {
     const usersRef = collection(db, "users");
@@ -58,7 +59,7 @@ export default function Profile() {
   }, [userId]);
 
   const handleCopyProfileLink = (targetId) => {
-    const shareUrl = `${window.location.origin}/profile/${targetId}`;
+    const shareUrl = `${window.location.origin}${window.location.pathname}#/profile/${targetId}`;
     navigator.clipboard.writeText(shareUrl)
       .then(() => alert("📋 ID card profile link copied to clipboard!"))
       .catch((err) => console.error("Link copy failed: ", err));
@@ -131,18 +132,21 @@ export default function Profile() {
               textAlign: 'center',
               marginTop: '-50px'
             }}>
-              {/* Circular Avatar with white border */}
+              {/* Circular Avatar with white border (clickable for fullscreen lightbox) */}
               <div style={{ position: 'relative' }}>
                 <img
                   src={userPhotoUrl}
                   alt={user.name || "Student"}
                   className="fb-avatar"
+                  onClick={() => setLightboxPhoto(userPhotoUrl)}
+                  title="Tap to view full photo"
                   style={{
                     width: '96px',
                     height: '96px',
                     border: '3px solid var(--fb-card)',
                     boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-                    backgroundColor: 'var(--fb-card)'
+                    backgroundColor: 'var(--fb-card)',
+                    cursor: 'pointer'
                   }}
                   onError={(e) => { e.target.onerror = null; e.target.src = fallbackAvatar(user.name); }}
                 />
@@ -180,13 +184,14 @@ export default function Profile() {
                 </span>
               </div>
 
-              {/* Action Buttons Row */}
+              {/* Action Buttons Row (Single Horizontal Line) */}
               <div style={{
                 display: 'flex',
-                gap: '8px',
+                gap: '6px',
                 width: '100%',
                 justifyContent: 'center',
-                flexWrap: 'wrap',
+                flexWrap: 'nowrap',
+                alignItems: 'center',
                 marginBottom: '16px'
               }}>
                 <button
@@ -198,7 +203,7 @@ export default function Profile() {
                     }
                   }}
                   className="fb-lite-btn fb-lite-btn-primary"
-                  style={{ flex: 1, minWidth: '120px' }}
+                  style={{ flex: 1, minWidth: 0, padding: '8px 6px', fontSize: '12px', whiteSpace: 'nowrap' }}
                 >
                   <span>💬</span> {isCurrentUser ? "My Messages" : "Message"}
                 </button>
@@ -206,24 +211,16 @@ export default function Profile() {
                 <button
                   onClick={() => toggle3DCard(user.id)}
                   className="fb-lite-btn fb-lite-btn-secondary"
-                  style={{ flex: 1, minWidth: '120px' }}
+                  style={{ flex: 1, minWidth: 0, padding: '8px 6px', fontSize: '12px', whiteSpace: 'nowrap' }}
                 >
                   <span>🪪</span> {isShowing3D ? "Hide 3D Card" : "3D Flip ID Card"}
                 </button>
-
-                {isCurrentUser && (
-                  <button
-                    onClick={() => navigate('/edit-profile')}
-                    className="fb-lite-btn fb-lite-btn-secondary"
-                  >
-                    <span>✏️</span> Edit Profile
-                  </button>
-                )}
 
                 <button
                   onClick={() => handleCopyProfileLink(profileUniqueId)}
                   className="fb-lite-btn fb-lite-btn-secondary"
                   title="Copy Profile Link"
+                  style={{ padding: '7px 9px', fontSize: '11px', flexShrink: 0, whiteSpace: 'nowrap' }}
                 >
                   <span>🔗</span> Copy Link
                 </button>
@@ -319,6 +316,59 @@ export default function Profile() {
           <div style={{ fontSize: '32px', marginBottom: '8px' }}>🪪</div>
           <strong>No matching student profiles found</strong>
           <p style={{ fontSize: '13px', marginTop: '4px' }}>Try searching with a different name or student ID.</p>
+        </div>
+      )}
+
+      {/* Fullscreen Profile Picture Lightbox */}
+      {lightboxPhoto && (
+        <div
+          onClick={() => setLightboxPhoto(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.9)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            cursor: 'zoom-out',
+            padding: '16px'
+          }}
+        >
+          <img
+            src={lightboxPhoto}
+            alt="Profile Fullscreen"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '94vw',
+              maxHeight: '90vh',
+              borderRadius: '10px',
+              objectFit: 'contain',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.6)'
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => setLightboxPhoto(null)}
+            style={{
+              position: 'absolute',
+              top: '16px',
+              right: '20px',
+              background: 'rgba(255,255,255,0.18)',
+              border: 'none',
+              color: '#fff',
+              fontSize: '20px',
+              borderRadius: '50%',
+              width: '36px',
+              height: '36px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            ✕
+          </button>
         </div>
       )}
 

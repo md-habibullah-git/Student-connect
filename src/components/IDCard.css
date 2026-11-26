@@ -12,6 +12,7 @@
   width: 340px;
   height: 480px;
   perspective: 1000px;
+  cursor: pointer;
 }
 
 .id-card-inner {
@@ -25,7 +26,13 @@
   border-radius: 15px;
 }
 
-.id-card-flip:hover .id-card-inner {
+@media (hover: hover) and (pointer: fine) {
+  .id-card-flip:hover .id-card-inner {
+    transform: rotateY(180deg);
+  }
+}
+
+.id-card-flip.is-flipped .id-card-inner {
   transform: rotateY(180deg);
 }
 
@@ -111,11 +118,42 @@
   transform: rotateY(180deg);
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
   padding: 20px;
   box-sizing: border-box;
 }
 
-.card-header-back h4 { color: #0056b3; margin: 0 0 20px 0; border-bottom: 2px solid #0056b3; padding-bottom: 5px; }
-.card-body-back { text-align: left; font-size: 14px; color: #444; line-height: 1.6; }
-.terms { margin-top: 30px; font-size: 11px; color: #777; }
+.card-header-back h4 { color: #0056b3; margin: 0 0 14px 0; border-bottom: 2px solid #0056b3; padding-bottom: 6px; }
+.card-body-back { flex: 1; text-align: left; font-size: 14px; color: #444; line-height: 1.55; }
+.card-body-back p { margin: 6px 0; word-break: break-word; }
+.terms { margin-top: 18px; font-size: 11px; color: #777; }
+
+.card-back-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid #dde3e6;
+}
+
+.card-back-btn {
+  flex: 1;
+  background: #ffffff;
+  color: #0056b3;
+  border: 1px solid #cfd8dc;
+  border-radius: 6px;
+  padding: 7px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+.card-back-btn:hover {
+  background: #e7f3ff;
+  border-color: #0056b3;
+}

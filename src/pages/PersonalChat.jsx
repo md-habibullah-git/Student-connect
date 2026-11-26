@@ -280,6 +280,7 @@ export default function PersonalChat() {
   });
 
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const fileInputRef = useRef(null); 
 
   const currentUid = auth.currentUser?.uid || "unknown_user";
@@ -385,7 +386,9 @@ export default function PersonalChat() {
   }, [chatRoomId, receiverId, currentUid]);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
   };
 
   useEffect(() => {
@@ -1330,7 +1333,7 @@ export default function PersonalChat() {
 
   return (
     <div style={{ 
-      maxWidth: '600px', margin: '0 auto', fontFamily: 'inherit', height: 'calc(100dvh - 88px)', maxHeight: 'calc(100dvh - 88px)',
+      maxWidth: '600px', margin: '0 auto -20px auto', fontFamily: 'inherit', height: 'calc(100dvh - 88px)', maxHeight: 'calc(100dvh - 88px)',
       display: 'flex', flexDirection: 'column', background: 'var(--fb-bg)', 
       border: '1px solid var(--fb-card-border-subtle)', borderRadius: '8px', 
       boxShadow: 'var(--fb-shadow)', overflow: 'hidden', position: 'relative'
@@ -1611,7 +1614,7 @@ export default function PersonalChat() {
         </div>
       ) : (
         <>
-          <div style={{ 
+          <div ref={messagesContainerRef} style={{ 
             flex: 1, minHeight: 0, padding: '16px 14px', overflowY: 'auto', background: 'var(--fb-card)', 
             display: 'flex', flexDirection: 'column', gap: '10px' 
           }}>
