@@ -255,3 +255,12 @@ button, input, textarea, select {
   color: var(--fb-text-secondary) !important;
   opacity: 0.7 !important;
 }
+
+/* Hide unwanted browser extension media speed controller overlays (e.g. 1.00 << - + >>) */
+.vsc-controller,
+vsc-controller {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

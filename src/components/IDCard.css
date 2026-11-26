@@ -26,12 +26,6 @@
   border-radius: 15px;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  .id-card-flip:hover .id-card-inner {
-    transform: rotateY(180deg);
-  }
-}
-
 .id-card-flip.is-flipped .id-card-inner {
   transform: rotateY(180deg);
 }
@@ -63,7 +57,7 @@
 .card-header p { margin: 5px 0 0 0; font-size: 11px; opacity: 0.8; }
 
 .card-body {
-  padding: 20px;
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -72,12 +66,12 @@
 
 .photo-section {
   position: relative;
-  margin-bottom: 15px;
+  margin-bottom: 10px;
 }
 
 .student-photo {
-  width: 110px;
-  height: 130px;
+  width: 102px;
+  height: 120px;
   object-fit: cover;
   border: 3px solid #0056b3;
   border-radius: 8px;
@@ -103,7 +97,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 15px 25px;
+  padding: 12px 24px 24px 24px;
   background: #f8f9fa;
   border-top: 1px solid #eee;
 }

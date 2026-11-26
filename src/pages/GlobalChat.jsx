@@ -253,8 +253,10 @@ function VoiceMessageBubble({ src, isMe }) {
   };
 
   useEffect(() => {
-    const audioEl = audioRef.current;
-    if (!audioEl) return;
+    const audioEl = new Audio(src);
+    audioEl.preload = 'metadata';
+    audioRef.current = audioEl;
+
     const onPlay = () => { setIsPlaying(true); drawLiveBars(); };
     const onPause = () => { setIsPlaying(false); cancelAnimationFrame(rafRef.current); drawIdleBars(); };
     const onEnded = () => { setIsPlaying(false); cancelAnimationFrame(rafRef.current); drawIdleBars(); setCurrentTime(0); };
@@ -266,13 +268,15 @@ function VoiceMessageBubble({ src, isMe }) {
     audioEl.addEventListener('loadedmetadata', onLoaded);
     audioEl.addEventListener('timeupdate', onTimeUpdate);
     return () => {
+      audioEl.pause();
       audioEl.removeEventListener('play', onPlay);
       audioEl.removeEventListener('pause', onPause);
       audioEl.removeEventListener('ended', onEnded);
       audioEl.removeEventListener('loadedmetadata', onLoaded);
       audioEl.removeEventListener('timeupdate', onTimeUpdate);
+      audioRef.current = null;
     };
-  }, []);
+  }, [src]);
 
   const formatTime = (secs) => {
     if (!isFinite(secs) || secs < 0) return '0:00';
@@ -280,8 +284,7 @@ function VoiceMessageBubble({ src, isMe }) {
   };
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', minWidth: '210px' }}>
-      <audio ref={audioRef} src={src} preload="metadata" style={{ display: 'none' }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', minWidth: '210px', position: 'relative', overflow: 'hidden' }}>
       <button type="button" onClick={togglePlay} style={{ width: '30px', height: '30px', borderRadius: '50%', border: 'none', cursor: 'pointer', background: isMe ? 'rgba(255,255,255,0.25)' : 'rgba(0,86,179,0.12)', color: isMe ? '#fff' : '#0056b3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '13px' }}>
         {isPlaying ? '⏸️' : '▶️'}
       </button>
